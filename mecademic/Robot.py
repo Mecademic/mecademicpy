@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import logging
 import ipaddress
+import time
 import socket
+import multiprocessing as mp
 
 
 class Robot:
@@ -39,8 +41,59 @@ class Robot:
 
         self.__address = address
         self.__socket = None
+
+        self.__rx_process = None
+        self.__rx_queue = None
+        self.__tx_process = None
+        self.__tx_queue = None
+
         self.__enable_synchronous_mode = enable_synchronous_mode
         self.logger = logging.getLogger(__name__)
+
+    @staticmethod
+    def _rx(robot_socket, rx_queue):
+        remainder = ''
+        while True:
+            # Wait for a message from the robot.
+            try:
+                responses = robot_socket.recv(1024).decode('ascii').split('\0')
+            except:
+                break
+
+            # Add the remainder from the previous message if necessary.
+            if remainder != '':
+                responses[0] = responses[0] + remainder
+
+            # Set the remainder as the last response (which is '' if complete).
+            remainder = responses[-1]
+
+            # Put all responses into the queue.
+            [rx_queue.put(x) for x in responses[:-1]]
+
+    @staticmethod
+    def _tx(robot_socket, tx_queue):
+        while True:
+            # Wait for a command to be available from the queue.
+            command = tx_queue.get(block=True)
+
+            # Terminate process if requested, otherwise send the command.
+            if command == 'Terminate tx process':
+                return
+            else:
+                try:
+                    robot_socket.sendall((command + '\0').encode('ascii'))
+                except:
+                    continue  # TODO handle properly by raising an error
+
+    @staticmethod
+    def _callbacks(rx_queue, event_list, checkpoint_list):
+        while True:
+            # Wait for a response to be available from the queue.
+            response = rx_queue.get(block=True)
+
+            # Terminate process if requested.
+            if command == 'Terminate rx process':
+                return
 
     def Connect(self):
         """Attempt to connect to a physical Mecademic Robot.
@@ -56,48 +109,53 @@ class Robot:
 
         if self.__socket is not None:
             self.logger.warning('Existing connection found, this should not be possible, closing...')
-            self.__socket.close()
-            self.__socket = None
+            self.Disconnect()
+
+        # Create socket and attempt connection.
+        self.__socket = socket.socket()
+        self.__socket.settimeout(0.1)  # 100ms
+        try:
+            self.__socket.connect((self.__address, 10000))
+        except socket.timeout:
+            self.logger.error('Unable to connect to socket.')
+            return False
+
+        if self.__socket is None:
+            self.logger.error('Socket object does not exist.')
+            return False
+
+        # Create tx and rx processes and queues for socket communication.
+        self.__rx_queue = mp.Queue()
+        self.__tx_queue = mp.Queue()
+        self.__rx_process = mp.Process(target=self._rx, args=(
+            self.__socket,
+            self.__rx_queue,
+        ))
+        self.__tx_process = mp.Process(target=self._tx, args=(
+            self.__socket,
+            self.__tx_queue,
+        ))
+
+        self.__rx_process.start()
+        self.__tx_process.start()
 
         try:
-            # Create socket and attempt connection.
-            self.__socket = socket.socket()
-            self.__socket.settimeout(0.1)  # 100ms
-            try:
-                self.__socket.connect((self.__address, 10000))
-            except socket.timeout:
-                self.logger.error('Unable to connect to socket.')
-                raise TimeoutError
-
-            if self.__socket is None:
-                self.logger.error('Socket object does not exist.')
-                raise RuntimeError
-
-            # Receive response of connection from robot.
-            self.__socket.settimeout(10)  # 10 seconds
-            try:
-                response = self.__socket.recv(1024).decode('ascii')
-            except socket.timeout:
-                self.logger.error('No response received within timeout interval.')
-                raise RuntimeError
-
-            # Check that response is appropriate.
-            if self._response_contains(response, ['[3001]']):
-                self.logger.error('Another user is already connected, closing connection.')
-                raise RuntimeError
-            elif self._response_contains(response, ['[3000]']):
-                self.logger.debug('Connection successfully established.')
-                return True
-            else:
-                self.logger.error('Unexpected code returned: %s', response)
-                raise RuntimeError
-
-        except TimeoutError:
-            self.logger.error('Connection timeout.')
+            response = self.__rx_queue.get(block=True, timeout=10)  # 10s timeout.
+        except:
+            self.logger.error('No response received within timeout interval.')
             self.Disconnect()
             return False
-        except RuntimeError:
-            self.logger.error('Unable to establish connection.')
+
+        # Check that response is appropriate.
+        if response[1:5] == '3001':
+            self.logger.error('Another user is already connected, closing connection.')
+            self.Disconnect()
+            return False
+        elif response[1:5] == '3000':
+            self.logger.debug('Connection successfully established.')
+            return True
+        else:
+            self.logger.error('Unexpected code returned: %s', response)
             self.Disconnect()
             return False
 
@@ -105,30 +163,30 @@ class Robot:
         """Disconnects Mecademic Robot object from physical Mecademic Robot.
 
         """
-        if (self.__socket is not None):
+
+        # Shutdown socket to terminate the rx process.
+        if self.__socket is not None:
+            self.__socket.shutdown(socket.SHUT_RDWR)
+
+        # Join processes to avoid bad behaviour.
+        if self.__rx_process is not None:
+            try:
+                self.__rx_process.join()
+                self.__rx_process = None
+            except:
+                self.logger.error('Error shutting down rx process.')
+        if self.__tx_process is not None:
+            try:
+                # Terminate tx process by putting 'terminate' in queue.
+                self.__tx_queue.put('Terminate tx process')
+                self.__tx_process.join()
+                self.__tx_process = None
+            except:
+                self.logger.error('Error shutting down tx process.')
+
+        self.__rx_queue = None
+        self.__tx_queue = None
+
+        if self.__socket is not None:
             self.__socket.close()
             self.__socket = None
-
-    @staticmethod
-    def _response_contains(response, code_list):
-        """Scans received response for code IDs.
-
-        Parameters
-        ----------
-        response :
-            Message to scan for codes.
-        code_list :
-            List of codes to look for in the response.
-
-        Returns
-        -------
-        response_found :
-            Returns whether the response contains a code ID of interest.
-
-        """
-        response_found = False
-        for code in code_list:
-            if response.find(code) != -1:
-                response_found = True
-                break
-        return response_found

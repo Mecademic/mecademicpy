@@ -11,10 +11,8 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import mecademic.Robot as mdr
 
-server_up = threading.Event()  # Synchronization event for fake server.
 
-
-def run_fake_server(data):
+def run_fake_server(data, server_up):
     # Run a server to listen for a connection and then close it
     server_sock = socket.socket()
     server_sock.settimeout(1)  # Allow up to 1 second to create the connection.
@@ -24,7 +22,7 @@ def run_fake_server(data):
 
     server_sock.listen()
     client, addr = server_sock.accept()
-    client.send(data)
+    client.sendall(data)
 
 
 def test_setup_invalid_input():
@@ -45,9 +43,13 @@ def test_successful_connection():
     controller = mdr.Robot('127.0.0.1')
     assert controller is not None
 
-    server_thread = threading.Thread(target=run_fake_server, args=(b'[3000]', ))
+    server_up_event = threading.Event()  # Synchronization event for fake server.
+    server_thread = threading.Thread(target=run_fake_server, args=(
+        b'[3000] \0',
+        server_up_event,
+    ))
     server_thread.start()
-    server_up.wait()
+    server_up_event.wait()
 
     assert controller.Connect()
 
@@ -61,9 +63,13 @@ def test_connection_robot_busy():
     controller = mdr.Robot('127.0.0.1')
     assert controller is not None
 
-    server_thread = threading.Thread(target=run_fake_server, args=(b'[3001]', ))
+    server_up_event = threading.Event()  # Synchronization event for fake server.
+    server_thread = threading.Thread(target=run_fake_server, args=(
+        b'[3001] \0',
+        server_up_event,
+    ))
     server_thread.start()
-    server_up.wait()
+    server_up_event.wait()
 
     assert not controller.Connect()
 
@@ -77,9 +83,13 @@ def test_connection_unexpected_return_code():
     controller = mdr.Robot('127.0.0.1')
     assert controller is not None
 
-    server_thread = threading.Thread(target=run_fake_server, args=(b'[9999]', ))
+    server_up_event = threading.Event()  # Synchronization event for fake server.
+    server_thread = threading.Thread(target=run_fake_server, args=(
+        b'[9999] \0',
+        server_up_event,
+    ))
     server_thread.start()
-    server_up.wait()
+    server_up_event.wait()
 
     assert not controller.Connect()
 
