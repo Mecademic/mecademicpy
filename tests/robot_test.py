@@ -46,72 +46,94 @@ def test_setup_invalid_input():
 
 
 def test_connection_no_robot():
-    controller = mdr.Robot(TEST_IP)
-    assert controller is not None
+    robot = mdr.Robot(TEST_IP)
+    assert robot is not None
 
-    assert not controller.Connect()
-
-
-def test_successful_connection():
-    controller = mdr.Robot(TEST_IP)
-    assert controller is not None
-
-    command_server_thread = run_fake_server(TEST_IP, mdr.COMMAND_PORT, ['[3000]\0'])
-    monitor_server_thread = run_fake_server(TEST_IP, mdr.MONITOR_PORT, [])
-
-    assert controller.Connect()
-
-    controller.Disconnect()
-    assert controller._Robot__command_socket is None
-
-    command_server_thread.join()
-    monitor_server_thread.join()
+    assert not robot.Connect()
 
 
 def test_successful_connection_split_response():
-    controller = mdr.Robot(TEST_IP)
-    assert controller is not None
+    robot = mdr.Robot(TEST_IP)
+    assert robot is not None
 
     # Set a longer delay between commands to avoid automatic concatenation by the socket.
     command_server_thread = run_fake_server(TEST_IP, mdr.COMMAND_PORT, ['[30', '00]\0'], delay=0.5)
     monitor_server_thread = run_fake_server(TEST_IP, mdr.MONITOR_PORT, [])
 
-    assert controller.Connect()
+    assert robot.Connect()
 
-    controller.Disconnect()
-    assert controller._Robot__command_socket is None
-
-    command_server_thread.join()
-    monitor_server_thread.join()
-
-
-def test_connection_robot_busy():
-    controller = mdr.Robot(TEST_IP)
-    assert controller is not None
-
-    command_server_thread = run_fake_server(TEST_IP, mdr.COMMAND_PORT, ['[3001]\0'])
-    monitor_server_thread = run_fake_server(TEST_IP, mdr.MONITOR_PORT, [])
-
-    assert not controller.Connect()
-
-    # Test that socket is none if connection fails.
-    assert controller._Robot__command_socket is None
+    robot.Disconnect()
+    assert robot._Robot__command_socket is None
 
     command_server_thread.join()
     monitor_server_thread.join()
 
 
-def test_connection_unexpected_return_code():
-    controller = mdr.Robot(TEST_IP)
-    assert controller is not None
+def test_sequential_connections():
+    robot = mdr.Robot(TEST_IP)
+    assert robot is not None
 
-    command_server_thread = run_fake_server(TEST_IP, mdr.COMMAND_PORT, ['[9999]\0'])
-    monitor_server_thread = run_fake_server(TEST_IP, mdr.MONITOR_PORT, [])
+    robot._Robot__command_rx_queue.put('[3001]')
+    assert not robot.Connect(offline_mode=True)
 
-    assert not controller.Connect()
+    robot._Robot__command_rx_queue.put('[9999]')
+    assert not robot.Connect(offline_mode=True)
 
-    # Test that socket is none if connection fails.
-    assert controller._Robot__command_socket is None
+    robot._Robot__command_rx_queue.put('[3000]')
+    assert robot.Connect(offline_mode=True)
+    robot.Disconnect()
 
-    command_server_thread.join()
-    monitor_server_thread.join()
+
+def test_monitoring_connection():
+    fake_array = [1, 2, 3, 4, 5, 6]
+
+    robot = mdr.Robot(TEST_IP)
+    assert robot is not None
+
+    robot._Robot__command_rx_queue.put('[3000]')
+
+    assert robot.Connect(offline_mode=True)
+
+    robot._Robot__monitor_rx_queue.put('[2026]' + str(fake_array))
+
+    # Wait until message is consumed, then check proper parsing.
+    while not robot._Robot__monitor_rx_queue.empty():
+        time.sleep(0.1)
+    time.sleep(0.5)
+
+    assert robot.GetJoints() == fake_array
+
+    robot.Disconnect()
+
+
+def test_checkpoint():
+    robot = mdr.Robot(TEST_IP)
+    assert robot is not None
+
+    robot._Robot__command_rx_queue.put('[3000]')
+    assert robot.Connect(offline_mode=True)
+
+    robot.SetCheckpoint(2)
+    assert not robot.WaitCheckpoint(2, timeout=0.5)
+    robot._Robot__command_rx_queue.put('[3030][2]')
+    assert robot.WaitCheckpoint(2)
+
+    robot.SetCheckpoint(1)
+    robot.SetCheckpoint(1)
+    robot._Robot__command_rx_queue.put('[3030][1]')
+    # Allow the first checkpoint to be invalidated.
+    time.sleep(0.5)
+    assert not robot.WaitCheckpoint(1, timeout=0.5)
+    robot._Robot__command_rx_queue.put('[3030][1]')
+    assert robot.WaitCheckpoint(1)
+
+    assert robot.WaitCheckpoint(1)
+
+    robot.SetCheckpoint(1)
+    robot.SetCheckpoint(2)
+    robot._Robot__command_rx_queue.put('[3030][1]')
+    robot._Robot__command_rx_queue.put('[3030][2]')
+    assert robot.WaitCheckpoint(2)
+    assert robot.WaitCheckpoint(1)
+
+    robot.Disconnect()
