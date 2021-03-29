@@ -9,6 +9,9 @@ import queue
 COMMAND_PORT = 10000
 MONITOR_PORT = 10001
 
+CHECKPOINT_ID_MIN = 1  # Min allowable checkpoint id for users, inclusive
+CHECKPOINT_ID_MAX = 8000  # Max allowable checkpoint id for users, inclusive
+
 
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
@@ -77,11 +80,12 @@ class Robot:
         self.__monitor_handler_process = None
         self.__command_response_handler_process = None
 
+        self.__main_lock = mp.RLock()
+
         self.__robot_state = RobotState()
 
         self.__manager = mp.Manager()
         self.__checkpoints = self.__manager.dict()
-        self.__checkpoint_lock = self.__manager.Lock()
 
         self.__enable_synchronous_mode = enable_synchronous_mode
         self.logger = logging.getLogger(__name__)
@@ -149,7 +153,7 @@ class Robot:
                     continue  # TODO handle properly by raising an error
 
     @staticmethod
-    def _command_response_handler(rx_queue, robot_state, checkpoints, checkpoint_lock):
+    def _command_response_handler(rx_queue, robot_state, checkpoints, main_lock):
         """Handle received messages on the command socket.
         Parameters
         ----------
@@ -165,10 +169,11 @@ class Robot:
             if response == 'Terminate process':
                 return
 
-            # Handle checkpoints.
-            if response[1:5] == '3030':
-                checkpoint_id = int(response[7:-1])
-                with checkpoint_lock:
+            with main_lock:
+
+                # Handle checkpoints.
+                if response[1:5] == '3030':
+                    checkpoint_id = int(response[7:-1])
                     # Remove the earliest event associated with checkpoint and set it.
                     checkpoints[checkpoint_id].pop(0).set()
                     # Delete the key if no more events are associated with it.
@@ -227,7 +232,7 @@ class Robot:
         logger.debug('Connected to %s:%s.', address, port)
         return new_socket
 
-    def _send_command(self, command, arg_list=[]):
+    def _send_command(self, command, arg_list=None):
         """Assembles and sends the command string to the Mecademic Robot.
 
         Parameters
@@ -240,7 +245,7 @@ class Robot:
         """
 
         # Assemble arguments into a string and concatenate to end of command.
-        if len(arg_list) != 0:
+        if arg_list:
             command = command + '(' + ','.join([str(x) for x in arg_list]) + ')'
         self.__command_tx_queue.put(command)
 
@@ -318,7 +323,7 @@ class Robot:
 
         self.__command_response_handler_process = mp.Process(target=self._command_response_handler,
                                                              args=(self.__command_rx_queue, self.__robot_state,
-                                                                   self.__checkpoints, self.__checkpoint_lock))
+                                                                   self.__checkpoints, self.__main_lock))
         self.__command_response_handler_process.start()
 
         return True
@@ -351,118 +356,128 @@ class Robot:
             Returns the status of the connection, true for success, false for failure.
 
         """
-        if not self._establish_socket_connections(offline_mode=offline_mode):
-            return False
-        if not self._initialize_command_connection():
-            return False
-        if not self._initialize_monitoring_connection():
-            return False
+        with self.__main_lock:
+            if not self._establish_socket_connections(offline_mode=offline_mode):
+                return False
+            if not self._initialize_command_connection():
+                return False
+            if not self._initialize_monitoring_connection():
+                return False
 
-        return True
+            return True
 
     def ActivateRobot(self):
-        self._send_command('ActivateRobot')
+        with self.__main_lock:
+            self._send_command('ActivateRobot')
 
     def Home(self):
-        self._send_command('Home')
+        with self.__main_lock:
+            self._send_command('Home')
 
     def ActivateAndHome(self):
-        self.ActivateRobot()
-        self.Home()
+        with self.__main_lock:
+            self.ActivateRobot()
+            self.Home()
 
     def DeactivateRobot(self):
-        self._send_command('DeactivateRobot')
+        with self.__main_lock:
+            self._send_command('DeactivateRobot')
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from physical Mecademic Robot.
 
         """
-        self.DeactivateRobot()
+        with self.__main_lock:
+            self.DeactivateRobot()
 
-        # Join processes which wait on a queue by sending terminate to the queue.
-        if self.__command_tx_process is not None:
-            try:
-                self.__command_tx_queue.put('Terminate process')
-                self.__command_tx_process.join()
-                self.__command_tx_process = None
-            except:
-                self.logger.error('Error shutting down tx process.')
+            # Join processes which wait on a queue by sending terminate to the queue.
+            if self.__command_tx_process is not None:
+                try:
+                    self.__command_tx_queue.put('Terminate process')
+                    self.__command_tx_process.join()
+                    self.__command_tx_process = None
+                except:
+                    self.logger.error('Error shutting down tx process.')
 
-        if self.__command_response_handler_process is not None:
-            try:
-                self.__command_rx_queue.put('Terminate process')
-                self.__command_response_handler_process.join()
-                self.__command_response_handler_process = None
-            except:
-                self.logger.error('Error shutting down command response handler process.')
+            if self.__command_response_handler_process is not None:
+                try:
+                    self.__command_rx_queue.put('Terminate process')
+                    self.__command_response_handler_process.join()
+                    self.__command_response_handler_process = None
+                except:
+                    self.logger.error('Error shutting down command response handler process.')
 
-        if self.__monitor_handler_process is not None:
-            try:
-                self.__monitor_rx_queue.put('Terminate process')
-                self.__monitor_handler_process.join()
-                self.__monitor_handler_process = None
-            except:
-                self.logger.error('Error shutting down monitor handler process.')
+            if self.__monitor_handler_process is not None:
+                try:
+                    self.__monitor_rx_queue.put('Terminate process')
+                    self.__monitor_handler_process.join()
+                    self.__monitor_handler_process = None
+                except:
+                    self.logger.error('Error shutting down monitor handler process.')
 
-        # Shutdown socket to terminate the rx processes.
-        if self.__command_socket is not None:
-            self.__command_socket.shutdown(socket.SHUT_RDWR)
-        if self.__monitor_socket is not None:
-            self.__monitor_socket.shutdown(socket.SHUT_RDWR)
+            # Shutdown socket to terminate the rx processes.
+            if self.__command_socket is not None:
+                self.__command_socket.shutdown(socket.SHUT_RDWR)
+            if self.__monitor_socket is not None:
+                self.__monitor_socket.shutdown(socket.SHUT_RDWR)
 
-        # Join processes which wait on a socket.
-        if self.__command_rx_process is not None:
-            try:
-                self.__command_rx_process.join()
-                self.__command_rx_process = None
-            except:
-                self.logger.error('Error shutting down rx process.')
+            # Join processes which wait on a socket.
+            if self.__command_rx_process is not None:
+                try:
+                    self.__command_rx_process.join()
+                    self.__command_rx_process = None
+                except:
+                    self.logger.error('Error shutting down rx process.')
 
-        if self.__monitor_rx_process is not None:
-            try:
-                self.__monitor_rx_process.join()
-                self.__monitor_rx_process = None
-            except:
-                self.logger.error('Error shutting down monitor rx process.')
+            if self.__monitor_rx_process is not None:
+                try:
+                    self.__monitor_rx_process.join()
+                    self.__monitor_rx_process = None
+                except:
+                    self.logger.error('Error shutting down monitor rx process.')
 
-        # Reset communication queues (not strictly necessary since these should be empty).
-        self.__command_rx_queue = mp.Queue()
-        self.__command_tx_queue = mp.Queue()
-        self.__monitor_rx_queue = mp.Queue()
+            # Reset communication queues (not strictly necessary since these should be empty).
+            self.__command_rx_queue = mp.Queue()
+            self.__command_tx_queue = mp.Queue()
+            self.__monitor_rx_queue = mp.Queue()
 
-        # Reset robot state.
-        self.__robot_state = RobotState()
-        self.__checkpoints.clear()
+            # Reset robot state.
+            self.__robot_state = RobotState()
+            self.__checkpoints.clear()
 
-        if self.__command_socket is not None:
-            self.__command_socket.close()
-            self.__command_socket = None
-        if self.__monitor_socket is not None:
-            self.__monitor_socket.close()
-            self.__monitor_socket = None
+            if self.__command_socket is not None:
+                self.__command_socket.close()
+                self.__command_socket = None
+            if self.__monitor_socket is not None:
+                self.__monitor_socket.close()
+                self.__monitor_socket = None
 
     def GetJoints(self):
         return self.__robot_state.joint_positions.get_obj()[:]
 
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
-        self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
+        with self.__main_lock:
+            self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
+            if self.__enable_synchronous_mode:
+                self._set_checkpoint_internal(0)
+
         if self.__enable_synchronous_mode:
-            self.SetCheckpoint(1001)
-            self.WaitCheckpoint(1001)
+            self.WaitCheckpoint(0)
 
     def SetCheckpoint(self, n):
-        # Checkpoints above 1000 are reserved for private use.
-        assert n < 1000
+        assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
+        self._set_checkpoint_internal(n)
 
+    def _set_checkpoint_internal(self, n):
         self.logger.debug('Setting checkpoint %s', n)
 
         # Add event for checkpoint (create key if doesn't exist).
-        with self.__checkpoint_lock:
+        with self.__main_lock:
             if n not in self.__checkpoints:
                 self.__checkpoints[n] = self.__manager.list()
             self.__checkpoints[n].append(self.__manager.Event())
 
-        self._send_command('SetCheckpoint', [n])
+            self._send_command('SetCheckpoint', [n])
 
     def WaitCheckpoint(self, n, timeout=None):
         self.logger.debug('Waiting for checkpoint %s', n)
