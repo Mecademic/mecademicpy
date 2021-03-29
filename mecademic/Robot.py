@@ -13,6 +13,14 @@ CHECKPOINT_ID_MIN = 1  # Min allowable checkpoint id for users, inclusive
 CHECKPOINT_ID_MAX = 8000  # Max allowable checkpoint id for users, inclusive
 
 
+class InvalidStateError(Exception):
+    pass
+
+
+class CommunicationError(Exception):
+    pass
+
+
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
 
@@ -225,7 +233,7 @@ class Robot:
         new_socket.settimeout(0.1)  # 100ms
         try:
             new_socket.connect((address, port))
-        except socket.timeout:
+        except:
             logger.error('Unable to connect to %s:%s.', address, port)
             return None
 
@@ -254,47 +262,66 @@ class Robot:
             return True
 
         if self.__command_socket is not None:
-            self.logger.warning('Existing command connection found, this should not be possible, closing socket...')
-            self.Disconnect()
-
-        self.__command_socket = self._connect_socket(self.logger, self.__address, COMMAND_PORT)
-
-        if self.__command_socket is None:
-            self.logger.error('Error creating socket.')
-            return False
-
-        # Create tx and rx processes and queues for socket communication.
-        self.__command_rx_process = mp.Process(target=self._handle_rx,
-                                               args=(
-                                                   self.__command_socket,
-                                                   self.__command_rx_queue,
-                                               ))
-        self.__command_tx_process = mp.Process(target=self._handle_tx,
-                                               args=(
-                                                   self.__command_socket,
-                                                   self.__command_tx_queue,
-                                               ))
-
-        self.__command_rx_process.start()
-        self.__command_tx_process.start()
+            self.logger.warning('Existing command connection found, invalid state.')
+            raise InvalidStateError
 
         if self.__monitor_socket is not None:
             self.logger.warning('Existing monitor connection found, this should not be possible, closing socket...')
+            raise InvalidStateError
+
+        try:
+            self.__command_socket = self._connect_socket(self.logger, self.__address, COMMAND_PORT)
+
+            if self.__command_socket is None:
+                self.logger.error('Error creating socket.')
+                raise CommunicationError
+
+            self.__monitor_socket = self._connect_socket(self.logger, self.__address, MONITOR_PORT)
+
+            if self.__monitor_socket is None:
+                self.logger.error('Error creating socket.')
+                raise CommunicationError
+
+        except:
+            # Clean up processes and connections on error.
             self.Disconnect()
-
-        self.__monitor_socket = self._connect_socket(self.logger, self.__address, MONITOR_PORT)
-
-        if self.__monitor_socket is None:
-            self.logger.error('Error creating socket.')
             return False
 
-        self.__monitor_rx_process = mp.Process(target=self._handle_rx,
-                                               args=(
-                                                   self.__monitor_socket,
-                                                   self.__monitor_rx_queue,
-                                               ))
+        return True
 
-        self.__monitor_rx_process.start()
+    def _establish_socket_processes(self, offline_mode=False):
+        if offline_mode:
+            return True
+
+        try:
+            # Create tx process for command socket communication.
+            self.__command_rx_process = mp.Process(target=self._handle_rx,
+                                                   args=(
+                                                       self.__command_socket,
+                                                       self.__command_rx_queue,
+                                                   ))
+            self.__command_rx_process.start()
+
+            # Create rx process for command socket communication.
+            self.__command_tx_process = mp.Process(target=self._handle_tx,
+                                                   args=(
+                                                       self.__command_socket,
+                                                       self.__command_tx_queue,
+                                                   ))
+            self.__command_tx_process.start()
+
+            # Create rx processes for monitor socket communication.
+            self.__monitor_rx_process = mp.Process(target=self._handle_rx,
+                                                   args=(
+                                                       self.__monitor_socket,
+                                                       self.__monitor_rx_queue,
+                                                   ))
+            self.__monitor_rx_process.start()
+
+        except:
+            # Clean up processes and connections on error.
+            self.Disconnect()
+            return False
 
         return True
 
@@ -359,6 +386,8 @@ class Robot:
         with self.__main_lock:
             if not self._establish_socket_connections(offline_mode=offline_mode):
                 return False
+            if not self._establish_socket_processes(offline_mode=offline_mode):
+                return False
             if not self._initialize_command_connection():
                 return False
             if not self._initialize_monitoring_connection():
@@ -394,47 +423,55 @@ class Robot:
             if self.__command_tx_process is not None:
                 try:
                     self.__command_tx_queue.put('Terminate process')
-                    self.__command_tx_process.join()
-                    self.__command_tx_process = None
                 except:
+                    self.__command_tx_process.terminate()
                     self.logger.error('Error shutting down tx process.')
+                self.__command_tx_process.join()
+                self.__command_tx_process = None
 
             if self.__command_response_handler_process is not None:
                 try:
                     self.__command_rx_queue.put('Terminate process')
-                    self.__command_response_handler_process.join()
-                    self.__command_response_handler_process = None
                 except:
+                    self.__command_response_handler_process.terminate()
                     self.logger.error('Error shutting down command response handler process.')
+                self.__command_response_handler_process.join()
+                self.__command_response_handler_process = None
 
             if self.__monitor_handler_process is not None:
                 try:
                     self.__monitor_rx_queue.put('Terminate process')
-                    self.__monitor_handler_process.join()
-                    self.__monitor_handler_process = None
                 except:
+                    self.__monitor_handler_process.terminate()
                     self.logger.error('Error shutting down monitor handler process.')
+                self.__monitor_handler_process.join()
+                self.__monitor_handler_process = None
 
             # Shutdown socket to terminate the rx processes.
             if self.__command_socket is not None:
-                self.__command_socket.shutdown(socket.SHUT_RDWR)
+                try:
+                    self.__command_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    self.logger.error('Error shutting down command socket.')
+                    if self.__command_rx_process is not None:
+                        self.__command_rx_process.terminate()
+
             if self.__monitor_socket is not None:
-                self.__monitor_socket.shutdown(socket.SHUT_RDWR)
+                try:
+                    self.__monitor_socket.shutdown(socket.SHUT_RDWR)
+                except:
+                    self.logger.error('Error shutting down monitor socket.')
+                    if self.__monitor_rx_process is not None:
+                        self.__monitor_rx_process.terminate()
 
             # Join processes which wait on a socket.
             if self.__command_rx_process is not None:
-                try:
-                    self.__command_rx_process.join()
-                    self.__command_rx_process = None
-                except:
-                    self.logger.error('Error shutting down rx process.')
+                self.__command_rx_process.join()
+                self.__command_rx_process = None
 
             if self.__monitor_rx_process is not None:
-                try:
-                    self.__monitor_rx_process.join()
-                    self.__monitor_rx_process = None
-                except:
-                    self.logger.error('Error shutting down monitor rx process.')
+                self.__monitor_rx_process.join()
+                self.__monitor_rx_process = None
 
             # Reset communication queues (not strictly necessary since these should be empty).
             self.__command_rx_queue = mp.Queue()
@@ -445,11 +482,18 @@ class Robot:
             self.__robot_state = RobotState()
             self.__checkpoints.clear()
 
+            # Finally, close sockets.
             if self.__command_socket is not None:
-                self.__command_socket.close()
+                try:
+                    self.__command_socket.close()
+                except:
+                    self.logger.error('Error closing command socket.')
                 self.__command_socket = None
             if self.__monitor_socket is not None:
-                self.__monitor_socket.close()
+                try:
+                    self.__monitor_socket.close()
+                except:
+                    self.logger.error('Error closing monitor socket.')
                 self.__monitor_socket = None
 
     def GetJoints(self):
