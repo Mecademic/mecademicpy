@@ -422,37 +422,37 @@ class Robot:
         """Disconnects Mecademic Robot object from physical Mecademic Robot.
 
         """
+        self.DeactivateRobot()
+
+        # Join processes which wait on a queue by sending terminate to the queue.
+        if self.__command_tx_process is not None:
+            try:
+                self.__command_tx_queue.put('Terminate process')
+            except:
+                self.__command_tx_process.terminate()
+                self.logger.error('Error shutting down tx process.')
+            self.__command_tx_process.join()
+            self.__command_tx_process = None
+
+        if self.__command_response_handler_process is not None:
+            try:
+                self.__command_rx_queue.put('Terminate process')
+            except:
+                self.__command_response_handler_process.terminate()
+                self.logger.error('Error shutting down command response handler process.')
+            self.__command_response_handler_process.join()
+            self.__command_response_handler_process = None
+
+        if self.__monitor_handler_process is not None:
+            try:
+                self.__monitor_rx_queue.put('Terminate process')
+            except:
+                self.__monitor_handler_process.terminate()
+                self.logger.error('Error shutting down monitor handler process.')
+            self.__monitor_handler_process.join()
+            self.__monitor_handler_process = None
+
         with self.__main_lock:
-            self.DeactivateRobot()
-
-            # Join processes which wait on a queue by sending terminate to the queue.
-            if self.__command_tx_process is not None:
-                try:
-                    self.__command_tx_queue.put('Terminate process')
-                except:
-                    self.__command_tx_process.terminate()
-                    self.logger.error('Error shutting down tx process.')
-                self.__command_tx_process.join()
-                self.__command_tx_process = None
-
-            if self.__command_response_handler_process is not None:
-                try:
-                    self.__command_rx_queue.put('Terminate process')
-                except:
-                    self.__command_response_handler_process.terminate()
-                    self.logger.error('Error shutting down command response handler process.')
-                self.__command_response_handler_process.join()
-                self.__command_response_handler_process = None
-
-            if self.__monitor_handler_process is not None:
-                try:
-                    self.__monitor_rx_queue.put('Terminate process')
-                except:
-                    self.__monitor_handler_process.terminate()
-                    self.logger.error('Error shutting down monitor handler process.')
-                self.__monitor_handler_process.join()
-                self.__monitor_handler_process = None
-
             # Shutdown socket to terminate the rx processes.
             if self.__command_socket is not None:
                 try:
@@ -548,13 +548,14 @@ class Robot:
     def WaitCheckpoint(self, n, timeout=None):
         self.logger.debug('Waiting for checkpoint %s', n)
 
-        try:
-            # Get the first instance of an event with this id.
-            checkpoint = self.__checkpoints[n][0]
-        except (IndexError, KeyError):
-            # If no active checkpoint matches this id, no need to wait.
-            self.logger.debug('Checkpoint %s not active.', n)
-            return True
+        with self.__main_lock:
+            try:
+                # Get the first instance of an event with this id.
+                checkpoint = self.__checkpoints[n][0]
+            except (IndexError, KeyError):
+                # If no active checkpoint matches this id, no need to wait.
+                self.logger.debug('Checkpoint %s not active.', n)
+                return True
 
         if checkpoint.wait(timeout=timeout):
             self.logger.debug('Checkpoint %s reached.', n)
