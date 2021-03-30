@@ -11,6 +11,7 @@ MONITOR_PORT = 10001
 
 CHECKPOINT_ID_MIN = 1  # Min allowable checkpoint id for users, inclusive
 CHECKPOINT_ID_MAX = 8000  # Max allowable checkpoint id for users, inclusive
+CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
 
 class InvalidStateError(Exception):
@@ -32,13 +33,16 @@ class RobotState:
     def __init__(self):
         self.joint_positions = mp.Array('f', 6)
         self.end_effector_pose = mp.Array('f', 6)
-        self.activation_state = mp.Value('b', False)
-        self.homing_state = mp.Value('b', False)
-        self.simulation_mode = mp.Value('b', False)
-        self.error_status = mp.Value('b', False)
-        self.pause_motion_status = mp.Value('b', False)
-        self.end_of_block_status = mp.Value('b', False)
-        self.end_of_movement_status = mp.Value('b', False)
+
+        # The following status fields are updated together, and is protected by a single lock.
+        self.status_lock = mp.Lock()
+        self.activation_state = mp.Value('b', False, lock=False)
+        self.homing_state = mp.Value('b', False, lock=False)
+        self.simulation_mode = mp.Value('b', False, lock=False)
+        self.error_status = mp.Value('b', False, lock=False)
+        self.pause_motion_status = mp.Value('b', False, lock=False)
+        self.end_of_block_status = mp.Value('b', False, lock=False)
+        self.end_of_movement_status = mp.Value('b', False, lock=False)
 
 
 class Robot:
@@ -94,6 +98,7 @@ class Robot:
 
         self.__manager = mp.Manager()
         self.__checkpoints = self.__manager.dict()
+        self.__internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
         self.__enable_synchronous_mode = enable_synchronous_mode
         self.logger = logging.getLogger(__name__)
@@ -189,7 +194,7 @@ class Robot:
                         checkpoints.pop(checkpoint_id)
 
     @staticmethod
-    def _monitor_handler(monitor_queue, robot_state):
+    def _monitor_handler(monitor_queue, robot_state, main_lock):
         """Handle received messages on the monitor socket.
         Parameters
         ----------
@@ -204,8 +209,11 @@ class Robot:
             # Terminate process if requested.
             if response == 'Terminate process':
                 return
-            elif response[1:5] == '2026':
-                robot_state.joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+            with main_lock:
+                if response[1:5] == '2026':
+                    with robot_state.joint_positions.get_lock():
+                        robot_state.joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
 
     @staticmethod
     def _connect_socket(logger, address, port):
@@ -366,10 +374,8 @@ class Robot:
         """
 
         self.__monitor_handler_process = mp.Process(target=self._monitor_handler,
-                                                    args=(
-                                                        self.__monitor_rx_queue,
-                                                        self.__robot_state,
-                                                    ))
+                                                    args=(self.__monitor_rx_queue, self.__robot_state,
+                                                          self.__main_lock))
         self.__monitor_handler_process.start()
 
         return True
@@ -481,6 +487,7 @@ class Robot:
             # Reset robot state.
             self.__robot_state = RobotState()
             self.__checkpoints.clear()
+            self.__internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
             # Finally, close sockets.
             if self.__command_socket is not None:
@@ -503,16 +510,31 @@ class Robot:
         with self.__main_lock:
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
             if self.__enable_synchronous_mode:
-                self._set_checkpoint_internal(0)
+                checkpoint_id = self._set_checkpoint_internal()
 
         if self.__enable_synchronous_mode:
-            self.WaitCheckpoint(0)
+            self.WaitCheckpoint(checkpoint_id)
 
     def SetCheckpoint(self, n):
-        assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
-        self._set_checkpoint_internal(n)
+        with self.__main_lock:
+            assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
+            self._set_checkpoint_impl(n)
 
-    def _set_checkpoint_internal(self, n):
+    def _set_checkpoint_internal(self):
+        with self.__main_lock:
+            checkpoint_id = self.__internal_checkpoint_counter
+            self._set_checkpoint_impl(checkpoint_id)
+            self.__internal_checkpoint_counter += 1
+            if self.__internal_checkpoint_counter > 8191:
+                self.__internal_checkpoint_counter.value = CHECKPOINT_ID_MAX + 1
+            return checkpoint_id
+
+    def _set_checkpoint_impl(self, n):
+        if not isinstance(n, int):
+            raise TypeError('Please provide a string argument for the address.')
+
+        assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX_PRIVATE
+
         self.logger.debug('Setting checkpoint %s', n)
 
         # Add event for checkpoint (create key if doesn't exist).
