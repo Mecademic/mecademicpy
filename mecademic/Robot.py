@@ -5,6 +5,7 @@ import time
 import socket
 import multiprocessing as mp
 import queue
+from collections import deque
 
 COMMAND_PORT = 10000
 MONITOR_PORT = 10001
@@ -97,7 +98,9 @@ class Robot:
         self.__robot_state = RobotState()
 
         self.__manager = mp.Manager()
-        self.__checkpoints = self.__manager.dict()
+        self.__received_checkpoints = self.__manager.list()
+        self.__blocking_checkpoint_id = mp.Value('i', -1)
+        self.__checkpoint_event = self.__manager.Event()
         self.__internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
         self.__enable_synchronous_mode = enable_synchronous_mode
@@ -166,7 +169,8 @@ class Robot:
                     continue  # TODO handle properly by raising an error
 
     @staticmethod
-    def _command_response_handler(rx_queue, robot_state, checkpoints, main_lock):
+    def _command_response_handler(rx_queue, robot_state, received_checkpoints, blocking_checkpoint_id, checkpoint_event,
+                                  main_lock):
         """Handle received messages on the command socket.
         Parameters
         ----------
@@ -183,15 +187,17 @@ class Robot:
                 return
 
             with main_lock:
-
                 # Handle checkpoints.
                 if response[1:5] == '3030':
                     checkpoint_id = int(response[7:-1])
-                    # Remove the earliest event associated with checkpoint and set it.
-                    checkpoints[checkpoint_id].pop(0).set()
-                    # Delete the key if no more events are associated with it.
-                    if len(checkpoints[checkpoint_id]) == 0:
-                        checkpoints.pop(checkpoint_id)
+                    # If duplicate has been received, remove it and all checkpoints before.
+                    if checkpoint_id in received_checkpoints:
+                        checkpoint_index = received_checkpoints.index(n)
+                        for _ in range(checkpoint_index + 1):
+                            received_checkpoints.pop(0)
+                    received_checkpoints.append(checkpoint_id)
+                    if checkpoint_id == blocking_checkpoint_id.value:
+                        checkpoint_event.set()
 
     @staticmethod
     def _monitor_handler(monitor_queue, robot_state, main_lock):
@@ -356,9 +362,10 @@ class Robot:
             self.Disconnect()
             return False
 
-        self.__command_response_handler_process = mp.Process(target=self._command_response_handler,
-                                                             args=(self.__command_rx_queue, self.__robot_state,
-                                                                   self.__checkpoints, self.__main_lock))
+        self.__command_response_handler_process = mp.Process(
+            target=self._command_response_handler,
+            args=(self.__command_rx_queue, self.__robot_state, self.__received_checkpoints,
+                  self.__blocking_checkpoint_id, self.__checkpoint_event, self.__main_lock))
         self.__command_response_handler_process.start()
 
         return True
@@ -486,7 +493,7 @@ class Robot:
 
             # Reset robot state.
             self.__robot_state = RobotState()
-            self.__checkpoints.clear()
+            self.__incoming_checkpoints_queue = mp.Queue()
             self.__internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
             # Finally, close sockets.
@@ -504,7 +511,8 @@ class Robot:
                 self.__monitor_socket = None
 
     def GetJoints(self):
-        return self.__robot_state.joint_positions.get_obj()[:]
+        with self.__main_lock:
+            return self.__robot_state.joint_positions.get_obj()[:]
 
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
         with self.__main_lock:
@@ -524,6 +532,7 @@ class Robot:
         with self.__main_lock:
             checkpoint_id = self.__internal_checkpoint_counter
             self._set_checkpoint_impl(checkpoint_id)
+
             self.__internal_checkpoint_counter += 1
             if self.__internal_checkpoint_counter > 8191:
                 self.__internal_checkpoint_counter.value = CHECKPOINT_ID_MAX + 1
@@ -537,11 +546,11 @@ class Robot:
 
         self.logger.debug('Setting checkpoint %s', n)
 
-        # Add event for checkpoint (create key if doesn't exist).
         with self.__main_lock:
-            if n not in self.__checkpoints:
-                self.__checkpoints[n] = self.__manager.list()
-            self.__checkpoints[n].append(self.__manager.Event())
+            # Checkpoint n from received list (if found).
+            if n in self.__received_checkpoints:
+                checkpoint_index = self.__received_checkpoints.index(n)
+                self.__received_checkpoints.pop(checkpoint_index)
 
             self._send_command('SetCheckpoint', [n])
 
@@ -549,18 +558,19 @@ class Robot:
         self.logger.debug('Waiting for checkpoint %s', n)
 
         with self.__main_lock:
-            try:
-                # Get the first instance of an event with this id.
-                checkpoint = self.__checkpoints[n][0]
-            except (IndexError, KeyError):
-                # If no active checkpoint matches this id, no need to wait.
-                self.logger.debug('Checkpoint %s not active.', n)
+            # Only one instance can wait on a checkpoint at a time.
+            assert self.__blocking_checkpoint_id.value == -1
+
+            if n in self.__received_checkpoints:
                 return True
 
-        if checkpoint.wait(timeout=timeout):
-            self.logger.debug('Checkpoint %s reached.', n)
-            return True
+            self.__blocking_checkpoint_id.value = n
 
-        # Wait timed out or was otherwise unsuccessful.
-        self.logger.warning('Waiting for checkpoint %s unsuccessful.', n)
+        if self.__checkpoint_event.wait(timeout=timeout):
+            with self.__main_lock:
+                self.__checkpoint_event.clear()
+                self.__blocking_checkpoint_id.value = -1
+                return True
+
+        self.__blocking_checkpoint_id.value = -1
         return False

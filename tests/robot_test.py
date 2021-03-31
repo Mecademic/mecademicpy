@@ -129,43 +129,53 @@ def test_monitoring_connection():
     robot.Disconnect()
 
 
-def test_checkpoints():
+def test_simple_checkpoints():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
     robot._Robot__command_rx_queue.put('[3000]')
     assert robot.Connect(offline_mode=True)
 
-    # No checkpoints set, no need to wait.
-    assert robot.WaitCheckpoint(1)
+    # Checkpoint was not received, wait fails.
+    assert not robot.WaitCheckpoint(1, timeout=0)
 
     # One checkpoint is set.
     robot.SetCheckpoint(2)
     assert not robot.WaitCheckpoint(2, timeout=0)
     robot._Robot__command_rx_queue.put('[3030][2]')
-    assert robot.WaitCheckpoint(2)
+
+    assert robot.WaitCheckpoint(2, timeout=1)
+    robot.SetCheckpoint(2)
+    assert not robot.WaitCheckpoint(2, timeout=0)
+
+    # robot._Robot__command_rx_queue.put('Terminate process')
+    # robot._Robot__command_response_handler_process.join()
 
     # More than one checkpoint is set.
     robot.SetCheckpoint(1)
     robot.SetCheckpoint(2)
     assert not robot.WaitCheckpoint(1, timeout=0)
     assert not robot.WaitCheckpoint(2, timeout=0)
-    assert robot.WaitCheckpoint(3)  # Should not block since 3 was never set.
+    assert not robot.WaitCheckpoint(3, timeout=0)  # Should not block since 3 was never set.
 
     robot._Robot__command_rx_queue.put('[3030][1]')
-    assert not robot.WaitCheckpoint(2, timeout=0)
+    assert not robot.WaitCheckpoint(2, timeout=1)
 
     robot._Robot__command_rx_queue.put('[3030][2]')
     assert robot.WaitCheckpoint(2)
     assert robot.WaitCheckpoint(1)
 
-    # Duplicate checkpoints, second wait should block until both are sent.
-    robot.SetCheckpoint(1)
-    robot.SetCheckpoint(1)
-    robot._Robot__command_rx_queue.put('[3030][1]')
-    robot._Robot__command_rx_queue.put('Terminate process')
-    robot._Robot__command_response_handler_process.join()
-    # Only one checkpoint was received, second one should still block.
-    assert not robot.WaitCheckpoint(1, timeout=0)
+    # Test 'external' checkpoints.
+    robot._Robot__command_rx_queue.put('[3030][5]')
+    assert robot.WaitCheckpoint(5)
+
+    # # Duplicate checkpoints, second wait should block until both are sent.
+    # robot.SetCheckpoint(1)
+    # robot.SetCheckpoint(1)
+    # robot._Robot__command_rx_queue.put('[3030][1]')
+    # robot._Robot__command_rx_queue.put('Terminate process')
+    # robot._Robot__command_response_handler_process.join()
+    # # Only one checkpoint was received, second one should still block.
+    # assert not robot.WaitCheckpoint(1, timeout=0)
 
     robot.Disconnect()
