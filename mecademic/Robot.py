@@ -23,6 +23,15 @@ class CommunicationError(Exception):
     pass
 
 
+class Checkpoint:
+    def __init__(self, id, event):
+        self.id = id
+        self.event = event
+
+    def wait(self, timeout=None):
+        return self.event.wait(timeout=timeout)
+
+
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
 
@@ -36,7 +45,6 @@ class RobotState:
         self.end_effector_pose = mp.Array('f', 6)
 
         # The following status fields are updated together, and is protected by a single lock.
-        self.status_lock = mp.Lock()
         self.activation_state = mp.Value('b', False, lock=False)
         self.homing_state = mp.Value('b', False, lock=False)
         self.simulation_mode = mp.Value('b', False, lock=False)
@@ -98,9 +106,7 @@ class Robot:
         self.__robot_state = RobotState()
 
         self.__manager = mp.Manager()
-        self.__received_checkpoints = self.__manager.list()
-        self.__blocking_checkpoint_id = mp.Value('i', -1)
-        self.__checkpoint_event = self.__manager.Event()
+        self.__pending_checkpoints = self.__manager.dict()
         self.__internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
         self.__enable_synchronous_mode = enable_synchronous_mode
@@ -169,8 +175,7 @@ class Robot:
                     continue  # TODO handle properly by raising an error
 
     @staticmethod
-    def _command_response_handler(rx_queue, robot_state, received_checkpoints, blocking_checkpoint_id, checkpoint_event,
-                                  main_lock):
+    def _command_response_handler(rx_queue, robot_state, pending_checkpoints, main_lock):
         """Handle received messages on the command socket.
         Parameters
         ----------
@@ -190,14 +195,11 @@ class Robot:
                 # Handle checkpoints.
                 if response[1:5] == '3030':
                     checkpoint_id = int(response[7:-1])
-                    # If duplicate has been received, remove it and all checkpoints before.
-                    if checkpoint_id in received_checkpoints:
-                        checkpoint_index = received_checkpoints.index(n)
-                        for _ in range(checkpoint_index + 1):
-                            received_checkpoints.pop(0)
-                    received_checkpoints.append(checkpoint_id)
-                    if checkpoint_id == blocking_checkpoint_id.value:
-                        checkpoint_event.set()
+                    if checkpoint_id in pending_checkpoints and len(pending_checkpoints[checkpoint_id]) != 0:
+                        pending_checkpoints[checkpoint_id].pop(0).set()
+                    else:
+                        raise ValueError(
+                            'Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
 
     @staticmethod
     def _monitor_handler(monitor_queue, robot_state, main_lock):
@@ -212,14 +214,28 @@ class Robot:
             # Wait for a message in the queue.
             response = monitor_queue.get(block=True)
 
+            # logger.debug(response)
+
             # Terminate process if requested.
             if response == 'Terminate process':
                 return
 
             with main_lock:
                 if response[1:5] == '2026':
-                    with robot_state.joint_positions.get_lock():
-                        robot_state.joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                    robot_state.joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2027':
+                    robot_state.end_effector_pose.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2007':
+                    status_flags = [bool(x) for x in response[7:-1].split(',')]
+                    robot_state.activation_state.value = status_flags[0]
+                    robot_state.homing_state.value = status_flags[1]
+                    robot_state.simulation_mode.value = status_flags[2]
+                    robot_state.error_status.value = status_flags[3]
+                    robot_state.pause_motion_status = status_flags[4]
+                    robot_state.end_of_block_status = status_flags[5]
+                    robot_state.end_of_movement_status = status_flags[6]
 
     @staticmethod
     def _connect_socket(logger, address, port):
@@ -253,6 +269,12 @@ class Robot:
 
         logger.debug('Connected to %s:%s.', address, port)
         return new_socket
+
+    def _check_monitor_processes(self):
+        if self.__command_response_handler_process:
+            assert self.__command_response_handler_process.is_alive()
+        if self.__monitor_handler_process:
+            assert self.__monitor_handler_process.is_alive()
 
     def _send_command(self, command, arg_list=None):
         """Assembles and sends the command string to the Mecademic Robot.
@@ -362,10 +384,9 @@ class Robot:
             self.Disconnect()
             return False
 
-        self.__command_response_handler_process = mp.Process(
-            target=self._command_response_handler,
-            args=(self.__command_rx_queue, self.__robot_state, self.__received_checkpoints,
-                  self.__blocking_checkpoint_id, self.__checkpoint_event, self.__main_lock))
+        self.__command_response_handler_process = mp.Process(target=self._command_response_handler,
+                                                             args=(self.__command_rx_queue, self.__robot_state,
+                                                                   self.__pending_checkpoints, self.__main_lock))
         self.__command_response_handler_process.start()
 
         return True
@@ -410,10 +431,12 @@ class Robot:
 
     def ActivateRobot(self):
         with self.__main_lock:
+            self._check_monitor_processes()
             self._send_command('ActivateRobot')
 
     def Home(self):
         with self.__main_lock:
+            self._check_monitor_processes()
             self._send_command('Home')
 
     def ActivateAndHome(self):
@@ -423,6 +446,7 @@ class Robot:
 
     def DeactivateRobot(self):
         with self.__main_lock:
+            self._check_monitor_processes()
             self._send_command('DeactivateRobot')
 
     def Disconnect(self):
@@ -493,7 +517,7 @@ class Robot:
 
             # Reset robot state.
             self.__robot_state = RobotState()
-            self.__incoming_checkpoints_queue = mp.Queue()
+            self.__pending_checkpoints = self.__manager.dict()
             self.__internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
             # Finally, close sockets.
@@ -512,10 +536,12 @@ class Robot:
 
     def GetJoints(self):
         with self.__main_lock:
+            self._check_monitor_processes()
             return self.__robot_state.joint_positions.get_obj()[:]
 
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
         with self.__main_lock:
+            self._check_monitor_processes()
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
             if self.__enable_synchronous_mode:
                 checkpoint_id = self._set_checkpoint_internal()
@@ -525,20 +551,28 @@ class Robot:
 
     def SetCheckpoint(self, n):
         with self.__main_lock:
+            self._check_monitor_processes()
             assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
-            self._set_checkpoint_impl(n)
+            return self._set_checkpoint_impl(n)
+
+    def ExpectExternalCheckpoint(self, n):
+        with self.__main_lock:
+            self._check_monitor_processes()
+            assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
+            return self._set_checkpoint_impl(n, send_to_robot=False)
 
     def _set_checkpoint_internal(self):
         with self.__main_lock:
             checkpoint_id = self.__internal_checkpoint_counter
-            self._set_checkpoint_impl(checkpoint_id)
 
+            # Increment internal checkpoint counter.
             self.__internal_checkpoint_counter += 1
-            if self.__internal_checkpoint_counter > 8191:
+            if self.__internal_checkpoint_counter > CHECKPOINT_ID_MAX_PRIVATE:
                 self.__internal_checkpoint_counter.value = CHECKPOINT_ID_MAX + 1
-            return checkpoint_id
 
-    def _set_checkpoint_impl(self, n):
+            return self._set_checkpoint_impl(checkpoint_id)
+
+    def _set_checkpoint_impl(self, n, send_to_robot=True):
         if not isinstance(n, int):
             raise TypeError('Please provide a string argument for the address.')
 
@@ -547,30 +581,12 @@ class Robot:
         self.logger.debug('Setting checkpoint %s', n)
 
         with self.__main_lock:
-            # Checkpoint n from received list (if found).
-            if n in self.__received_checkpoints:
-                checkpoint_index = self.__received_checkpoints.index(n)
-                self.__received_checkpoints.pop(checkpoint_index)
+            if n not in self.__pending_checkpoints:
+                self.__pending_checkpoints[n] = self.__manager.list()
+            event = self.__manager.Event()
+            self.__pending_checkpoints[n].append(event)
 
-            self._send_command('SetCheckpoint', [n])
+            if send_to_robot:
+                self._send_command('SetCheckpoint', [n])
 
-    def WaitCheckpoint(self, n, timeout=None):
-        self.logger.debug('Waiting for checkpoint %s', n)
-
-        with self.__main_lock:
-            # Only one instance can wait on a checkpoint at a time.
-            assert self.__blocking_checkpoint_id.value == -1
-
-            if n in self.__received_checkpoints:
-                return True
-
-            self.__blocking_checkpoint_id.value = n
-
-        if self.__checkpoint_event.wait(timeout=timeout):
-            with self.__main_lock:
-                self.__checkpoint_event.clear()
-                self.__blocking_checkpoint_id.value = -1
-                return True
-
-        self.__blocking_checkpoint_id.value = -1
-        return False
+            return Checkpoint(n, event)
