@@ -41,8 +41,29 @@ class RobotState:
 
     """
     def __init__(self):
-        self.joint_positions = mp.Array('f', 6)
-        self.end_effector_pose = mp.Array('f', 6)
+        self.joint_positions = mp.Array('f', 6)  # degrees
+        self.end_effector_pose = mp.Array('f', 6)  # mm and degrees
+
+        self.nc_joint_positions = mp.Array('f', 7)  # degrees
+        self.nc_end_effector_pose = mp.Array('f', 7)  # mm and degrees
+
+        self.nc_joint_velocity = mp.Array('f', 7)  # degrees/second
+        self.nc_end_effector_velocity = mp.Array('f', 7)  # mm/s and degrees/s
+
+        self.nc_joint_configurations = mp.Array('f', 4)
+        self.nc_multiturn = mp.Array('f', 2)
+
+        self.drive_joint_positions = mp.Array('f', 7)  # degrees
+        self.drive_end_effector_pose = mp.Array('f', 7)  # mm and degrees
+
+        self.drive_joint_velocity = mp.Array('f', 7)  # degrees/second
+        self.drive_joint_torque_ratio = mp.Array('f', 7)  # percent of maximum
+        self.drive_end_effector_velocity = mp.Array('f', 7)  # mm/s and degrees/s
+
+        self.drive_joint_configurations = mp.Array('f', 4)
+        self.drive_multiturn = mp.Array('f', 2)
+
+        self.accelerometer = mp.Array('f', 5)
 
         # The following status fields are updated together, and is protected by a single lock.
         self.activation_state = mp.Value('b', False, lock=False)
@@ -236,6 +257,48 @@ class Robot:
                     robot_state.pause_motion_status = status_flags[4]
                     robot_state.end_of_block_status = status_flags[5]
                     robot_state.end_of_movement_status = status_flags[6]
+
+                if response[1:5] == '2200':
+                    robot_state.nc_joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2201':
+                    robot_state.nc_end_effector_pose.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2202':
+                    robot_state.nc_joint_velocity.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2204':
+                    robot_state.nc_end_effector_velocity.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2208':
+                    robot_state.nc_joint_configurations.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2209':
+                    robot_state.nc_multiturn.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2210':
+                    robot_state.drive_joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2211':
+                    robot_state.drive_end_effector_pose.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2212':
+                    robot_state.drive_joint_velocity.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2213':
+                    robot_state.drive_joint_torque_ratio.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2214':
+                    robot_state.drive_end_effector_velocity.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2218':
+                    robot_state.drive_joint_configurations.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2219':
+                    robot_state.drive_multiturn.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+
+                if response[1:5] == '2220':
+                    robot_state.accelerometer.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
 
     @staticmethod
     def _connect_socket(logger, address, port):
@@ -544,10 +607,10 @@ class Robot:
             self._check_monitor_processes()
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
             if self.__enable_synchronous_mode:
-                checkpoint_id = self._set_checkpoint_internal()
+                checkpoint = self._set_checkpoint_internal()
 
         if self.__enable_synchronous_mode:
-            self.WaitCheckpoint(checkpoint_id)
+            checkpoint.wait()
 
     def SetCheckpoint(self, n):
         with self.__main_lock:
