@@ -135,7 +135,8 @@ class Robot:
         self._robot_state = RobotState()
 
         self._manager = mp.Manager()
-        self._pending_checkpoints = self._manager.dict()
+        self._user_checkpoints = self._manager.dict()
+        self._internal_checkpoints = self._manager.dict()
         self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
         self._state_events = self._manager.dict()
@@ -180,12 +181,12 @@ class Robot:
             # Put all responses into the queue.
             for response in responses[:-1]:
                 id_start = response.find('[') + 1
-                id_end = response.find(']')
+                id_end = response.find(']', id_start)
                 id = int(response[id_start:id_end])
 
                 # Find next square brackets (contains data).
                 data_start = response.find('[', id_end) + 1
-                data_end = response.find(']', id_end + 1)
+                data_end = response.find(']', data_start)
 
                 data = ''
                 if data_start != -1 and data_end != -1:
@@ -215,7 +216,7 @@ class Robot:
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
-    def _command_response_handler(rx_queue, robot_state, pending_checkpoints, main_lock):
+    def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, main_lock):
         """Handle received messages on the command socket.
         Parameters
         ----------
@@ -235,11 +236,24 @@ class Robot:
                 # Handle checkpoints.
                 if response.id == 3030:
                     checkpoint_id = int(response.data)
-                    if checkpoint_id in pending_checkpoints and pending_checkpoints[checkpoint_id]:
-                        pending_checkpoints[checkpoint_id].pop(0).set()
+
+                    # Check user checkpoints.
+                    if checkpoint_id in user_checkpoints and user_checkpoints[checkpoint_id]:
+                        user_checkpoints[checkpoint_id].pop(0).set()
                         # If list corresponding to checkpoint id is empty, remove the key from the dict.
-                        if not pending_checkpoints[checkpoint_id]:
-                            pending_checkpoints.pop(checkpoint_id)
+                        if not user_checkpoints[checkpoint_id]:
+                            user_checkpoints.pop(checkpoint_id)
+                        # If there are events are waiting on 'any checkpoint', set them all.
+                        if '*' in internal_checkpoints and internal_checkpoints['*']:
+                            for event in internal_checkpoints.pop('*'):
+                                event.set()
+
+                    # Check internal checkpoints.
+                    elif checkpoint_id in internal_checkpoints and internal_checkpoints[checkpoint_id]:
+                        internal_checkpoints[checkpoint_id].pop(0).set()
+                        # If list corresponding to checkpoint id is empty, remove the key from the dict.
+                        if not internal_checkpoints[checkpoint_id]:
+                            internal_checkpoints.pop(checkpoint_id)
                     else:
                         raise ValueError(
                             'Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
@@ -470,7 +484,8 @@ class Robot:
 
         self._command_response_handler_process = mp.Process(target=self._command_response_handler,
                                                             args=(self._command_rx_queue, self._robot_state,
-                                                                  self._pending_checkpoints, self._main_lock))
+                                                                  self._user_checkpoints, self._internal_checkpoints,
+                                                                  self._main_lock))
         self._command_response_handler_process.start()
 
         return True
@@ -587,11 +602,13 @@ class Robot:
 
             # Join processes which wait on a socket.
             if self._command_rx_process is not None:
-                self._command_rx_process.join()
+                if not self._command_rx_process.join(timeout=1):
+                    self._command_rx_process.terminate()
                 self._command_rx_process = None
 
             if self._monitor_rx_process is not None:
-                self._monitor_rx_process.join()
+                if not self._monitor_rx_process.join(timeout=1):
+                    self._monitor_rx_process.terminate()
                 self._monitor_rx_process = None
 
             # Reset communication queues (not strictly necessary since these should be empty).
@@ -601,7 +618,8 @@ class Robot:
 
             # Reset robot state.
             self._robot_state = RobotState()
-            self._pending_checkpoints = self._manager.dict()
+            self._user_checkpoints = self._manager.dict()
+            self._internal_checkpoints = self._manager.dict()
             self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
             # Finally, close sockets.
@@ -662,20 +680,36 @@ class Robot:
             return self._set_checkpoint_impl(checkpoint_id)
 
     def _set_checkpoint_impl(self, n, send_to_robot=True):
-        if not isinstance(n, int):
-            raise TypeError('Please provide a string argument for the address.')
-
-        assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX_PRIVATE
-
-        self.logger.debug('Setting checkpoint %s', n)
-
         with self._main_lock:
-            if n not in self._pending_checkpoints:
-                self._pending_checkpoints[n] = self._manager.list()
+            if not isinstance(n, int):
+                raise TypeError('Please provide a string argument for the address.')
+
+            # Find the correct dictionary to store checkpoint.
+            if CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX:
+                checkpoints_dict = self._user_checkpoints
+            elif CHECKPOINT_ID_MAX < n <= CHECKPOINT_ID_MAX_PRIVATE:
+                checkpoints_dict = self._internal_checkpoints
+            else:
+                raise ValueError
+
+            self.logger.debug('Setting checkpoint %s', n)
+
+            if n not in checkpoints_dict:
+                checkpoints_dict[n] = self._manager.list()
             event = self._manager.Event()
-            self._pending_checkpoints[n].append(event)
+            checkpoints_dict[n].append(event)
 
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
 
             return Checkpoint(n, event)
+
+    def WaitForAnyCheckpoint(self, timeout=None):
+        with self._main_lock:
+            self._check_monitor_processes()
+            if '*' not in self._internal_checkpoints:
+                self._internal_checkpoints['*'] = self._manager.list()
+            event = self._manager.Event()
+            self._internal_checkpoints['*'].append(event)
+
+        return event.wait(timeout=timeout)

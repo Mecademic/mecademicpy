@@ -272,6 +272,24 @@ def test_repeated_checkpoints():
     robot.Disconnect()
 
 
+def test_special_checkpoints():
+    robot = mdr.Robot(TEST_IP)
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect(offline_mode=True)
+
+    checkpoint_1 = robot.SetCheckpoint(1)
+    checkpoint_2 = robot.SetCheckpoint(2)
+
+    assert not robot.WaitForAnyCheckpoint(timeout=0)
+
+    robot._command_rx_queue.put(mdr.Message(3030, '1'))
+    assert robot.WaitForAnyCheckpoint()
+
+    robot.Disconnect()
+
+
 def test_unaccounted_checkpoints():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
