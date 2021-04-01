@@ -73,7 +73,10 @@ def test_successful_connection_full_socket():
     command_server_thread = run_fake_server(TEST_IP, mdr.COMMAND_PORT, ['[3000]\0'])
     monitor_server_thread = run_fake_server(TEST_IP, mdr.MONITOR_PORT, [])
 
+    assert not robot.WaitConnected(timeout=0)
+
     assert robot.Connect()
+    assert robot.WaitConnected()
 
     robot.Disconnect()
     assert robot._command_socket is None

@@ -139,6 +139,16 @@ class Robot:
         self._internal_checkpoints = self._manager.dict()
         self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
+        self._events = self._manager.dict()
+        self._events['OnRobotConnected'] = self._manager.Event()
+        self._events['OnRobotDisconnected'] = self._manager.Event()
+        self._events['OnRobotActivated'] = self._manager.Event()
+        self._events['OnRobotDeactivated'] = self._manager.Event()
+        self._events['OnRobotHomed'] = self._manager.Event()
+        self._events['OnRobotMotionPaused'] = self._manager.Event()
+        self._events['OnRobotMotionResumed'] = self._manager.Event()
+        self._events['OnMotionCleared'] = self._manager.Event()
+
         self._state_events = self._manager.dict()
 
         self._enable_synchronous_mode = enable_synchronous_mode
@@ -216,7 +226,7 @@ class Robot:
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
-    def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, main_lock):
+    def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, events, main_lock):
         """Handle received messages on the command socket.
         Parameters
         ----------
@@ -233,6 +243,9 @@ class Robot:
                 return
 
             with main_lock:
+                if response.id == 2044:
+                    events['OnMotionCleared'].set()
+
                 # Handle checkpoints.
                 if response.id == 3030:
                     checkpoint_id = int(response.data)
@@ -263,7 +276,7 @@ class Robot:
         return [float(x) for x in input_string.split(',')]
 
     @staticmethod
-    def _monitor_handler(monitor_queue, robot_state, main_lock):
+    def _monitor_handler(monitor_queue, robot_state, events, main_lock):
         """Handle received messages on the monitor socket.
         Parameters
         ----------
@@ -288,11 +301,35 @@ class Robot:
 
                 if response.id == 2007:
                     status_flags = [bool(int(x)) for x in response.data.split(',')]
-                    robot_state.activation_state.value = status_flags[0]
-                    robot_state.homing_state.value = status_flags[1]
+
+                    if robot_state.activation_state.value != status_flags[0]:
+                        if status_flags[0]:
+                            events['OnRobotActivated'].set()
+                            events['OnRobotDeactivated'].clear()
+                        else:
+                            events['OnRobotDeactivated'].set()
+                            events['OnRobotActivated'].clear()
+                        robot_state.activation_state.value = status_flags[0]
+
+                    if robot_state.homing_state.value != status_flags[1]:
+                        if status_flags[1]:
+                            events['OnRobotHomed'].set()
+                        else:
+                            events['OnRobotHomed'].clear()
+                        robot_state.homing_state.value = status_flags[1]
+
                     robot_state.simulation_mode.value = status_flags[2]
                     robot_state.error_status.value = status_flags[3]
-                    robot_state.pause_motion_status = status_flags[4]
+
+                    if robot_state.pause_motion_status != status_flags[4]:
+                        if status_flags[4]:
+                            events['OnRobotMotionPaused'].set()
+                            events['OnRobotMotionResumed'].clear()
+                        else:
+                            events['OnRobotMotionResumed'].set()
+                            events['OnRobotMotionPaused'].clear()
+                        robot_state.pause_motion_status = status_flags[4]
+
                     robot_state.end_of_block_status = status_flags[5]
                     robot_state.end_of_movement_status = status_flags[6]
 
@@ -485,9 +522,8 @@ class Robot:
         self._command_response_handler_process = mp.Process(target=self._command_response_handler,
                                                             args=(self._command_rx_queue, self._robot_state,
                                                                   self._user_checkpoints, self._internal_checkpoints,
-                                                                  self._main_lock))
+                                                                  self._events, self._main_lock))
         self._command_response_handler_process.start()
-
         return True
 
     def _initialize_monitoring_connection(self):
@@ -501,7 +537,8 @@ class Robot:
         """
 
         self._monitor_handler_process = mp.Process(target=self._monitor_handler,
-                                                   args=(self._monitor_rx_queue, self._robot_state, self._main_lock))
+                                                   args=(self._monitor_rx_queue, self._robot_state, self._events,
+                                                         self._main_lock))
         self._monitor_handler_process.start()
 
         return True
@@ -525,6 +562,9 @@ class Robot:
             if not self._initialize_monitoring_connection():
                 return False
 
+            self._events['OnRobotConnected'].set()
+            self._events['OnRobotDisconnected'].clear()
+
             return True
 
     def ActivateRobot(self):
@@ -532,20 +572,56 @@ class Robot:
             self._check_monitor_processes()
             self._send_command('ActivateRobot')
 
+        if self._enable_synchronous_mode:
+            self.WaitActivated()
+
     def Home(self):
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('Home')
 
+        if self._enable_synchronous_mode:
+            self.WaitHomed()
+
     def ActivateAndHome(self):
+        self.ActivateRobot()
+        self.Home()
+
+    def PauseMotion(self):
         with self._main_lock:
-            self.ActivateRobot()
-            self.Home()
+            self._check_monitor_processes()
+            self._send_command('PauseMotion')
+
+        if self._enable_synchronous_mode:
+            self.WaitMotionPaused()
+
+    def ResumeMotion(self):
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('ResumeMotion')
+
+        if self._enable_synchronous_mode:
+            self.WaitMotionResumed()
 
     def DeactivateRobot(self):
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('DeactivateRobot')
+
+        if self._enable_synchronous_mode:
+            self.WaitDeactivated()
+
+    def ClearMotion(self):
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('ClearMotion')
+            # Clearing the motion queue also requires clearing checkpoints.
+            self._user_checkpoints.clear()
+            self._internal_checkpoints.clear()
+            self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
+
+        if self._enable_synchronous_mode:
+            self.WaitMotionCleared()
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from physical Mecademic Robot.
@@ -636,6 +712,9 @@ class Robot:
                     self.logger.error('Error closing monitor socket. ' + str(e))
                 self._monitor_socket = None
 
+            self._events['OnRobotDisconnected'].set()
+            self._events['OnRobotConnected'].clear()
+
     def GetJoints(self):
         with self._main_lock:
             self._check_monitor_processes()
@@ -650,6 +729,7 @@ class Robot:
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
+            self._events['OnMotionCleared'].clear()
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
 
@@ -701,6 +781,7 @@ class Robot:
 
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
+                self._events['OnMotionCleared'].clear()
 
             return Checkpoint(n, event)
 
@@ -713,3 +794,27 @@ class Robot:
             self._internal_checkpoints['*'].append(event)
 
         return event.wait(timeout=timeout)
+
+    def WaitConnected(self, timeout=None):
+        return self._events['OnRobotConnected'].wait(timeout=timeout)
+
+    def WaitDisconnected(self, timeout=None):
+        return self._events['OnRobotDisconnected'].wait(timeout=timeout)
+
+    def WaitActivated(self, timeout=None):
+        return self._events['OnRobotActivated'].wait(timeout=timeout)
+
+    def WaitDeactivated(self, timeout=None):
+        return self._events['OnRobotDeactivated'].wait(timeout=timeout)
+
+    def WaitHomed(self, timeout=None):
+        return self._events['OnRobotHomed'].wait(timeout=timeout)
+
+    def WaitMotionPaused(self, timeout=None):
+        return self._events['OnRobotMotionPaused'].wait(timeout=timeout)
+
+    def WaitMotionResumed(self, timeout=None):
+        return self._events['OnRobotMotionResumed'].wait(timeout=timeout)
+
+    def WaitMotionCleared(self, timeout=None):
+        return self._events['OnMotionCleared'].wait(timeout=timeout)
