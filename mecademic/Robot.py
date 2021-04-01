@@ -32,6 +32,12 @@ class Checkpoint:
         return self.event.wait(timeout=timeout)
 
 
+class Message:
+    def __init__(self, id, data):
+        self.id = id
+        self.data = data
+
+
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
 
@@ -168,7 +174,16 @@ class Robot:
             remainder = responses[-1]
 
             # Put all responses into the queue.
-            [rx_queue.put(x) for x in responses[:-1]]
+            for response in responses[:-1]:
+                id_start = response.find('[') + 1
+                id_end = response.find(']')
+                id = int(response[id_start:id_end])
+                data_start = response.find('[', id_end) + 1
+                data_end = response.find(']', id_end)
+                data = ''
+                if data_start != -1 and data_end != -1:
+                    data = response[data_start:data_end]
+                rx_queue.put(Message(id, data))
 
     @staticmethod
     def _handle_socket_tx(robot_socket, tx_queue):
@@ -211,10 +226,12 @@ class Robot:
 
             with main_lock:
                 # Handle checkpoints.
-                if response[1:5] == '3030':
-                    checkpoint_id = int(response[7:-1])
+                if response.id == 3030:
+                    checkpoint_id = int(response.data)
                     if checkpoint_id in pending_checkpoints and len(pending_checkpoints[checkpoint_id]) != 0:
                         pending_checkpoints[checkpoint_id].pop(0).set()
+                        if len(pending_checkpoints[checkpoint_id]) == 0:
+                            pending_checkpoints.pop(checkpoint_id)
                     else:
                         raise ValueError(
                             'Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
@@ -239,14 +256,14 @@ class Robot:
                 return
 
             with main_lock:
-                if response[1:5] == '2026':
-                    robot_state.joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2026:
+                    robot_state.joint_positions.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2027':
-                    robot_state.end_effector_pose.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2027:
+                    robot_state.end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2007':
-                    status_flags = [bool(x) for x in response[7:-1].split(',')]
+                if response.id == 2007:
+                    status_flags = [bool(x) for x in response.data.split(',')]
                     robot_state.activation_state.value = status_flags[0]
                     robot_state.homing_state.value = status_flags[1]
                     robot_state.simulation_mode.value = status_flags[2]
@@ -255,47 +272,47 @@ class Robot:
                     robot_state.end_of_block_status = status_flags[5]
                     robot_state.end_of_movement_status = status_flags[6]
 
-                if response[1:5] == '2200':
-                    robot_state.nc_joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2200:
+                    robot_state.nc_joint_positions.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2201':
-                    robot_state.nc_end_effector_pose.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2201:
+                    robot_state.nc_end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2202':
-                    robot_state.nc_joint_velocity.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2202:
+                    robot_state.nc_joint_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2204':
-                    robot_state.nc_end_effector_velocity.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2204:
+                    robot_state.nc_end_effector_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2208':
-                    robot_state.nc_joint_configurations.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2208:
+                    robot_state.nc_joint_configurations.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2209':
-                    robot_state.nc_multiturn.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2209:
+                    robot_state.nc_multiturn.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2210':
-                    robot_state.drive_joint_positions.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2210:
+                    robot_state.drive_joint_positions.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2211':
-                    robot_state.drive_end_effector_pose.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2211:
+                    robot_state.drive_end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2212':
-                    robot_state.drive_joint_velocity.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2212:
+                    robot_state.drive_joint_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2213':
-                    robot_state.drive_joint_torque_ratio.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2213:
+                    robot_state.drive_joint_torque_ratio.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2214':
-                    robot_state.drive_end_effector_velocity.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2214:
+                    robot_state.drive_end_effector_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2218':
-                    robot_state.drive_joint_configurations.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2218:
+                    robot_state.drive_joint_configurations.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2219':
-                    robot_state.drive_multiturn.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2219:
+                    robot_state.drive_multiturn.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
-                if response[1:5] == '2220':
-                    robot_state.accelerometer.get_obj()[:] = [float(x) for x in response[7:-1].split(',')]
+                if response.id == 2220:
+                    robot_state.accelerometer.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
     @staticmethod
     def _connect_socket(logger, address, port):
@@ -439,7 +456,7 @@ class Robot:
             return False
 
         # Check that response is appropriate.
-        if response[1:5] != '3000':
+        if response.id != 3000:
             self.logger.error('Connection error: %s', response)
             self.Disconnect()
             return False
