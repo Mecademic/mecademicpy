@@ -109,7 +109,8 @@ def test_sequential_connections():
 
 
 def test_monitoring_connection():
-    fake_array = [1, 2, 3, 4, 5, 6]
+    # Use this as the seed array, add the response code to each element to guarantee uniqueness.
+    fake_array = [1, 2, 3, 4, 5, 6, 7]
 
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
@@ -119,13 +120,55 @@ def test_monitoring_connection():
     assert robot.Connect(offline_mode=True)
 
     # Send monitor messages.
-    robot._monitor_rx_queue.put(mdr.Message(2026, ','.join(map(str, fake_array))))
+    robot._monitor_rx_queue.put(mdr.Message(2026, ','.join([str(x + 2026) for x in fake_array[:-1]])))
+    robot._monitor_rx_queue.put(mdr.Message(2027, ','.join([str(x + 2027) for x in fake_array[:-1]])))
+
+    robot._monitor_rx_queue.put(mdr.Message(2200, ','.join([str(x + 2200) for x in fake_array])))
+    robot._monitor_rx_queue.put(mdr.Message(2201, ','.join([str(x + 2201) for x in fake_array])))
+    robot._monitor_rx_queue.put(mdr.Message(2202, ','.join([str(x + 2202) for x in fake_array])))
+    robot._monitor_rx_queue.put(mdr.Message(2204, ','.join([str(x + 2204) for x in fake_array])))
+
+    robot._monitor_rx_queue.put(mdr.Message(2208, ','.join([str(x + 2208) for x in fake_array[:4]])))
+    robot._monitor_rx_queue.put(mdr.Message(2209, ','.join([str(x + 2209) for x in fake_array[:2]])))
+
+    robot._monitor_rx_queue.put(mdr.Message(2210, ','.join([str(x + 2210) for x in fake_array])))
+    robot._monitor_rx_queue.put(mdr.Message(2211, ','.join([str(x + 2211) for x in fake_array])))
+    robot._monitor_rx_queue.put(mdr.Message(2212, ','.join([str(x + 2212) for x in fake_array])))
+    robot._monitor_rx_queue.put(mdr.Message(2213, ','.join([str(x + 2213) for x in fake_array])))
+    robot._monitor_rx_queue.put(mdr.Message(2214, ','.join([str(x + 2214) for x in fake_array])))
+
+    robot._monitor_rx_queue.put(mdr.Message(2218, ','.join([str(x + 2218) for x in fake_array[:4]])))
+    robot._monitor_rx_queue.put(mdr.Message(2219, ','.join([str(x + 2219) for x in fake_array[:2]])))
+
+    robot._monitor_rx_queue.put(mdr.Message(2220, ','.join([str(x + 2220) for x in fake_array[:5]])))
+
     robot._monitor_rx_queue.put('Terminate process')
     # Wait until process ends to ensure the monitor messages are processed.
     robot._monitor_handler_process.join()
     robot._monitor_handler_process = None
 
-    assert robot.GetJoints() == fake_array
+    assert robot.GetJoints() == [x + 2026 for x in fake_array[:-1]]
+    assert robot.GetEndEffectorPose() == [x + 2027 for x in fake_array[:-1]]
+
+    # Temporarily test using direct members, switch to using proper getters once implemented.
+    assert robot._robot_state.nc_joint_positions.get_obj()[:] == [x + 2200 for x in fake_array]
+    assert robot._robot_state.nc_end_effector_pose.get_obj()[:] == [x + 2201 for x in fake_array]
+    assert robot._robot_state.nc_joint_velocity.get_obj()[:] == [x + 2202 for x in fake_array]
+    assert robot._robot_state.nc_end_effector_velocity.get_obj()[:] == [x + 2204 for x in fake_array]
+
+    assert robot._robot_state.nc_joint_configurations.get_obj()[:] == [x + 2208 for x in fake_array[:4]]
+    assert robot._robot_state.nc_multiturn.get_obj()[:] == [x + 2209 for x in fake_array[:2]]
+
+    assert robot._robot_state.drive_joint_positions.get_obj()[:] == [x + 2210 for x in fake_array]
+    assert robot._robot_state.drive_end_effector_pose.get_obj()[:] == [x + 2211 for x in fake_array]
+    assert robot._robot_state.drive_joint_velocity.get_obj()[:] == [x + 2212 for x in fake_array]
+    assert robot._robot_state.drive_joint_torque_ratio.get_obj()[:] == [x + 2213 for x in fake_array]
+    assert robot._robot_state.drive_end_effector_velocity.get_obj()[:] == [x + 2214 for x in fake_array]
+
+    assert robot._robot_state.drive_joint_configurations.get_obj()[:] == [x + 2218 for x in fake_array[:4]]
+    assert robot._robot_state.drive_multiturn.get_obj()[:] == [x + 2219 for x in fake_array[:2]]
+
+    assert robot._robot_state.accelerometer.get_obj()[:] == [x + 2220 for x in fake_array[:5]]
 
     robot.Disconnect()
 

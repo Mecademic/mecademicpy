@@ -249,8 +249,6 @@ class Robot:
             # Wait for a message in the queue.
             response = monitor_queue.get(block=True)
 
-            # logger.debug(response)
-
             # Terminate process if requested.
             if response == 'Terminate process':
                 return
@@ -274,40 +272,31 @@ class Robot:
 
                 if response.id == 2200:
                     robot_state.nc_joint_positions.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2201:
                     robot_state.nc_end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2202:
                     robot_state.nc_joint_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2204:
                     robot_state.nc_end_effector_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
                 if response.id == 2208:
                     robot_state.nc_joint_configurations.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2209:
                     robot_state.nc_multiturn.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
                 if response.id == 2210:
                     robot_state.drive_joint_positions.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2211:
                     robot_state.drive_end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2212:
                     robot_state.drive_joint_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2213:
                     robot_state.drive_joint_torque_ratio.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2214:
                     robot_state.drive_end_effector_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
                 if response.id == 2218:
                     robot_state.drive_joint_configurations.get_obj()[:] = [float(x) for x in response.data.split(',')]
-
                 if response.id == 2219:
                     robot_state.drive_multiturn.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
@@ -614,6 +603,11 @@ class Robot:
         with self._main_lock:
             self._check_monitor_processes()
             return self._robot_state.joint_positions.get_obj()[:]
+
+    def GetEndEffectorPose(self):
+        with self._main_lock:
+            self._check_monitor_processes()
+            return self._robot_state.end_effector_pose.get_obj()[:]
 
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
         with self._main_lock:
