@@ -235,13 +235,18 @@ class Robot:
                 # Handle checkpoints.
                 if response.id == 3030:
                     checkpoint_id = int(response.data)
-                    if checkpoint_id in pending_checkpoints and len(pending_checkpoints[checkpoint_id]) != 0:
+                    if checkpoint_id in pending_checkpoints and pending_checkpoints[checkpoint_id]:
                         pending_checkpoints[checkpoint_id].pop(0).set()
-                        if len(pending_checkpoints[checkpoint_id]) == 0:
+                        # If list corresponding to checkpoint id is empty, remove the key from the dict.
+                        if not pending_checkpoints[checkpoint_id]:
                             pending_checkpoints.pop(checkpoint_id)
                     else:
                         raise ValueError(
                             'Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
+
+    @staticmethod
+    def _string_to_floats(input_string):
+        return [float(x) for x in input_string.split(',')]
 
     @staticmethod
     def _monitor_handler(monitor_queue, robot_state, main_lock):
@@ -262,10 +267,10 @@ class Robot:
 
             with main_lock:
                 if response.id == 2026:
-                    robot_state.joint_positions.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
 
                 if response.id == 2027:
-                    robot_state.end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
 
                 if response.id == 2007:
                     status_flags = [bool(int(x)) for x in response.data.split(',')]
@@ -278,37 +283,37 @@ class Robot:
                     robot_state.end_of_movement_status = status_flags[6]
 
                 if response.id == 2200:
-                    robot_state.nc_joint_positions.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.nc_joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2201:
-                    robot_state.nc_end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.nc_end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2202:
-                    robot_state.nc_joint_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.nc_joint_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2204:
-                    robot_state.nc_end_effector_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.nc_end_effector_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
 
                 if response.id == 2208:
-                    robot_state.nc_joint_configurations.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.nc_joint_configurations.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2209:
-                    robot_state.nc_multiturn.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.nc_multiturn.get_obj()[:] = Robot._string_to_floats(response.data)
 
                 if response.id == 2210:
-                    robot_state.drive_joint_positions.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.drive_joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2211:
-                    robot_state.drive_end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.drive_end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2212:
-                    robot_state.drive_joint_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.drive_joint_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2213:
-                    robot_state.drive_joint_torque_ratio.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.drive_joint_torque_ratio.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2214:
-                    robot_state.drive_end_effector_velocity.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.drive_end_effector_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
 
                 if response.id == 2218:
-                    robot_state.drive_joint_configurations.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.drive_joint_configurations.get_obj()[:] = Robot._string_to_floats(response.data)
                 if response.id == 2219:
-                    robot_state.drive_multiturn.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.drive_multiturn.get_obj()[:] = Robot._string_to_floats(response.data)
 
                 if response.id == 2220:
-                    robot_state.accelerometer.get_obj()[:] = [float(x) for x in response.data.split(',')]
+                    robot_state.accelerometer.get_obj()[:] = Robot._string_to_floats(response.data)
 
     @staticmethod
     def _connect_socket(logger, address, port):
@@ -345,9 +350,15 @@ class Robot:
 
     def _check_monitor_processes(self):
         if self._command_response_handler_process:
-            assert self._command_response_handler_process.is_alive()
+            if not self._command_response_handler_process.is_alive():
+                self.logger.error('Command response handler process has unexpectedly terminated. Disconnecting...')
+                self.Disconnect()
+                raise InvalidStateError
         if self._monitor_handler_process:
-            assert self._monitor_handler_process.is_alive()
+            if not self._monitor_handler_process.is_alive():
+                self.logger.error('Monitor handler process has unexpectedly terminated. Disconnecting...')
+                self.Disconnect()
+                raise InvalidStateError
 
     def _send_command(self, command, arg_list=None):
         """Assembles and sends the command string to the Mecademic Robot.
@@ -525,7 +536,8 @@ class Robot:
         """Disconnects Mecademic Robot object from physical Mecademic Robot.
 
         """
-        self.DeactivateRobot()
+        # Don't use the normal DeactivateRobot call to avoid checking monitor processes.
+        self._send_command('DeactivateRobot')
 
         # Join processes which wait on a queue by sending terminate to the queue.
         if self._command_tx_process is not None:
