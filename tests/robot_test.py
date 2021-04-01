@@ -76,8 +76,8 @@ def test_successful_connection_full_socket():
     assert robot.Connect()
 
     robot.Disconnect()
-    assert robot._Robot__command_socket is None
-    assert robot._Robot__monitor_socket is None
+    assert robot._command_socket is None
+    assert robot._monitor_socket is None
 
     command_server_thread.join()
     monitor_server_thread.join()
@@ -87,7 +87,7 @@ def test_successful_connection_split_response():
     fake_socket = FakeSocket([b'[3', b'00', b'0]\0', b''])
     rx_queue = queue.Queue()
 
-    mdr.Robot._handle_rx(fake_socket, rx_queue)
+    mdr.Robot._handle_socket_rx(fake_socket, rx_queue)
 
     assert rx_queue.qsize() == 1
     assert rx_queue.get() == '[3000]'
@@ -97,13 +97,13 @@ def test_sequential_connections():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    robot._Robot__command_rx_queue.put('[3001]')
+    robot._command_rx_queue.put('[3001]')
     assert not robot.Connect(offline_mode=True)
 
-    robot._Robot__command_rx_queue.put('[9999]')
+    robot._command_rx_queue.put('[9999]')
     assert not robot.Connect(offline_mode=True)
 
-    robot._Robot__command_rx_queue.put('[3000]')
+    robot._command_rx_queue.put('[3000]')
     assert robot.Connect(offline_mode=True)
     robot.Disconnect()
 
@@ -114,16 +114,16 @@ def test_monitoring_connection():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    robot._Robot__command_rx_queue.put('[3000]')
+    robot._command_rx_queue.put('[3000]')
 
     assert robot.Connect(offline_mode=True)
 
     # Send monitor messages.
-    robot._Robot__monitor_rx_queue.put('[2026]' + str(fake_array))
-    robot._Robot__monitor_rx_queue.put('Terminate process')
+    robot._monitor_rx_queue.put('[2026]' + str(fake_array))
+    robot._monitor_rx_queue.put('Terminate process')
     # Wait until process ends to ensure the monitor messages are processed.
-    robot._Robot__monitor_handler_process.join()
-    robot._Robot__monitor_handler_process = None
+    robot._monitor_handler_process.join()
+    robot._monitor_handler_process = None
 
     assert robot.GetJoints() == fake_array
 
@@ -134,18 +134,18 @@ def test_internal_checkpoints():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    robot._Robot__command_rx_queue.put('[3000]')
+    robot._command_rx_queue.put('[3000]')
     assert robot.Connect(offline_mode=True)
 
     # Validate internal checkpoint waiting.
     checkpoint_1 = robot.SetCheckpoint(1)
     # Check that the command is sent to the robot.
-    assert robot._Robot__command_tx_queue.get() == 'SetCheckpoint(1)'
+    assert robot._command_tx_queue.get() == 'SetCheckpoint(1)'
     # Check that the id is correct.
     assert checkpoint_1.id == 1
     # Check that wait times out if response has not been sent.
     assert not checkpoint_1.wait(timeout=0)
-    robot._Robot__command_rx_queue.put('[3030][1]')
+    robot._command_rx_queue.put('[3030][1]')
     # Check that wait succeeds if response is sent.
     assert checkpoint_1.wait()
 
@@ -156,18 +156,18 @@ def test_external_checkpoints():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    robot._Robot__command_rx_queue.put('[3000]')
+    robot._command_rx_queue.put('[3000]')
     assert robot.Connect(offline_mode=True)
 
     # Validate external checkpoint waiting.
     checkpoint_1 = robot.ExpectExternalCheckpoint(1)
     # Check that the command is not sent to the robot.
-    assert robot._Robot__command_tx_queue.qsize() == 0
+    assert robot._command_tx_queue.qsize() == 0
     # Check that the id is correct.
     assert checkpoint_1.id == 1
     # Check that wait times out if response has not been sent.
     assert not checkpoint_1.wait(timeout=0)
-    robot._Robot__command_rx_queue.put('[3030][1]')
+    robot._command_rx_queue.put('[3030][1]')
     # Check that wait succeeds if response is sent.
     assert checkpoint_1.wait()
 
@@ -178,7 +178,7 @@ def test_multiple_checkpoints():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    robot._Robot__command_rx_queue.put('[3000]')
+    robot._command_rx_queue.put('[3000]')
     assert robot.Connect(offline_mode=True)
 
     # Validate multiple checkpoints, internal and external.
@@ -189,12 +189,12 @@ def test_multiple_checkpoints():
     assert not checkpoint_1.wait(timeout=0)
     assert not checkpoint_2.wait(timeout=0)
     assert not checkpoint_3.wait(timeout=0)
-    robot._Robot__command_rx_queue.put('[3030][1]')
+    robot._command_rx_queue.put('[3030][1]')
     assert not checkpoint_2.wait(timeout=0)
     assert not checkpoint_3.wait(timeout=0)
-    robot._Robot__command_rx_queue.put('[3030][2]')
+    robot._command_rx_queue.put('[3030][2]')
     assert not checkpoint_3.wait(timeout=0)
-    robot._Robot__command_rx_queue.put('[3030][3]')
+    robot._command_rx_queue.put('[3030][3]')
     # Check that waits succeeds if response is sent.
     assert checkpoint_3.wait()
     assert checkpoint_2.wait()
@@ -207,7 +207,7 @@ def test_repeated_checkpoints():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    robot._Robot__command_rx_queue.put('[3000]')
+    robot._command_rx_queue.put('[3000]')
     assert robot.Connect(offline_mode=True)
 
     # Repeated checkpoints are discouraged, but supported.
@@ -216,10 +216,10 @@ def test_repeated_checkpoints():
     # Check that wait times out if response has not been sent.
     assert not checkpoint_1_a.wait(timeout=0)
     assert not checkpoint_1_b.wait(timeout=0)
-    robot._Robot__command_rx_queue.put('[3030][1]')
+    robot._command_rx_queue.put('[3030][1]')
     # Only one checkpoint has been returned, the second should still block.
     assert not checkpoint_1_b.wait(timeout=0)
-    robot._Robot__command_rx_queue.put('[3030][1]')
+    robot._command_rx_queue.put('[3030][1]')
     # Check that waits succeeds if response is sent.
     assert checkpoint_1_b.wait()
     assert checkpoint_1_a.wait()
@@ -231,15 +231,15 @@ def test_unaccounted_checkpoints():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    robot._Robot__command_rx_queue.put('[3000]')
+    robot._command_rx_queue.put('[3000]')
     assert robot.Connect(offline_mode=True)
 
     # Expect error for unaccounted checkpoints.
-    robot._Robot__command_rx_queue.put('[3030][1]')
-    robot._Robot__command_response_handler_process.join()
+    robot._command_rx_queue.put('[3030][1]')
+    robot._command_response_handler_process.join()
     with pytest.raises(AssertionError):
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
 
     # Necessary so disconnect doesn't fail.
-    robot._Robot__command_response_handler_process = None
+    robot._command_response_handler_process = None
     robot.Disconnect()
