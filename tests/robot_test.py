@@ -84,13 +84,15 @@ def test_successful_connection_full_socket():
 
 
 def test_successful_connection_split_response():
-    fake_socket = FakeSocket([b'[3', b'00', b'0][]\0', b''])
+    fake_socket = FakeSocket([b'[3', b'00', b'0][test]\0', b''])
     rx_queue = queue.Queue()
 
     mdr.Robot._handle_socket_rx(fake_socket, rx_queue)
 
     assert rx_queue.qsize() == 1
-    assert rx_queue.get().id == 3000
+    message = rx_queue.get()
+    assert message.id == 3000
+    assert message.data == 'test'
 
 
 def test_sequential_connections():

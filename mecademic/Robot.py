@@ -14,6 +14,8 @@ CHECKPOINT_ID_MIN = 1  # Min allowable checkpoint id for users, inclusive
 CHECKPOINT_ID_MAX = 8000  # Max allowable checkpoint id for users, inclusive
 CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
+TERMINATE_PROCESS = 'terminate_process'
+
 
 class InvalidStateError(Exception):
     pass
@@ -136,6 +138,8 @@ class Robot:
         self._pending_checkpoints = self._manager.dict()
         self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
 
+        self._state_events = self._manager.dict()
+
         self._enable_synchronous_mode = enable_synchronous_mode
         self.logger = logging.getLogger(__name__)
 
@@ -178,8 +182,11 @@ class Robot:
                 id_start = response.find('[') + 1
                 id_end = response.find(']')
                 id = int(response[id_start:id_end])
+
+                # Find next square brackets (contains data).
                 data_start = response.find('[', id_end) + 1
-                data_end = response.find(']', id_end)
+                data_end = response.find(']', id_end + 1)
+
                 data = ''
                 if data_start != -1 and data_end != -1:
                     data = response[data_start:data_end]
@@ -202,7 +209,7 @@ class Robot:
             command = tx_queue.get(block=True)
 
             # Terminate process if requested, otherwise send the command.
-            if command == 'Terminate process':
+            if command == TERMINATE_PROCESS:
                 return
             else:
                 robot_socket.sendall((command + '\0').encode('ascii'))
@@ -221,7 +228,7 @@ class Robot:
             response = rx_queue.get(block=True)
 
             # Terminate process if requested.
-            if response == 'Terminate process':
+            if response == TERMINATE_PROCESS:
                 return
 
             with main_lock:
@@ -250,7 +257,7 @@ class Robot:
             response = monitor_queue.get(block=True)
 
             # Terminate process if requested.
-            if response == 'Terminate process':
+            if response == TERMINATE_PROCESS:
                 return
 
             with main_lock:
@@ -261,7 +268,7 @@ class Robot:
                     robot_state.end_effector_pose.get_obj()[:] = [float(x) for x in response.data.split(',')]
 
                 if response.id == 2007:
-                    status_flags = [bool(x) for x in response.data.split(',')]
+                    status_flags = [bool(int(x)) for x in response.data.split(',')]
                     robot_state.activation_state.value = status_flags[0]
                     robot_state.homing_state.value = status_flags[1]
                     robot_state.simulation_mode.value = status_flags[2]
@@ -439,8 +446,8 @@ class Robot:
 
         try:
             response = self._command_rx_queue.get(block=True, timeout=10)  # 10s timeout.
-        except:
-            self.logger.error('No response received within timeout interval.')
+        except Exception as e:
+            self.logger.error('No response received within timeout interval. ' + str(e))
             self.Disconnect()
             return False
 
@@ -523,28 +530,28 @@ class Robot:
         # Join processes which wait on a queue by sending terminate to the queue.
         if self._command_tx_process is not None:
             try:
-                self._command_tx_queue.put('Terminate process')
-            except:
+                self._command_tx_queue.put(TERMINATE_PROCESS)
+            except Exception as e:
                 self._command_tx_process.terminate()
-                self.logger.error('Error shutting down tx process.')
+                self.logger.error('Error shutting down tx process. ' + str(e))
             self._command_tx_process.join()
             self._command_tx_process = None
 
         if self._command_response_handler_process is not None:
             try:
-                self._command_rx_queue.put('Terminate process')
-            except:
+                self._command_rx_queue.put(TERMINATE_PROCESS)
+            except Exception as e:
                 self._command_response_handler_process.terminate()
-                self.logger.error('Error shutting down command response handler process.')
+                self.logger.error('Error shutting down command response handler process. ' + str(e))
             self._command_response_handler_process.join()
             self._command_response_handler_process = None
 
         if self._monitor_handler_process is not None:
             try:
-                self._monitor_rx_queue.put('Terminate process')
-            except:
+                self._monitor_rx_queue.put(TERMINATE_PROCESS)
+            except Exception as e:
                 self._monitor_handler_process.terminate()
-                self.logger.error('Error shutting down monitor handler process.')
+                self.logger.error('Error shutting down monitor handler process. ' + str(e))
             self._monitor_handler_process.join()
             self._monitor_handler_process = None
 
@@ -553,16 +560,16 @@ class Robot:
             if self._command_socket is not None:
                 try:
                     self._command_socket.shutdown(socket.SHUT_RDWR)
-                except:
-                    self.logger.error('Error shutting down command socket.')
+                except Exception as e:
+                    self.logger.error('Error shutting down command socket. ' + str(e))
                     if self._command_rx_process is not None:
                         self._command_rx_process.terminate()
 
             if self._monitor_socket is not None:
                 try:
                     self._monitor_socket.shutdown(socket.SHUT_RDWR)
-                except:
-                    self.logger.error('Error shutting down monitor socket.')
+                except Exception as e:
+                    self.logger.error('Error shutting down monitor socket. ' + str(e))
                     if self._monitor_rx_process is not None:
                         self._monitor_rx_process.terminate()
 
@@ -589,14 +596,14 @@ class Robot:
             if self._command_socket is not None:
                 try:
                     self._command_socket.close()
-                except:
-                    self.logger.error('Error closing command socket.')
+                except Exception as e:
+                    self.logger.error('Error closing command socket. ' + str(e))
                 self._command_socket = None
             if self._monitor_socket is not None:
                 try:
                     self._monitor_socket.close()
-                except:
-                    self.logger.error('Error closing monitor socket.')
+                except Exception as e:
+                    self.logger.error('Error closing monitor socket. ' + str(e))
                 self._monitor_socket = None
 
     def GetJoints(self):
