@@ -314,3 +314,70 @@ def test_unaccounted_checkpoints():
     assert robot._command_rx_process is None
     assert robot._command_tx_process is None
     assert robot._monitor_rx_process is None
+
+
+def test_connection_activation_events():
+    robot = mdr.Robot(TEST_IP)
+    assert robot is not None
+
+    assert not robot.WaitActivated(timeout=0)
+    assert robot.WaitDeactivated()
+    assert not robot.WaitConnected(timeout=0)
+    assert robot.WaitDisconnected()
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect(offline_mode=True)
+
+    assert robot.WaitConnected()
+    assert not robot.WaitDisconnected(timeout=0)
+
+    assert not robot.WaitActivated(timeout=0)
+    assert robot.WaitDeactivated()
+
+    robot.ActivateRobot()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,0,0,0,0,0,0'))
+
+    assert robot.WaitActivated(timeout=1)
+    assert not robot.WaitDeactivated(timeout=0)
+
+    robot.DeactivateRobot()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '0,0,0,0,0,0,0'))
+
+    # Note: the order of these waits is intentional.
+    # The WaitActivated check may fail if message hasn't yet been processed.
+    assert robot.WaitDeactivated(timeout=1)
+    assert not robot.WaitActivated(timeout=0)
+
+    assert not robot.WaitDisconnected(timeout=0)
+    robot.Disconnect()
+    assert robot.WaitDisconnected()
+
+
+def test_motion_events():
+    robot = mdr.Robot(TEST_IP)
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect(offline_mode=True)
+
+    assert not robot.WaitHomed(timeout=0)
+    robot.Home()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+    assert robot.WaitHomed(timeout=1)
+
+    assert not robot.WaitMotionPaused(timeout=0)
+    robot.PauseMotion()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,1,0,0'))
+    assert robot.WaitMotionPaused(timeout=1)
+
+    assert not robot.WaitMotionResumed(timeout=0)
+    robot.ResumeMotion()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+    assert robot.WaitMotionResumed(timeout=1)
+
+    assert not robot.WaitMotionCleared(timeout=0)
+    robot.ClearMotion()
+    robot._command_rx_queue.put(mdr.Message(2044, ''))
+    assert robot.WaitMotionCleared(timeout=1)
+
+    robot.Disconnect()

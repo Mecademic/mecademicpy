@@ -83,6 +83,29 @@ class RobotState:
         self.end_of_movement_status = mp.Value('b', False, lock=False)
 
 
+class RobotEvents:
+    """Class for storing possible status events for the generic Mecademic robot.
+
+    Attributes
+    ----------
+
+
+    """
+    def __init__(self):
+        self.OnRobotConnected = mp.Event()
+        self.OnRobotDisconnected = mp.Event()
+        self.OnRobotActivated = mp.Event()
+        self.OnRobotDeactivated = mp.Event()
+        self.OnRobotHomed = mp.Event()
+        self.OnRobotMotionPaused = mp.Event()
+        self.OnRobotMotionResumed = mp.Event()
+        self.OnMotionCleared = mp.Event()
+
+        self.OnRobotDisconnected.set()
+        self.OnRobotDeactivated.set()
+        self.OnRobotMotionResumed.set()
+
+
 class Robot:
     """Class for controlling a generic Mecademic robot.
 
@@ -133,23 +156,12 @@ class Robot:
         self._main_lock = mp.RLock()
 
         self._robot_state = RobotState()
+        self._events = RobotEvents()
 
         self._manager = mp.Manager()
         self._user_checkpoints = self._manager.dict()
         self._internal_checkpoints = self._manager.dict()
         self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
-
-        self._events = self._manager.dict()
-        self._events['OnRobotConnected'] = self._manager.Event()
-        self._events['OnRobotDisconnected'] = self._manager.Event()
-        self._events['OnRobotActivated'] = self._manager.Event()
-        self._events['OnRobotDeactivated'] = self._manager.Event()
-        self._events['OnRobotHomed'] = self._manager.Event()
-        self._events['OnRobotMotionPaused'] = self._manager.Event()
-        self._events['OnRobotMotionResumed'] = self._manager.Event()
-        self._events['OnMotionCleared'] = self._manager.Event()
-
-        self._state_events = self._manager.dict()
 
         self._enable_synchronous_mode = enable_synchronous_mode
         self.logger = logging.getLogger(__name__)
@@ -226,6 +238,30 @@ class Robot:
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
+    def _handle_checkpoint_response(response, user_checkpoints, internal_checkpoints):
+        checkpoint_id = int(response.data)
+
+        # Check user checkpoints.
+        if checkpoint_id in user_checkpoints and user_checkpoints[checkpoint_id]:
+            user_checkpoints[checkpoint_id].pop(0).set()
+            # If list corresponding to checkpoint id is empty, remove the key from the dict.
+            if not user_checkpoints[checkpoint_id]:
+                user_checkpoints.pop(checkpoint_id)
+            # If there are events are waiting on 'any checkpoint', set them all.
+            if '*' in internal_checkpoints and internal_checkpoints['*']:
+                for event in internal_checkpoints.pop('*'):
+                    event.set()
+
+        # Check internal checkpoints.
+        elif checkpoint_id in internal_checkpoints and internal_checkpoints[checkpoint_id]:
+            internal_checkpoints[checkpoint_id].pop(0).set()
+            # If list corresponding to checkpoint id is empty, remove the key from the dict.
+            if not internal_checkpoints[checkpoint_id]:
+                internal_checkpoints.pop(checkpoint_id)
+        else:
+            raise ValueError('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
+
+    @staticmethod
     def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, events, main_lock):
         """Handle received messages on the command socket.
         Parameters
@@ -244,36 +280,53 @@ class Robot:
 
             with main_lock:
                 if response.id == 2044:
-                    events['OnMotionCleared'].set()
+                    events.OnMotionCleared.set()
+
+                elif response.id == 2007:
+                    Robot._handle_robot_status_response(response, robot_state, events)
 
                 # Handle checkpoints.
-                if response.id == 3030:
-                    checkpoint_id = int(response.data)
-
-                    # Check user checkpoints.
-                    if checkpoint_id in user_checkpoints and user_checkpoints[checkpoint_id]:
-                        user_checkpoints[checkpoint_id].pop(0).set()
-                        # If list corresponding to checkpoint id is empty, remove the key from the dict.
-                        if not user_checkpoints[checkpoint_id]:
-                            user_checkpoints.pop(checkpoint_id)
-                        # If there are events are waiting on 'any checkpoint', set them all.
-                        if '*' in internal_checkpoints and internal_checkpoints['*']:
-                            for event in internal_checkpoints.pop('*'):
-                                event.set()
-
-                    # Check internal checkpoints.
-                    elif checkpoint_id in internal_checkpoints and internal_checkpoints[checkpoint_id]:
-                        internal_checkpoints[checkpoint_id].pop(0).set()
-                        # If list corresponding to checkpoint id is empty, remove the key from the dict.
-                        if not internal_checkpoints[checkpoint_id]:
-                            internal_checkpoints.pop(checkpoint_id)
-                    else:
-                        raise ValueError(
-                            'Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
+                elif response.id == 3030:
+                    Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints)
 
     @staticmethod
     def _string_to_floats(input_string):
         return [float(x) for x in input_string.split(',')]
+
+    @staticmethod
+    def _handle_robot_status_response(response, robot_state, events):
+        status_flags = [bool(int(x)) for x in response.data.split(',')]
+
+        if robot_state.activation_state.value != status_flags[0]:
+            if status_flags[0]:
+                events.OnRobotActivated.set()
+                events.OnRobotDeactivated.clear()
+            else:
+                events.OnRobotDeactivated.set()
+                events.OnRobotActivated.clear()
+            robot_state.activation_state.value = status_flags[0]
+
+        if robot_state.homing_state.value != status_flags[1]:
+            if status_flags[1]:
+                events.OnRobotHomed.set()
+            else:
+                events.OnRobotHomed.clear()
+            robot_state.homing_state.value = status_flags[1]
+
+        robot_state.simulation_mode.value = status_flags[2]
+        robot_state.error_status.value = status_flags[3]
+
+        if robot_state.pause_motion_status != status_flags[4]:
+            if status_flags[4]:
+                events.OnRobotMotionPaused.set()
+                events.OnRobotMotionResumed.clear()
+            else:
+                events.OnRobotMotionResumed.set()
+                events.OnRobotMotionPaused.clear()
+            robot_state.pause_motion_status = status_flags[4]
+
+        robot_state.end_of_block_status = status_flags[5]
+        robot_state.end_of_movement_status = status_flags[6]
 
     @staticmethod
     def _monitor_handler(monitor_queue, robot_state, events, main_lock):
@@ -296,74 +349,43 @@ class Robot:
                 if response.id == 2026:
                     robot_state.joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
 
-                if response.id == 2027:
+                elif response.id == 2027:
                     robot_state.end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
 
-                if response.id == 2007:
-                    status_flags = [bool(int(x)) for x in response.data.split(',')]
+                elif response.id == 2007:
+                    Robot._handle_robot_status_response(response, robot_state, events)
 
-                    if robot_state.activation_state.value != status_flags[0]:
-                        if status_flags[0]:
-                            events['OnRobotActivated'].set()
-                            events['OnRobotDeactivated'].clear()
-                        else:
-                            events['OnRobotDeactivated'].set()
-                            events['OnRobotActivated'].clear()
-                        robot_state.activation_state.value = status_flags[0]
-
-                    if robot_state.homing_state.value != status_flags[1]:
-                        if status_flags[1]:
-                            events['OnRobotHomed'].set()
-                        else:
-                            events['OnRobotHomed'].clear()
-                        robot_state.homing_state.value = status_flags[1]
-
-                    robot_state.simulation_mode.value = status_flags[2]
-                    robot_state.error_status.value = status_flags[3]
-
-                    if robot_state.pause_motion_status != status_flags[4]:
-                        if status_flags[4]:
-                            events['OnRobotMotionPaused'].set()
-                            events['OnRobotMotionResumed'].clear()
-                        else:
-                            events['OnRobotMotionResumed'].set()
-                            events['OnRobotMotionPaused'].clear()
-                        robot_state.pause_motion_status = status_flags[4]
-
-                    robot_state.end_of_block_status = status_flags[5]
-                    robot_state.end_of_movement_status = status_flags[6]
-
-                if response.id == 2200:
+                elif response.id == 2200:
                     robot_state.nc_joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2201:
+                elif response.id == 2201:
                     robot_state.nc_end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2202:
+                elif response.id == 2202:
                     robot_state.nc_joint_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2204:
+                elif response.id == 2204:
                     robot_state.nc_end_effector_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
 
-                if response.id == 2208:
+                elif response.id == 2208:
                     robot_state.nc_joint_configurations.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2209:
+                elif response.id == 2209:
                     robot_state.nc_multiturn.get_obj()[:] = Robot._string_to_floats(response.data)
 
-                if response.id == 2210:
+                elif response.id == 2210:
                     robot_state.drive_joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2211:
+                elif response.id == 2211:
                     robot_state.drive_end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2212:
+                elif response.id == 2212:
                     robot_state.drive_joint_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2213:
+                elif response.id == 2213:
                     robot_state.drive_joint_torque_ratio.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2214:
+                elif response.id == 2214:
                     robot_state.drive_end_effector_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
 
-                if response.id == 2218:
+                elif response.id == 2218:
                     robot_state.drive_joint_configurations.get_obj()[:] = Robot._string_to_floats(response.data)
-                if response.id == 2219:
+                elif response.id == 2219:
                     robot_state.drive_multiturn.get_obj()[:] = Robot._string_to_floats(response.data)
 
-                if response.id == 2220:
+                elif response.id == 2220:
                     robot_state.accelerometer.get_obj()[:] = Robot._string_to_floats(response.data)
 
     @staticmethod
@@ -562,8 +584,8 @@ class Robot:
             if not self._initialize_monitoring_connection():
                 return False
 
-            self._events['OnRobotConnected'].set()
-            self._events['OnRobotDisconnected'].clear()
+            self._events.OnRobotConnected.set()
+            self._events.OnRobotDisconnected.clear()
 
             return True
 
@@ -694,6 +716,7 @@ class Robot:
 
             # Reset robot state.
             self._robot_state = RobotState()
+            self._events = RobotEvents()
             self._user_checkpoints = self._manager.dict()
             self._internal_checkpoints = self._manager.dict()
             self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
@@ -712,8 +735,8 @@ class Robot:
                     self.logger.error('Error closing monitor socket. ' + str(e))
                 self._monitor_socket = None
 
-            self._events['OnRobotDisconnected'].set()
-            self._events['OnRobotConnected'].clear()
+            self._events.OnRobotDisconnected.set()
+            self._events.OnRobotConnected.clear()
 
     def GetJoints(self):
         with self._main_lock:
@@ -729,7 +752,7 @@ class Robot:
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
-            self._events['OnMotionCleared'].clear()
+            self._events.OnMotionCleared.clear()
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
 
@@ -781,7 +804,7 @@ class Robot:
 
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
-                self._events['OnMotionCleared'].clear()
+                self._events.OnMotionCleared.clear()
 
             return Checkpoint(n, event)
 
@@ -796,25 +819,25 @@ class Robot:
         return event.wait(timeout=timeout)
 
     def WaitConnected(self, timeout=None):
-        return self._events['OnRobotConnected'].wait(timeout=timeout)
+        return self._events.OnRobotConnected.wait(timeout=timeout)
 
     def WaitDisconnected(self, timeout=None):
-        return self._events['OnRobotDisconnected'].wait(timeout=timeout)
+        return self._events.OnRobotDisconnected.wait(timeout=timeout)
 
     def WaitActivated(self, timeout=None):
-        return self._events['OnRobotActivated'].wait(timeout=timeout)
+        return self._events.OnRobotActivated.wait(timeout=timeout)
 
     def WaitDeactivated(self, timeout=None):
-        return self._events['OnRobotDeactivated'].wait(timeout=timeout)
+        return self._events.OnRobotDeactivated.wait(timeout=timeout)
 
     def WaitHomed(self, timeout=None):
-        return self._events['OnRobotHomed'].wait(timeout=timeout)
+        return self._events.OnRobotHomed.wait(timeout=timeout)
 
     def WaitMotionPaused(self, timeout=None):
-        return self._events['OnRobotMotionPaused'].wait(timeout=timeout)
+        return self._events.OnRobotMotionPaused.wait(timeout=timeout)
 
     def WaitMotionResumed(self, timeout=None):
-        return self._events['OnRobotMotionResumed'].wait(timeout=timeout)
+        return self._events.OnRobotMotionResumed.wait(timeout=timeout)
 
     def WaitMotionCleared(self, timeout=None):
-        return self._events['OnMotionCleared'].wait(timeout=timeout)
+        return self._events.OnMotionCleared.wait(timeout=timeout)
