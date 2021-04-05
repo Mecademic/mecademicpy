@@ -49,29 +49,29 @@ class RobotState:
 
     """
     def __init__(self):
-        self.joint_positions = mp.Array('f', 6)  # degrees
-        self.end_effector_pose = mp.Array('f', 6)  # mm and degrees
+        self.joint_positions = mp.Array('f', 6, lock=False)  # degrees
+        self.end_effector_pose = mp.Array('f', 6, lock=False)  # mm and degrees
 
-        self.nc_joint_positions = mp.Array('f', 7)  # degrees
-        self.nc_end_effector_pose = mp.Array('f', 7)  # mm and degrees
+        self.nc_joint_positions = mp.Array('f', 7, lock=False)  # degrees
+        self.nc_end_effector_pose = mp.Array('f', 7, lock=False)  # mm and degrees
 
-        self.nc_joint_velocity = mp.Array('f', 7)  # degrees/second
-        self.nc_end_effector_velocity = mp.Array('f', 7)  # mm/s and degrees/s
+        self.nc_joint_velocity = mp.Array('f', 7, lock=False)  # degrees/second
+        self.nc_end_effector_velocity = mp.Array('f', 7, lock=False)  # mm/s and degrees/s
 
-        self.nc_joint_configurations = mp.Array('f', 4)
-        self.nc_multiturn = mp.Array('f', 2)
+        self.nc_joint_configurations = mp.Array('f', 4, lock=False)
+        self.nc_multiturn = mp.Array('f', 2, lock=False)
 
-        self.drive_joint_positions = mp.Array('f', 7)  # degrees
-        self.drive_end_effector_pose = mp.Array('f', 7)  # mm and degrees
+        self.drive_joint_positions = mp.Array('f', 7, lock=False)  # degrees
+        self.drive_end_effector_pose = mp.Array('f', 7, lock=False)  # mm and degrees
 
-        self.drive_joint_velocity = mp.Array('f', 7)  # degrees/second
-        self.drive_joint_torque_ratio = mp.Array('f', 7)  # percent of maximum
-        self.drive_end_effector_velocity = mp.Array('f', 7)  # mm/s and degrees/s
+        self.drive_joint_velocity = mp.Array('f', 7, lock=False)  # degrees/second
+        self.drive_joint_torque_ratio = mp.Array('f', 7, lock=False)  # percent of maximum
+        self.drive_end_effector_velocity = mp.Array('f', 7, lock=False)  # mm/s and degrees/s
 
-        self.drive_joint_configurations = mp.Array('f', 4)
-        self.drive_multiturn = mp.Array('f', 2)
+        self.drive_joint_configurations = mp.Array('f', 4, lock=False)
+        self.drive_multiturn = mp.Array('f', 2, lock=False)
 
-        self.accelerometer = mp.Array('f', 5)
+        self.accelerometer = mp.Array('f', 5, lock=False)
 
         # The following status fields are updated together, and is protected by a single lock.
         self.activation_state = mp.Value('b', False, lock=False)
@@ -347,46 +347,46 @@ class Robot:
 
             with main_lock:
                 if response.id == 2026:
-                    robot_state.joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
 
                 elif response.id == 2027:
-                    robot_state.end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.end_effector_pose[:] = Robot._string_to_floats(response.data)
 
                 elif response.id == 2007:
                     Robot._handle_robot_status_response(response, robot_state, events)
 
                 elif response.id == 2200:
-                    robot_state.nc_joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_positions[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2201:
-                    robot_state.nc_end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_end_effector_pose[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2202:
-                    robot_state.nc_joint_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_velocity[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2204:
-                    robot_state.nc_end_effector_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_end_effector_velocity[:] = Robot._string_to_floats(response.data)
 
                 elif response.id == 2208:
-                    robot_state.nc_joint_configurations.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_configurations[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2209:
-                    robot_state.nc_multiturn.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_multiturn[:] = Robot._string_to_floats(response.data)
 
                 elif response.id == 2210:
-                    robot_state.drive_joint_positions.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_positions[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2211:
-                    robot_state.drive_end_effector_pose.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_end_effector_pose[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2212:
-                    robot_state.drive_joint_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_velocity[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2213:
-                    robot_state.drive_joint_torque_ratio.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_torque_ratio[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2214:
-                    robot_state.drive_end_effector_velocity.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_end_effector_velocity[:] = Robot._string_to_floats(response.data)
 
                 elif response.id == 2218:
-                    robot_state.drive_joint_configurations.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_configurations[:] = Robot._string_to_floats(response.data)
                 elif response.id == 2219:
-                    robot_state.drive_multiturn.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_multiturn[:] = Robot._string_to_floats(response.data)
 
                 elif response.id == 2220:
-                    robot_state.accelerometer.get_obj()[:] = Robot._string_to_floats(response.data)
+                    robot_state.accelerometer[:] = Robot._string_to_floats(response.data)
 
     @staticmethod
     def _connect_socket(logger, address, port):
@@ -741,12 +741,12 @@ class Robot:
     def GetJoints(self):
         with self._main_lock:
             self._check_monitor_processes()
-            return self._robot_state.joint_positions.get_obj()[:]
+            return self._robot_state.joint_positions[:]
 
     def GetEndEffectorPose(self):
         with self._main_lock:
             self._check_monitor_processes()
-            return self._robot_state.end_effector_pose.get_obj()[:]
+            return self._robot_state.end_effector_pose[:]
 
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
         with self._main_lock:

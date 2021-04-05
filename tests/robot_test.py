@@ -156,24 +156,24 @@ def test_monitoring_connection():
     assert robot.GetEndEffectorPose() == [x + 2027 for x in fake_array[:-1]]
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
-    assert robot._robot_state.nc_joint_positions.get_obj()[:] == [x + 2200 for x in fake_array]
-    assert robot._robot_state.nc_end_effector_pose.get_obj()[:] == [x + 2201 for x in fake_array]
-    assert robot._robot_state.nc_joint_velocity.get_obj()[:] == [x + 2202 for x in fake_array]
-    assert robot._robot_state.nc_end_effector_velocity.get_obj()[:] == [x + 2204 for x in fake_array]
+    assert robot._robot_state.nc_joint_positions[:] == [x + 2200 for x in fake_array]
+    assert robot._robot_state.nc_end_effector_pose[:] == [x + 2201 for x in fake_array]
+    assert robot._robot_state.nc_joint_velocity[:] == [x + 2202 for x in fake_array]
+    assert robot._robot_state.nc_end_effector_velocity[:] == [x + 2204 for x in fake_array]
 
-    assert robot._robot_state.nc_joint_configurations.get_obj()[:] == [x + 2208 for x in fake_array[:4]]
-    assert robot._robot_state.nc_multiturn.get_obj()[:] == [x + 2209 for x in fake_array[:2]]
+    assert robot._robot_state.nc_joint_configurations[:] == [x + 2208 for x in fake_array[:4]]
+    assert robot._robot_state.nc_multiturn[:] == [x + 2209 for x in fake_array[:2]]
 
-    assert robot._robot_state.drive_joint_positions.get_obj()[:] == [x + 2210 for x in fake_array]
-    assert robot._robot_state.drive_end_effector_pose.get_obj()[:] == [x + 2211 for x in fake_array]
-    assert robot._robot_state.drive_joint_velocity.get_obj()[:] == [x + 2212 for x in fake_array]
-    assert robot._robot_state.drive_joint_torque_ratio.get_obj()[:] == [x + 2213 for x in fake_array]
-    assert robot._robot_state.drive_end_effector_velocity.get_obj()[:] == [x + 2214 for x in fake_array]
+    assert robot._robot_state.drive_joint_positions[:] == [x + 2210 for x in fake_array]
+    assert robot._robot_state.drive_end_effector_pose[:] == [x + 2211 for x in fake_array]
+    assert robot._robot_state.drive_joint_velocity[:] == [x + 2212 for x in fake_array]
+    assert robot._robot_state.drive_joint_torque_ratio[:] == [x + 2213 for x in fake_array]
+    assert robot._robot_state.drive_end_effector_velocity[:] == [x + 2214 for x in fake_array]
 
-    assert robot._robot_state.drive_joint_configurations.get_obj()[:] == [x + 2218 for x in fake_array[:4]]
-    assert robot._robot_state.drive_multiturn.get_obj()[:] == [x + 2219 for x in fake_array[:2]]
+    assert robot._robot_state.drive_joint_configurations[:] == [x + 2218 for x in fake_array[:4]]
+    assert robot._robot_state.drive_multiturn[:] == [x + 2219 for x in fake_array[:2]]
 
-    assert robot._robot_state.accelerometer.get_obj()[:] == [x + 2220 for x in fake_array[:5]]
+    assert robot._robot_state.accelerometer[:] == [x + 2220 for x in fake_array[:5]]
 
     robot.Disconnect()
 
