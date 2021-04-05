@@ -26,25 +26,118 @@ class CommunicationError(Exception):
 
 
 class Checkpoint:
+    """Class representing a checkpoint object, which can be used to wait.
+
+    Attributes
+    ----------
+    id : integer
+        The id of the checkpoint. Not required to be unique.
+    event : event object
+        A standard event-type object used to signal when the checkpoint is reached.
+
+    """
     def __init__(self, id, event):
         self.id = id
         self.event = event
 
+    def __repr__(self):
+        return "Checkpoint with id={}, is set={}".format(self.id, self.event.is_set())
+
     def wait(self, timeout=None):
+        """Pause program execution this checkpoint is received from the robot.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self.event.wait(timeout=timeout)
 
 
 class Message:
+    """Class for storing the internal state of a generic Mecademic robot.
+
+    Attributes
+    ----------
+    id : integer
+        The id of the message, representing the type of message.
+    data : string
+        The raw payoad of the message.
+
+    """
     def __init__(self, id, data):
         self.id = id
         self.data = data
+
+    def __repr__(self):
+        return "Message with id={}, data={}".format(self.id, self.data)
 
 
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
 
+
     Attributes
     ----------
+    joint_positions : shared memory vector
+        The positions of the robot joints in degrees.
+    end_effector_pose : shared memory vector
+        The end effector pose in [x, y, z, alpha, beta, gamma] (mm and degrees).
+
+    nc_joint_positions : shared memory vector
+        Controller desired joint positions in degrees [timestamp, theta_1...6].
+    nc_end_effector_pose : shared memory vector
+        Controller desired end effector pose [timestamp, x, y, z, alpha, beta, gamma].
+
+    nc_joint_velocity : shared memory vector
+        Controller desired joint velocity in degrees/second [timestamp, theta_dot_1...6].
+    nc_end_effector_velocity : shared memory vector
+        Controller desired end effector velocity in mm/s and degrees/s, includes timestamp.
+    nc_joint_configurations : shared memory vector
+        Controller desired joint configurations.
+    nc_multiturn : shared memory vector
+        Controller desired joint 6 multiturn configuration.
+
+    drive_joint_positions : shared memory vector
+        Drive-measured joint positions in degrees [timestamp, theta_1...6].
+    drive_end_effector_pose : shared memory vector
+        Drive-measured end effector pose [timestamp, x, y, z, alpha, beta, gamma].
+
+    drive_joint_velocity : shared memory vector
+        Drive-measured joint velocity in degrees/second [timestamp, theta_dot_1...6].
+    drive_joint_torque_ratio : shared memory vector
+        Drive-measured torque ratio as a percent of maximum [timestamp, torque_1...6]
+    drive_end_effector_velocity : shared memory vector
+        Drive-measured end effector velocity in mm/s and degrees/s, includes timestamp.
+
+    drive_joint_configurations : shared memory vector
+        Drive-measured joint configurations.
+    drive_multiturn : shared memory vector
+        Drive-measured joint 6 multiturn configuration.
+
+    accelerometer : shared memory vector
+        Raw accelerometer measurements [timestamp, accelerometer_id, x, y, z]. 16000 = 1g.
+
+    activation_state : shared memory boolean
+        True if the robot is activated.
+    homing_state : shared memory boolean
+        True if the robot is homed.
+    simulation_mode : shared memory boolean
+        True if the robot is in simulation-only mode.
+    error_status : shared memory boolean
+        True if the robot is in error.
+    pause_motion_status : shared memory boolean
+        True if motion is currently paused.
+    end_of_block_status : shared memory boolean
+        True if robot is idle and motion queue is empty.
+    end_of_movement_status : shared memory boolean
+        True if robot is idle.
 
 
     """
@@ -71,7 +164,7 @@ class RobotState:
         self.drive_joint_configurations = mp.Array('f', 4, lock=False)
         self.drive_multiturn = mp.Array('f', 2, lock=False)
 
-        self.accelerometer = mp.Array('f', 5, lock=False)
+        self.accelerometer = mp.Array('f', 5, lock=False)  # 16000 = 1g
 
         # The following status fields are updated together, and is protected by a single lock.
         self.activation_state = mp.Value('b', False, lock=False)
@@ -88,6 +181,22 @@ class RobotEvents:
 
     Attributes
     ----------
+    OnRobotConnected : event
+        Set if robot is connected.
+    OnRobotDisconnected : event
+        Set if robot is disconnected.
+    OnRobotActivated : event
+        Set if robot is activated.
+    OnRobotDeactivated : event
+        Set if robot is deactivated.
+    OnRobotHomed : event
+        Set if robot is homed.
+    OnRobotMotionPaused : event
+        Set if robot motion is paused.
+    OnRobotMotionResumed : event
+        Set if robot motion is not paused.
+    OnMotionCleared : event
+        Set if motion queue has been cleared.
 
 
     """
@@ -111,12 +220,50 @@ class Robot:
 
     Attributes
     ----------
-    address : string
+    _address : string
         The IP address associated to the Mecademic Robot.
-    socket : socket object
-        Socket connecting to physical Mecademic Robot.
-    enable_synchronous_mode : boolean
-        True if synchronous mode is enabled.
+    _command_socket : socket object
+        Socket connecting to the command port of the physical Mecademic robot.
+    _monitor_socket : socket object
+        Socket connecting to the monitor port of the physical Mecademic robot.
+
+    _command_rx_process : process handle
+        Process used to receive messages from the command port.
+    _command_rx_queue : multiprocessing queue
+        Queue used to temporarily store messages from the command port.
+    _command_tx_process : process handle
+        Process used to transmit messages to the command port.
+    _command_tx_queue : multiprocessing queue
+        Queue used to temporarily store commands to be sent to the command port.
+    _monitor_rx_process : process handle
+        Process used to receive messages from the monitor port.
+    _monitor_rx_queue : multiprocessing queue
+        Queue used to temporarily store messages from the monitor port.
+
+    _command_response_handler_process : process handle
+        Process used to read messages from the command response queue.
+    _monitor_handler_process : process handle
+        Process used to read messages from the monitor queue.
+
+    _main_lock : recursive lock object
+        Used to protect internal state of the robot object.
+
+    _robot_state : RobotState object
+        Stores most current robot state.
+    _events : RobotEvents object
+        Stores events related to the robot state.
+
+    _manager : multiprocessing manager
+        Manages checkpoint-related objects shared between processes.
+    _user_checkpoints : manager dictionary
+        Stores checkpoints set or expected by user.
+    _internal_checkpoints : manager dictionary
+        Stores checkpoints set internally by the Robot class.
+    _internal_checkpoint_counter : int
+        Stores the next available checkpoint id for internal checkpoints.
+
+    _enable_synchronous_mode : boolean
+        If enabled, commands block until action is completed.
 
     """
     def __init__(self, address='192.168.0.100', enable_synchronous_mode=False):
@@ -150,8 +297,8 @@ class Robot:
         self._monitor_rx_process = None
         self._monitor_rx_queue = mp.Queue()
 
-        self._monitor_handler_process = None
         self._command_response_handler_process = None
+        self._monitor_handler_process = None
 
         self._main_lock = mp.RLock()
 
@@ -169,6 +316,7 @@ class Robot:
     @staticmethod
     def _handle_socket_rx(robot_socket, rx_queue):
         """Handle received data on the socket.
+
         Parameters
         ----------
         robot_socket : socket
@@ -218,6 +366,7 @@ class Robot:
     @staticmethod
     def _handle_socket_tx(robot_socket, tx_queue):
         """Handle sending data on the socket.
+
         Parameters
         ----------
         robot_socket : socket
@@ -239,6 +388,19 @@ class Robot:
 
     @staticmethod
     def _handle_checkpoint_response(response, user_checkpoints, internal_checkpoints):
+        """Handle the checkpoint message from the robot, set the appropriate events, etc.
+
+        Parameters
+        ----------
+        response : Message object
+            Response message which includes the received checkpoint id.
+        user_checkpoints : shared dictionary
+            Dictionary of active checkpoint id's (set by user) and corresponding events.
+        internal_checkpoints : shared dictionary
+            Dictionary of active checkpoint id's (set interally) and corresponding events.
+
+        """
+        assert response.id == 3030
         checkpoint_id = int(response.data)
 
         # Check user checkpoints.
@@ -264,10 +426,21 @@ class Robot:
     @staticmethod
     def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, events, main_lock):
         """Handle received messages on the command socket.
+
         Parameters
         ----------
         rx_queue : queue
             Thread-safe queue to get received messages from.
+        robot_state : RobotState object
+            The current robot state.
+        user_checkpoints : shared dictionary
+            Dictionary of active checkpoint id's (set by user) and corresponding events.
+        internal_checkpoints : shared dictionary
+            Dictionary of active checkpoint id's (set interally) and corresponding events.
+        events : RobotEvents object
+            Contains event objects corresponding to various robot state changes.
+        main_lock : recursive lock object
+            Used to protect internal state of robot class.
 
         """
         while True:
@@ -291,10 +464,38 @@ class Robot:
 
     @staticmethod
     def _string_to_floats(input_string):
+        """Convert comma-separated floats in string form to list of floats.
+
+        Parameters
+        ----------
+        input_string : string
+            Comma-separated floats values encoded as a string.
+
+        Returns
+        -------
+        list of floats
+            Returns converted list of floats.
+
+        """
         return [float(x) for x in input_string.split(',')]
 
     @staticmethod
     def _handle_robot_status_response(response, robot_state, events):
+        """Parse robot status response and update status fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        robot_state : RobotState object
+            Stores the robot state across processes.
+
+        events : RobotEvents object
+            Stores events associated with changes in robot state.
+
+        """
+        assert response.id == 2007
         status_flags = [bool(int(x)) for x in response.data.split(',')]
 
         if robot_state.activation_state.value != status_flags[0]:
@@ -330,11 +531,18 @@ class Robot:
 
     @staticmethod
     def _monitor_handler(monitor_queue, robot_state, events, main_lock):
-        """Handle received messages on the monitor socket.
+        """Handle messages from the monitoring port of the robot.
+
         Parameters
         ----------
         monitor_queue : queue
             Thread-safe queue to get received messages from.
+        robot_state : RobotState object
+            The current robot state.
+        events : RobotEvents object
+            Contains event objects corresponding to various robot state changes.
+        main_lock : recursive lock object
+            Used to protect internal state of robot class.
 
         """
         while True:
@@ -403,8 +611,8 @@ class Robot:
 
         Returns
         -------
-        command : string
-            Final command for the Mecademic Robot
+        new_socket : socket object
+            Successfully-connected socket object.
 
         """
         logger.debug('Attempting to connect to %s:%s', address, port)
@@ -422,6 +630,9 @@ class Robot:
         return new_socket
 
     def _check_monitor_processes(self):
+        """Check that the processes which handle robot messages are alive. Attempt to disconnect from the robot if not.
+
+        """
         if self._command_response_handler_process:
             if not self._command_response_handler_process.is_alive():
                 self.logger.error('Command response handler process has unexpectedly terminated. Disconnecting...')
@@ -434,23 +645,38 @@ class Robot:
                 raise InvalidStateError
 
     def _send_command(self, command, arg_list=None):
-        """Assembles and sends the command string to the Mecademic Robot.
+        """Assembles and sends the command string to the Mecademic robot.
 
         Parameters
         ----------
-        cmd : string
-            Command name to send to the Mecademic Robot
+        command : string
+            Command name to send to the Mecademic robot.
         arg_list : list
-            List of arguments the command requires
+            List of arguments the command requires.
 
         """
 
         # Assemble arguments into a string and concatenate to end of command.
         if arg_list:
             command = command + '(' + ','.join([str(x) for x in arg_list]) + ')'
+
+        # Put command into tx queue.
         self._command_tx_queue.put(command)
 
     def _establish_socket_connections(self, offline_mode=False):
+        """Establish the socket connections to the robot.
+
+        Parameters
+        ----------
+        offline_mode : bool
+            Immediately return true if enabled.
+
+        Return
+        ------
+        bool
+            True if both all connections are successful.
+
+        """
         if offline_mode:
             return True
 
@@ -483,6 +709,19 @@ class Robot:
         return True
 
     def _establish_socket_processes(self, offline_mode=False):
+        """Establish the processes responsible for reading/sending messages using the sockets.
+
+        Parameters
+        ----------
+        offline_mode : bool
+            Immediately return true if enabled.
+
+        Return
+        ------
+        bool
+            True if both all processes are successfully launched.
+
+        """
         if offline_mode:
             return True
 
@@ -568,6 +807,11 @@ class Robot:
     def Connect(self, offline_mode=False):
         """Attempt to connect to a physical Mecademic Robot.
 
+        Parameters
+        ----------
+        offline_mode : bool
+            Immediately return true if enabled.
+
         Returns
         -------
         status : boolean
@@ -590,6 +834,9 @@ class Robot:
             return True
 
     def ActivateRobot(self):
+        """Activate the robot.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('ActivateRobot')
@@ -598,6 +845,9 @@ class Robot:
             self.WaitActivated()
 
     def Home(self):
+        """Home the robot.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('Home')
@@ -606,10 +856,16 @@ class Robot:
             self.WaitHomed()
 
     def ActivateAndHome(self):
+        """Utility function that combines activate and home.
+
+        """
         self.ActivateRobot()
         self.Home()
 
     def PauseMotion(self):
+        """Immediately pause robot motion.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('PauseMotion')
@@ -618,6 +874,9 @@ class Robot:
             self.WaitMotionPaused()
 
     def ResumeMotion(self):
+        """Un-pause robot motion.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('ResumeMotion')
@@ -626,6 +885,9 @@ class Robot:
             self.WaitMotionResumed()
 
     def DeactivateRobot(self):
+        """Deactivate the robot.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('DeactivateRobot')
@@ -634,10 +896,13 @@ class Robot:
             self.WaitDeactivated()
 
     def ClearMotion(self):
+        """Clear the motion queue, includes implicit PauseMotion command.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('ClearMotion')
-            # Clearing the motion queue also requires clearing checkpoints.
+            # Clearing the motion queue also requires clearing checkpoints, as the robot will not send them anymore.
             self._user_checkpoints.clear()
             self._internal_checkpoints.clear()
             self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
@@ -645,14 +910,12 @@ class Robot:
         if self._enable_synchronous_mode:
             self.WaitMotionCleared()
 
-    def Disconnect(self):
-        """Disconnects Mecademic Robot object from physical Mecademic Robot.
+    def _shut_down_queue_processes(self):
+        """Attempt to gracefully shut down processes which read from queues.
 
         """
-        # Don't use the normal DeactivateRobot call to avoid checking monitor processes.
-        self._send_command('DeactivateRobot')
-
         # Join processes which wait on a queue by sending terminate to the queue.
+        # Don't acquire _main_lock since these processes require _main_lock to finish processing.
         if self._command_tx_process is not None:
             try:
                 self._command_tx_queue.put(TERMINATE_PROCESS)
@@ -680,6 +943,10 @@ class Robot:
             self._monitor_handler_process.join()
             self._monitor_handler_process = None
 
+    def _shut_down_socket_processes(self):
+        """Attempt to gracefully shut down processes which read from sockets.
+
+        """
         with self._main_lock:
             # Shutdown socket to terminate the rx processes.
             if self._command_socket is not None:
@@ -708,6 +975,19 @@ class Robot:
                 if not self._monitor_rx_process.join(timeout=1):
                     self._monitor_rx_process.terminate()
                 self._monitor_rx_process = None
+
+    def Disconnect(self):
+        """Disconnects Mecademic Robot object from the physical Mecademic robot.
+
+        """
+        # Don't use the normal DeactivateRobot call to avoid checking monitor processes, in case robot is in bad state.
+        self._send_command('DeactivateRobot')
+
+        # Don't acquire _main_lock while shutting down queues to avoid deadlock.
+        self._shut_down_queue_processes()
+
+        with self._main_lock:
+            self._shut_down_socket_processes()
 
             # Reset communication queues (not strictly necessary since these should be empty).
             self._command_rx_queue = mp.Queue()
@@ -739,16 +1019,40 @@ class Robot:
             self._events.OnRobotConnected.clear()
 
     def GetJoints(self):
+        """Returns the current joint positions of the robot.
+
+        Return
+        ------
+        list of floats
+            Returns list of joint positions in degrees.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             return self._robot_state.joint_positions[:]
 
     def GetEndEffectorPose(self):
+        """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
+
+        Return
+        ------
+        list of floats
+            Returns end-effector pose [x, y, z, alpha, beta, gamma].
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             return self._robot_state.end_effector_pose[:]
 
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
+        """Moves joints to desired positions.
+
+        Parameters
+        ----------
+        joint1...joint6 : float
+            Desired joint angles in degrees.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
@@ -760,18 +1064,52 @@ class Robot:
             checkpoint.wait()
 
     def SetCheckpoint(self, n):
+        """Set checkpoint with desired id.
+
+        Parameters
+        ----------
+        n : int
+            Desired checkpoint id.
+
+        Return
+        ------
+        Checkpoint object
+            Object to use to wait for the checkpoint.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n)
 
     def ExpectExternalCheckpoint(self, n):
+        """Expect the robot to receive a checkpoint with given id (e.g. from saved program).
+
+        Parameters
+        ----------
+        n : int
+            Id of expected checkpoint.
+
+        Return
+        ------
+        Checkpoint object
+            Object to use to wait for the checkpoint.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n, send_to_robot=False)
 
     def _set_checkpoint_internal(self):
+        """Set a checkpoint for internal use using the next available internal id.
+
+        Return
+        ------
+        Checkpoint object
+            Object to use to wait for the checkpoint.
+
+        """
         with self._main_lock:
             checkpoint_id = self._internal_checkpoint_counter
 
@@ -783,9 +1121,24 @@ class Robot:
             return self._set_checkpoint_impl(checkpoint_id)
 
     def _set_checkpoint_impl(self, n, send_to_robot=True):
+        """Create a checkpoint object which can be used to wait for the checkpoint id to be received from the robot.
+
+        Parameters
+        ----------
+        n : int
+            Id of checkpoint.
+        send_to_robot : bool
+            If true, send the SetCheckpoint command to the robot.
+
+        Return
+        ------
+        Checkpoint object
+            Object to use to wait for the checkpoint.
+
+        """
         with self._main_lock:
             if not isinstance(n, int):
-                raise TypeError('Please provide a string argument for the address.')
+                raise TypeError('Please provide an integer checkpoint id.')
 
             # Find the correct dictionary to store checkpoint.
             if CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX:
@@ -809,6 +1162,19 @@ class Robot:
             return Checkpoint(n, event)
 
     def WaitForAnyCheckpoint(self, timeout=None):
+        """Pause program execution until any checkpoint has been received from the robot.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
             if '*' not in self._internal_checkpoints:
@@ -819,25 +1185,129 @@ class Robot:
         return event.wait(timeout=timeout)
 
     def WaitConnected(self, timeout=None):
+        """Pause program execution until robot is disconnected.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self._events.OnRobotConnected.wait(timeout=timeout)
 
     def WaitDisconnected(self, timeout=None):
+        """Pause program execution until the robot is disconnected.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self._events.OnRobotDisconnected.wait(timeout=timeout)
 
     def WaitActivated(self, timeout=None):
+        """Pause program execution until the robot is activated.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self._events.OnRobotActivated.wait(timeout=timeout)
 
     def WaitDeactivated(self, timeout=None):
+        """Pause program execution until the robot is deactivated.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self._events.OnRobotDeactivated.wait(timeout=timeout)
 
     def WaitHomed(self, timeout=None):
+        """Pause program execution until the robot is homed.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self._events.OnRobotHomed.wait(timeout=timeout)
 
     def WaitMotionPaused(self, timeout=None):
+        """Pause program execution until the robot motion is paused.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self._events.OnRobotMotionPaused.wait(timeout=timeout)
 
     def WaitMotionResumed(self, timeout=None):
+        """Pause program execution until the robot motion is resumed.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self._events.OnRobotMotionResumed.wait(timeout=timeout)
 
     def WaitMotionCleared(self, timeout=None):
+        """Pause program execution until the motion queue is cleared.
+
+        Parameters
+        ----------
+        timeout : int
+            Maximum time to spend waiting for the checkpoint.
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
         return self._events.OnMotionCleared.wait(timeout=timeout)
