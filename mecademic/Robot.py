@@ -871,7 +871,7 @@ class Robot:
             self._send_command('PauseMotion')
 
         if self._enable_synchronous_mode:
-            self.WaitMotionPaused()
+            self._events.OnRobotMotionPaused.wait()
 
     def ResumeMotion(self):
         """Un-pause robot motion.
@@ -1263,22 +1263,6 @@ class Robot:
 
         """
         return self._events.OnRobotHomed.wait(timeout=timeout)
-
-    def WaitMotionPaused(self, timeout=None):
-        """Pause program execution until the robot motion is paused.
-
-        Parameters
-        ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
-
-        Return
-        ------
-        boolean
-            True if wait was successful, false otherwise.
-
-        """
-        return self._events.OnRobotMotionPaused.wait(timeout=timeout)
 
     def WaitMotionResumed(self, timeout=None):
         """Pause program execution until the robot motion is resumed.

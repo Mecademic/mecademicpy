@@ -365,10 +365,10 @@ def test_motion_events():
     robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
     assert robot.WaitHomed(timeout=1)
 
-    assert not robot.WaitMotionPaused(timeout=0)
     robot.PauseMotion()
     robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,1,0,0'))
-    assert robot.WaitMotionPaused(timeout=1)
+    # Wait until pause is successfully set.
+    robot._events.OnRobotMotionPaused.wait()
 
     assert not robot.WaitMotionResumed(timeout=0)
     robot.ResumeMotion()
