@@ -313,6 +313,10 @@ class Robot:
         self._enable_synchronous_mode = enable_synchronous_mode
         self.logger = logging.getLogger(__name__)
 
+    #####################################################################################
+    # Static methods.
+    #####################################################################################
+
     @staticmethod
     def _handle_socket_rx(robot_socket, rx_queue):
         """Handle received data on the socket.
@@ -629,6 +633,10 @@ class Robot:
         logger.debug('Connected to %s:%s.', address, port)
         return new_socket
 
+    #####################################################################################
+    # Private methods.
+    #####################################################################################
+
     def _check_monitor_processes(self):
         """Check that the processes which handle robot messages are alive. Attempt to disconnect from the robot if not.
 
@@ -804,6 +812,136 @@ class Robot:
 
         return True
 
+    def _shut_down_queue_processes(self):
+        """Attempt to gracefully shut down processes which read from queues.
+
+        """
+        # Join processes which wait on a queue by sending terminate to the queue.
+        # Don't acquire _main_lock since these processes require _main_lock to finish processing.
+        if self._command_tx_process is not None:
+            try:
+                self._command_tx_queue.put(TERMINATE_PROCESS)
+            except Exception as e:
+                self._command_tx_process.terminate()
+                self.logger.error('Error shutting down tx process. ' + str(e))
+            self._command_tx_process.join()
+            self._command_tx_process = None
+
+        if self._command_response_handler_process is not None:
+            try:
+                self._command_rx_queue.put(TERMINATE_PROCESS)
+            except Exception as e:
+                self._command_response_handler_process.terminate()
+                self.logger.error('Error shutting down command response handler process. ' + str(e))
+            self._command_response_handler_process.join()
+            self._command_response_handler_process = None
+
+        if self._monitor_handler_process is not None:
+            try:
+                self._monitor_rx_queue.put(TERMINATE_PROCESS)
+            except Exception as e:
+                self._monitor_handler_process.terminate()
+                self.logger.error('Error shutting down monitor handler process. ' + str(e))
+            self._monitor_handler_process.join()
+            self._monitor_handler_process = None
+
+    def _shut_down_socket_processes(self):
+        """Attempt to gracefully shut down processes which read from sockets.
+
+        """
+        with self._main_lock:
+            # Shutdown socket to terminate the rx processes.
+            if self._command_socket is not None:
+                try:
+                    self._command_socket.shutdown(socket.SHUT_RDWR)
+                except Exception as e:
+                    self.logger.error('Error shutting down command socket. ' + str(e))
+                    if self._command_rx_process is not None:
+                        self._command_rx_process.terminate()
+
+            if self._monitor_socket is not None:
+                try:
+                    self._monitor_socket.shutdown(socket.SHUT_RDWR)
+                except Exception as e:
+                    self.logger.error('Error shutting down monitor socket. ' + str(e))
+                    if self._monitor_rx_process is not None:
+                        self._monitor_rx_process.terminate()
+
+            # Join processes which wait on a socket.
+            if self._command_rx_process is not None:
+                if not self._command_rx_process.join(timeout=1):
+                    self._command_rx_process.terminate()
+                self._command_rx_process = None
+
+            if self._monitor_rx_process is not None:
+                if not self._monitor_rx_process.join(timeout=1):
+                    self._monitor_rx_process.terminate()
+                self._monitor_rx_process = None
+
+    def _set_checkpoint_internal(self):
+        """Set a checkpoint for internal use using the next available internal id.
+
+        Return
+        ------
+        Checkpoint object
+            Object to use to wait for the checkpoint.
+
+        """
+        with self._main_lock:
+            checkpoint_id = self._internal_checkpoint_counter
+
+            # Increment internal checkpoint counter.
+            self._internal_checkpoint_counter += 1
+            if self._internal_checkpoint_counter > CHECKPOINT_ID_MAX_PRIVATE:
+                self._internal_checkpoint_counter.value = MX_CHECKPOINT_ID_MAX + 1
+
+            return self._set_checkpoint_impl(checkpoint_id)
+
+    def _set_checkpoint_impl(self, n, send_to_robot=True):
+        """Create a checkpoint object which can be used to wait for the checkpoint id to be received from the robot.
+
+        Parameters
+        ----------
+        n : int
+            Id of checkpoint.
+        send_to_robot : bool
+            If true, send the SetCheckpoint command to the robot.
+
+        Return
+        ------
+        Checkpoint object
+            Object to use to wait for the checkpoint.
+
+        """
+        with self._main_lock:
+            if not isinstance(n, int):
+                raise TypeError('Please provide an integer checkpoint id.')
+
+            # Find the correct dictionary to store checkpoint.
+            if MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX:
+                checkpoints_dict = self._user_checkpoints
+            elif MX_CHECKPOINT_ID_MAX < n <= CHECKPOINT_ID_MAX_PRIVATE:
+                checkpoints_dict = self._internal_checkpoints
+            else:
+                raise ValueError
+
+            self.logger.debug('Setting checkpoint %s', n)
+
+            if n not in checkpoints_dict:
+                checkpoints_dict[n] = self._manager.list()
+            event = self._manager.Event()
+            checkpoints_dict[n].append(event)
+
+            if send_to_robot:
+                self._send_command('SetCheckpoint', [n])
+                self._events.OnMotionCleared.clear()
+
+            return Checkpoint(n, event)
+
+    #####################################################################################
+    # Public methods = Pascal case is used to maintain consistency with text and c++ API.
+    #####################################################################################
+
     def Connect(self, offline_mode=False):
         """Attempt to connect to a physical Mecademic Robot.
 
@@ -909,72 +1047,6 @@ class Robot:
 
         if self._enable_synchronous_mode:
             self.WaitMotionCleared()
-
-    def _shut_down_queue_processes(self):
-        """Attempt to gracefully shut down processes which read from queues.
-
-        """
-        # Join processes which wait on a queue by sending terminate to the queue.
-        # Don't acquire _main_lock since these processes require _main_lock to finish processing.
-        if self._command_tx_process is not None:
-            try:
-                self._command_tx_queue.put(TERMINATE_PROCESS)
-            except Exception as e:
-                self._command_tx_process.terminate()
-                self.logger.error('Error shutting down tx process. ' + str(e))
-            self._command_tx_process.join()
-            self._command_tx_process = None
-
-        if self._command_response_handler_process is not None:
-            try:
-                self._command_rx_queue.put(TERMINATE_PROCESS)
-            except Exception as e:
-                self._command_response_handler_process.terminate()
-                self.logger.error('Error shutting down command response handler process. ' + str(e))
-            self._command_response_handler_process.join()
-            self._command_response_handler_process = None
-
-        if self._monitor_handler_process is not None:
-            try:
-                self._monitor_rx_queue.put(TERMINATE_PROCESS)
-            except Exception as e:
-                self._monitor_handler_process.terminate()
-                self.logger.error('Error shutting down monitor handler process. ' + str(e))
-            self._monitor_handler_process.join()
-            self._monitor_handler_process = None
-
-    def _shut_down_socket_processes(self):
-        """Attempt to gracefully shut down processes which read from sockets.
-
-        """
-        with self._main_lock:
-            # Shutdown socket to terminate the rx processes.
-            if self._command_socket is not None:
-                try:
-                    self._command_socket.shutdown(socket.SHUT_RDWR)
-                except Exception as e:
-                    self.logger.error('Error shutting down command socket. ' + str(e))
-                    if self._command_rx_process is not None:
-                        self._command_rx_process.terminate()
-
-            if self._monitor_socket is not None:
-                try:
-                    self._monitor_socket.shutdown(socket.SHUT_RDWR)
-                except Exception as e:
-                    self.logger.error('Error shutting down monitor socket. ' + str(e))
-                    if self._monitor_rx_process is not None:
-                        self._monitor_rx_process.terminate()
-
-            # Join processes which wait on a socket.
-            if self._command_rx_process is not None:
-                if not self._command_rx_process.join(timeout=1):
-                    self._command_rx_process.terminate()
-                self._command_rx_process = None
-
-            if self._monitor_rx_process is not None:
-                if not self._monitor_rx_process.join(timeout=1):
-                    self._monitor_rx_process.terminate()
-                self._monitor_rx_process = None
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
@@ -1100,66 +1172,6 @@ class Robot:
             self._check_monitor_processes()
             assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n, send_to_robot=False)
-
-    def _set_checkpoint_internal(self):
-        """Set a checkpoint for internal use using the next available internal id.
-
-        Return
-        ------
-        Checkpoint object
-            Object to use to wait for the checkpoint.
-
-        """
-        with self._main_lock:
-            checkpoint_id = self._internal_checkpoint_counter
-
-            # Increment internal checkpoint counter.
-            self._internal_checkpoint_counter += 1
-            if self._internal_checkpoint_counter > CHECKPOINT_ID_MAX_PRIVATE:
-                self._internal_checkpoint_counter.value = MX_CHECKPOINT_ID_MAX + 1
-
-            return self._set_checkpoint_impl(checkpoint_id)
-
-    def _set_checkpoint_impl(self, n, send_to_robot=True):
-        """Create a checkpoint object which can be used to wait for the checkpoint id to be received from the robot.
-
-        Parameters
-        ----------
-        n : int
-            Id of checkpoint.
-        send_to_robot : bool
-            If true, send the SetCheckpoint command to the robot.
-
-        Return
-        ------
-        Checkpoint object
-            Object to use to wait for the checkpoint.
-
-        """
-        with self._main_lock:
-            if not isinstance(n, int):
-                raise TypeError('Please provide an integer checkpoint id.')
-
-            # Find the correct dictionary to store checkpoint.
-            if MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX:
-                checkpoints_dict = self._user_checkpoints
-            elif MX_CHECKPOINT_ID_MAX < n <= CHECKPOINT_ID_MAX_PRIVATE:
-                checkpoints_dict = self._internal_checkpoints
-            else:
-                raise ValueError
-
-            self.logger.debug('Setting checkpoint %s', n)
-
-            if n not in checkpoints_dict:
-                checkpoints_dict[n] = self._manager.list()
-            event = self._manager.Event()
-            checkpoints_dict[n].append(event)
-
-            if send_to_robot:
-                self._send_command('SetCheckpoint', [n])
-                self._events.OnMotionCleared.clear()
-
-            return Checkpoint(n, event)
 
     def WaitForAnyCheckpoint(self, timeout=None):
         """Pause program execution until any checkpoint has been received from the robot.
