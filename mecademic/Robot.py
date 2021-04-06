@@ -7,11 +7,11 @@ import multiprocessing as mp
 import queue
 from collections import deque
 
+from .mx_robot_def import *
+
 COMMAND_PORT = 10000
 MONITOR_PORT = 10001
 
-CHECKPOINT_ID_MIN = 1  # Min allowable checkpoint id for users, inclusive
-CHECKPOINT_ID_MAX = 8000  # Max allowable checkpoint id for users, inclusive
 CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
 TERMINATE_PROCESS = 'terminate_process'
@@ -266,7 +266,7 @@ class Robot:
         If enabled, commands block until action is completed.
 
     """
-    def __init__(self, address='192.168.0.100', enable_synchronous_mode=False):
+    def __init__(self, address=MX_DEFAULT_ROBOT_IP, enable_synchronous_mode=False):
         """Constructor for an instance of the Controller class.
 
         Parameters
@@ -308,7 +308,7 @@ class Robot:
         self._manager = mp.Manager()
         self._user_checkpoints = self._manager.dict()
         self._internal_checkpoints = self._manager.dict()
-        self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
+        self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
         self._enable_synchronous_mode = enable_synchronous_mode
         self.logger = logging.getLogger(__name__)
@@ -400,7 +400,7 @@ class Robot:
             Dictionary of active checkpoint id's (set interally) and corresponding events.
 
         """
-        assert response.id == 3030
+        assert response.id == MX_ST_CHECKPOINT_REACHED
         checkpoint_id = int(response.data)
 
         # Check user checkpoints.
@@ -452,14 +452,14 @@ class Robot:
                 return
 
             with main_lock:
-                if response.id == 2044:
+                if response.id == MX_ST_CLEAR_MOTION:
                     events.OnMotionCleared.set()
 
-                elif response.id == 2007:
+                elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events)
 
                 # Handle checkpoints.
-                elif response.id == 3030:
+                elif response.id == MX_ST_CHECKPOINT_REACHED:
                     Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints)
 
     @staticmethod
@@ -495,7 +495,7 @@ class Robot:
             Stores events associated with changes in robot state.
 
         """
-        assert response.id == 2007
+        assert response.id == MX_ST_GET_STATUS_ROBOT
         status_flags = [bool(int(x)) for x in response.data.split(',')]
 
         if robot_state.activation_state.value != status_flags[0]:
@@ -554,46 +554,46 @@ class Robot:
                 return
 
             with main_lock:
-                if response.id == 2026:
+                if response.id == MX_ST_GET_JOINTS:
                     robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
 
-                elif response.id == 2027:
+                elif response.id == MX_ST_GET_POSE:
                     robot_state.end_effector_pose[:] = Robot._string_to_floats(response.data)
 
-                elif response.id == 2007:
+                elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events)
 
-                elif response.id == 2200:
+                elif response.id == MX_ST_RT_NC_JOINT_POS:
                     robot_state.nc_joint_positions[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2201:
+                elif response.id == MX_ST_RT_NC_CART_POS:
                     robot_state.nc_end_effector_pose[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2202:
+                elif response.id == MX_ST_RT_NC_JOINT_VEL:
                     robot_state.nc_joint_velocity[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2204:
+                elif response.id == MX_ST_RT_NC_CART_VEL:
                     robot_state.nc_end_effector_velocity[:] = Robot._string_to_floats(response.data)
 
-                elif response.id == 2208:
+                elif response.id == MX_ST_RT_NC_CONF:
                     robot_state.nc_joint_configurations[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2209:
+                elif response.id == MX_ST_RT_NC_CONF_MULTITURN:
                     robot_state.nc_multiturn[:] = Robot._string_to_floats(response.data)
 
-                elif response.id == 2210:
+                elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
                     robot_state.drive_joint_positions[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2211:
+                elif response.id == MX_ST_RT_DRIVE_CART_POS:
                     robot_state.drive_end_effector_pose[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2212:
+                elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
                     robot_state.drive_joint_velocity[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2213:
+                elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
                     robot_state.drive_joint_torque_ratio[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2214:
+                elif response.id == MX_ST_RT_DRIVE_CART_VEL:
                     robot_state.drive_end_effector_velocity[:] = Robot._string_to_floats(response.data)
 
-                elif response.id == 2218:
+                elif response.id == MX_ST_RT_DRIVE_CONF:
                     robot_state.drive_joint_configurations[:] = Robot._string_to_floats(response.data)
-                elif response.id == 2219:
+                elif response.id == MX_ST_RT_DRIVE_CONF_MULTITURN:
                     robot_state.drive_multiturn[:] = Robot._string_to_floats(response.data)
 
-                elif response.id == 2220:
+                elif response.id == MX_ST_RT_ACCELEROMETER:
                     robot_state.accelerometer[:] = Robot._string_to_floats(response.data)
 
     @staticmethod
@@ -775,7 +775,7 @@ class Robot:
             return False
 
         # Check that response is appropriate.
-        if response.id != 3000:
+        if response.id != MX_ST_CONNECTED:
             self.logger.error('Connection error: %s', response)
             self.Disconnect()
             return False
@@ -905,7 +905,7 @@ class Robot:
             # Clearing the motion queue also requires clearing checkpoints, as the robot will not send them anymore.
             self._user_checkpoints.clear()
             self._internal_checkpoints.clear()
-            self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
+            self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
         if self._enable_synchronous_mode:
             self.WaitMotionCleared()
@@ -999,7 +999,7 @@ class Robot:
             self._events = RobotEvents()
             self._user_checkpoints = self._manager.dict()
             self._internal_checkpoints = self._manager.dict()
-            self._internal_checkpoint_counter = CHECKPOINT_ID_MAX + 1
+            self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
             # Finally, close sockets.
             if self._command_socket is not None:
@@ -1079,7 +1079,7 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
-            assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
+            assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n)
 
     def ExpectExternalCheckpoint(self, n):
@@ -1098,7 +1098,7 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
-            assert CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX
+            assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n, send_to_robot=False)
 
     def _set_checkpoint_internal(self):
@@ -1116,7 +1116,7 @@ class Robot:
             # Increment internal checkpoint counter.
             self._internal_checkpoint_counter += 1
             if self._internal_checkpoint_counter > CHECKPOINT_ID_MAX_PRIVATE:
-                self._internal_checkpoint_counter.value = CHECKPOINT_ID_MAX + 1
+                self._internal_checkpoint_counter.value = MX_CHECKPOINT_ID_MAX + 1
 
             return self._set_checkpoint_impl(checkpoint_id)
 
@@ -1141,9 +1141,9 @@ class Robot:
                 raise TypeError('Please provide an integer checkpoint id.')
 
             # Find the correct dictionary to store checkpoint.
-            if CHECKPOINT_ID_MIN <= n <= CHECKPOINT_ID_MAX:
+            if MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX:
                 checkpoints_dict = self._user_checkpoints
-            elif CHECKPOINT_ID_MAX < n <= CHECKPOINT_ID_MAX_PRIVATE:
+            elif MX_CHECKPOINT_ID_MAX < n <= CHECKPOINT_ID_MAX_PRIVATE:
                 checkpoints_dict = self._internal_checkpoints
             else:
                 raise ValueError
