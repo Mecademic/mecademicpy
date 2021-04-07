@@ -62,7 +62,8 @@ def test_connection_no_robot():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    assert not robot.Connect()
+    with pytest.raises(Exception):
+        robot.Connect()
 
 
 def test_successful_connection_full_socket():
@@ -102,10 +103,12 @@ def test_sequential_connections():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3001, ''))
-    assert not robot.Connect(offline_mode=True)
+    with pytest.raises(Exception):
+        robot.Connect(offline_mode=True)
 
     robot._command_rx_queue.put(mdr.Message(99999, ''))
-    assert not robot.Connect(offline_mode=True)
+    with pytest.raises(Exception):
+        robot.Connect(offline_mode=True)
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
     assert robot.Connect(offline_mode=True)

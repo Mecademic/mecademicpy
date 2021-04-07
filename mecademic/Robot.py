@@ -741,7 +741,7 @@ class Robot:
         except:
             # Clean up processes and connections on error.
             self.Disconnect()
-            return False
+            raise
 
         return True
 
@@ -804,7 +804,7 @@ class Robot:
         except:
             # Clean up processes and connections on error.
             self.Disconnect()
-            return False
+            raise
 
         return True
 
@@ -823,13 +823,13 @@ class Robot:
         except Exception as e:
             self.logger.error('No response received within timeout interval. ' + str(e))
             self.Disconnect()
-            return False
+            raise e
 
         # Check that response is appropriate.
         if response.id != MX_ST_CONNECTED:
             self.logger.error('Connection error: %s', response)
             self.Disconnect()
-            return False
+            raise e
 
         self._command_response_handler_process = self._launch_process(
             target=self._command_response_handler,
@@ -998,14 +998,10 @@ class Robot:
 
         """
         with self._main_lock:
-            if not self._establish_socket_connections(offline_mode=offline_mode):
-                return False
-            if not self._establish_socket_processes(offline_mode=offline_mode):
-                return False
-            if not self._initialize_command_connection():
-                return False
-            if not self._initialize_monitoring_connection():
-                return False
+            self._establish_socket_connections(offline_mode=offline_mode)
+            self._establish_socket_processes(offline_mode=offline_mode)
+            self._initialize_command_connection()
+            self._initialize_monitoring_connection()
 
             self._events.OnRobotConnected.set()
             self._events.OnRobotDisconnected.clear()
