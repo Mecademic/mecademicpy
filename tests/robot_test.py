@@ -302,18 +302,10 @@ def test_unaccounted_checkpoints():
 
     # Send unexpected checkpoint.
     robot._command_rx_queue.put(mdr.Message(3030, '1'))
-    # Unexpected checkpoint should throw error and cause handler process to exit.
-    robot._command_response_handler_process.join()
-    # We can only test that a child process has ended the next time the library is invoked.
-    with pytest.raises(mdr.InvalidStateError):
-        robot.MoveJoints(0, 0, 0, 0, 0, 0)
 
-    # Check that disconnect is called and that the api is reset.
-    assert robot._command_response_handler_process is None
-    assert robot._monitor_handler_process is None
-    assert robot._command_rx_process is None
-    assert robot._command_tx_process is None
-    assert robot._monitor_rx_process is None
+    assert robot._check_monitor_processes()
+
+    robot.Disconnect()
 
 
 def test_connection_activation_events():

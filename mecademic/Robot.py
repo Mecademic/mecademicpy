@@ -391,7 +391,7 @@ class Robot:
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
-    def _handle_checkpoint_response(response, user_checkpoints, internal_checkpoints):
+    def _handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.
 
         Parameters
@@ -425,10 +425,11 @@ class Robot:
             if not internal_checkpoints[checkpoint_id]:
                 internal_checkpoints.pop(checkpoint_id)
         else:
-            raise ValueError('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
+            logger.warning('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
 
     @staticmethod
-    def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, events, main_lock):
+    def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, events, main_lock,
+                                  logger):
         """Handle received messages on the command socket.
 
         Parameters
@@ -464,7 +465,7 @@ class Robot:
 
                 # Handle checkpoints.
                 elif response.id == MX_ST_CHECKPOINT_REACHED:
-                    Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints)
+                    Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger)
 
     @staticmethod
     def _string_to_floats(input_string):
@@ -652,6 +653,8 @@ class Robot:
                 self.Disconnect()
                 raise InvalidStateError
 
+        return True
+
     def _send_command(self, command, arg_list=None):
         """Assembles and sends the command string to the Mecademic robot.
 
@@ -791,7 +794,7 @@ class Robot:
         self._command_response_handler_process = mp.Process(target=self._command_response_handler,
                                                             args=(self._command_rx_queue, self._robot_state,
                                                                   self._user_checkpoints, self._internal_checkpoints,
-                                                                  self._events, self._main_lock))
+                                                                  self._events, self._main_lock, self.logger))
         self._command_response_handler_process.start()
         return True
 
