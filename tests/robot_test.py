@@ -69,7 +69,6 @@ def test_successful_connection_full_socket():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    # Set a longer delay between commands to avoid automatic concatenation by the socket.
     command_server_thread = run_fake_server(TEST_IP, mdr.COMMAND_PORT, ['[3000]\0'])
     monitor_server_thread = run_fake_server(TEST_IP, mdr.MONITOR_PORT, [])
 
@@ -308,7 +307,7 @@ def test_unaccounted_checkpoints():
     robot.Disconnect()
 
 
-def test_connection_activation_events():
+def test_events():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
@@ -332,26 +331,6 @@ def test_connection_activation_events():
     assert robot.WaitActivated(timeout=1)
     assert not robot.WaitDeactivated(timeout=0)
 
-    robot.DeactivateRobot()
-    robot._monitor_rx_queue.put(mdr.Message(2007, '0,0,0,0,0,0,0'))
-
-    # Note: the order of these waits is intentional.
-    # The WaitActivated check may fail if message hasn't yet been processed.
-    assert robot.WaitDeactivated(timeout=1)
-    assert not robot.WaitActivated(timeout=0)
-
-    assert not robot.WaitDisconnected(timeout=0)
-    robot.Disconnect()
-    assert robot.WaitDisconnected()
-
-
-def test_motion_events():
-    robot = mdr.Robot(TEST_IP)
-    assert robot is not None
-
-    robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
-
     assert not robot.WaitHomed(timeout=0)
     robot.Home()
     robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
@@ -372,4 +351,14 @@ def test_motion_events():
     robot._command_rx_queue.put(mdr.Message(2044, ''))
     assert robot.WaitMotionCleared(timeout=1)
 
+    robot.DeactivateRobot()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '0,0,0,0,0,0,0'))
+
+    # Note: the order of these waits is intentional.
+    # The WaitActivated check may fail if message hasn't yet been processed.
+    assert robot.WaitDeactivated(timeout=1)
+    assert not robot.WaitActivated(timeout=0)
+
+    assert not robot.WaitDisconnected(timeout=0)
     robot.Disconnect()
+    assert robot.WaitDisconnected()

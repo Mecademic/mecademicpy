@@ -4,8 +4,7 @@ import ipaddress
 import time
 import socket
 import multiprocessing as mp
-import queue
-from collections import deque
+import functools
 
 from .mx_robot_def import *
 
@@ -81,7 +80,6 @@ class Message:
 
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
-
 
     Attributes
     ----------
@@ -198,7 +196,6 @@ class RobotEvents:
     OnMotionCleared : event
         Set if motion queue has been cleared.
 
-
     """
     def __init__(self):
         self.OnRobotConnected = mp.Event()
@@ -213,6 +210,20 @@ class RobotEvents:
         self.OnRobotDisconnected.set()
         self.OnRobotDeactivated.set()
         self.OnRobotMotionResumed.set()
+
+
+# Decorator to call disconnect if an exception is raised. Needs to be declared outside of class.
+def disconnect_on_exception(func):
+    @functools.wraps(func)
+    def wrap(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except BaseException as e:
+            if self._disconnect_on_exception:
+                self.Disconnect()
+            raise e
+
+    return wrap
 
 
 class Robot:
@@ -266,7 +277,7 @@ class Robot:
         If enabled, commands block until action is completed.
 
     """
-    def __init__(self, address=MX_DEFAULT_ROBOT_IP, enable_synchronous_mode=False):
+    def __init__(self, address=MX_DEFAULT_ROBOT_IP, enable_synchronous_mode=False, disconnect_on_exception=True):
         """Constructor for an instance of the Controller class.
 
         Parameters
@@ -311,11 +322,32 @@ class Robot:
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
         self._enable_synchronous_mode = enable_synchronous_mode
+        self._disconnect_on_exception = disconnect_on_exception
         self.logger = logging.getLogger(__name__)
 
     #####################################################################################
     # Static methods.
     #####################################################################################
+
+    @staticmethod
+    def _deactivate_on_exception(func, command_socket, *args, **kwargs):
+        """Wrap input function to send deactivate signal to command_socket on exception.
+
+        Parameters
+        ----------
+        func : function handle
+            Function to execute.
+
+        command_socket : socket
+            Socket to send the deactivate command to.
+
+        """
+        try:
+            return func(*args, **kwargs)
+        except BaseException as e:
+            command_socket.sendall(b'ClearMotion\0')
+            command_socket.sendall(b'DeactivateRobot\0')
+            raise e
 
     @staticmethod
     def _handle_socket_rx(robot_socket, rx_queue):
@@ -330,11 +362,11 @@ class Robot:
             Thread-safe queue to push complete messages onto.
 
         """
-        robot_socket.setblocking(True)
         remainder = ''
         while True:
             # Wait for a message from the robot.
             try:
+                robot_socket.setblocking(True)
                 raw_responses = robot_socket.recv(1024)
             except ConnectionAbortedError:
                 return
@@ -644,14 +676,12 @@ class Robot:
         """
         if self._command_response_handler_process:
             if not self._command_response_handler_process.is_alive():
-                self.logger.error('Command response handler process has unexpectedly terminated. Disconnecting...')
                 self.Disconnect()
-                raise InvalidStateError
+                raise InvalidStateError('Command response handler process has unexpectedly terminated.')
         if self._monitor_handler_process:
             if not self._monitor_handler_process.is_alive():
-                self.logger.error('Monitor handler process has unexpectedly terminated. Disconnecting...')
                 self.Disconnect()
-                raise InvalidStateError
+                raise InvalidStateError('Command response handler process has unexpectedly terminated.')
 
         return True
 
@@ -692,25 +722,21 @@ class Robot:
             return True
 
         if self._command_socket is not None:
-            self.logger.warning('Existing command connection found, invalid state.')
-            raise InvalidStateError
+            raise InvalidStateError('Cannot connect since existing command socket exists.')
 
         if self._monitor_socket is not None:
-            self.logger.warning('Existing monitor connection found, this should not be possible, closing socket...')
-            raise InvalidStateError
+            raise InvalidStateError('Cannot connect since existing monitor socket exists.')
 
         try:
             self._command_socket = self._connect_socket(self.logger, self._address, COMMAND_PORT)
 
             if self._command_socket is None:
-                self.logger.error('Error creating socket.')
-                raise CommunicationError
+                raise CommunicationError('Command socket could not be created.')
 
             self._monitor_socket = self._connect_socket(self.logger, self._address, MONITOR_PORT)
 
             if self._monitor_socket is None:
-                self.logger.error('Error creating socket.')
-                raise CommunicationError
+                raise CommunicationError('Monitor socket could not be created.')
 
         except:
             # Clean up processes and connections on error.
@@ -718,6 +744,32 @@ class Robot:
             return False
 
         return True
+
+    def _launch_process(self, *, target, args):
+        """Establish the processes responsible for reading/sending messages using the sockets.
+
+        Parameters
+        ----------
+        func : function handle
+            Function to run using new process.
+        args : argument list
+            Arguments to be passed to func.
+
+        Return
+        ------
+        process handle
+            Handle for newly-launched process.
+
+        """
+        # We use the _deactivate_on_exception function which wraps func around try...except and disconnects on error.
+        # The first argument is the actual function to be executed, the second is the command socket.
+        process = mp.Process(target=self._deactivate_on_exception, args=(
+            target,
+            self._command_socket,
+            *args,
+        ))
+        process.start()
+        return process
 
     def _establish_socket_processes(self, offline_mode=False):
         """Establish the processes responsible for reading/sending messages using the sockets.
@@ -737,29 +789,17 @@ class Robot:
             return True
 
         try:
-            # Create tx process for command socket communication.
-            self._command_rx_process = mp.Process(target=self._handle_socket_rx,
-                                                  args=(
-                                                      self._command_socket,
-                                                      self._command_rx_queue,
-                                                  ))
-            self._command_rx_process.start()
-
             # Create rx process for command socket communication.
-            self._command_tx_process = mp.Process(target=self._handle_socket_tx,
-                                                  args=(
-                                                      self._command_socket,
-                                                      self._command_tx_queue,
-                                                  ))
-            self._command_tx_process.start()
+            self._command_rx_process = self._launch_process(target=self._handle_socket_rx,
+                                                            args=(self._command_socket, self._command_rx_queue))
+
+            # Create tx process for command socket communication.
+            self._command_tx_process = self._launch_process(target=self._handle_socket_tx,
+                                                            args=(self._command_socket, self._command_tx_queue))
 
             # Create rx processes for monitor socket communication.
-            self._monitor_rx_process = mp.Process(target=self._handle_socket_rx,
-                                                  args=(
-                                                      self._monitor_socket,
-                                                      self._monitor_rx_queue,
-                                                  ))
-            self._monitor_rx_process.start()
+            self._monitor_rx_process = self._launch_process(target=self._handle_socket_rx,
+                                                            args=(self._monitor_socket, self._monitor_rx_queue))
 
         except:
             # Clean up processes and connections on error.
@@ -791,11 +831,10 @@ class Robot:
             self.Disconnect()
             return False
 
-        self._command_response_handler_process = mp.Process(target=self._command_response_handler,
-                                                            args=(self._command_rx_queue, self._robot_state,
-                                                                  self._user_checkpoints, self._internal_checkpoints,
-                                                                  self._events, self._main_lock, self.logger))
-        self._command_response_handler_process.start()
+        self._command_response_handler_process = self._launch_process(
+            target=self._command_response_handler,
+            args=(self._command_rx_queue, self._robot_state, self._user_checkpoints, self._internal_checkpoints,
+                  self._events, self._main_lock, self.logger))
         return True
 
     def _initialize_monitoring_connection(self):
@@ -808,10 +847,9 @@ class Robot:
 
         """
 
-        self._monitor_handler_process = mp.Process(target=self._monitor_handler,
-                                                   args=(self._monitor_rx_queue, self._robot_state, self._events,
-                                                         self._main_lock))
-        self._monitor_handler_process.start()
+        self._monitor_handler_process = self._launch_process(target=self._monitor_handler,
+                                                             args=(self._monitor_rx_queue, self._robot_state,
+                                                                   self._events, self._main_lock))
 
         return True
 
@@ -974,6 +1012,7 @@ class Robot:
 
             return True
 
+    @disconnect_on_exception
     def ActivateRobot(self):
         """Activate the robot.
 
@@ -985,17 +1024,21 @@ class Robot:
         if self._enable_synchronous_mode:
             self.WaitActivated()
 
+    @disconnect_on_exception
     def Home(self):
         """Home the robot.
 
         """
         with self._main_lock:
             self._check_monitor_processes()
+            if not self._events.OnRobotActivated.is_set():
+                raise InvalidStateError('Robot must be activated before homing.')
             self._send_command('Home')
 
         if self._enable_synchronous_mode:
             self.WaitHomed()
 
+    @disconnect_on_exception
     def ActivateAndHome(self):
         """Utility function that combines activate and home.
 
@@ -1003,6 +1046,7 @@ class Robot:
         self.ActivateRobot()
         self.Home()
 
+    @disconnect_on_exception
     def PauseMotion(self):
         """Immediately pause robot motion.
 
@@ -1014,6 +1058,7 @@ class Robot:
         if self._enable_synchronous_mode:
             self._events.OnRobotMotionPaused.wait()
 
+    @disconnect_on_exception
     def ResumeMotion(self):
         """Un-pause robot motion.
 
@@ -1025,6 +1070,7 @@ class Robot:
         if self._enable_synchronous_mode:
             self.WaitMotionResumed()
 
+    @disconnect_on_exception
     def DeactivateRobot(self):
         """Deactivate the robot.
 
@@ -1036,6 +1082,7 @@ class Robot:
         if self._enable_synchronous_mode:
             self.WaitDeactivated()
 
+    @disconnect_on_exception
     def ClearMotion(self):
         """Clear the motion queue, includes implicit PauseMotion command.
 
@@ -1055,6 +1102,8 @@ class Robot:
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
 
         """
+        self.logger.debug('Disconnecting from the robot.')
+
         # Don't use the normal DeactivateRobot call to avoid checking monitor processes, in case robot is in bad state.
         self._send_command('DeactivateRobot')
 
@@ -1093,6 +1142,7 @@ class Robot:
             self._events.OnRobotDisconnected.set()
             self._events.OnRobotConnected.clear()
 
+    @disconnect_on_exception
     def GetJoints(self):
         """Returns the current joint positions of the robot.
 
@@ -1106,6 +1156,7 @@ class Robot:
             self._check_monitor_processes()
             return self._robot_state.joint_positions[:]
 
+    @disconnect_on_exception
     def GetEndEffectorPose(self):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
@@ -1119,6 +1170,7 @@ class Robot:
             self._check_monitor_processes()
             return self._robot_state.end_effector_pose[:]
 
+    @disconnect_on_exception
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
         """Moves joints to desired positions.
 
@@ -1130,6 +1182,9 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
+            if not self._events.OnRobotHomed.is_set():
+                raise InvalidStateError('MoveJoints require robot to be homed.')
+
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
             self._events.OnMotionCleared.clear()
             if self._enable_synchronous_mode:
@@ -1138,6 +1193,7 @@ class Robot:
         if self._enable_synchronous_mode:
             checkpoint.wait()
 
+    @disconnect_on_exception
     def SetCheckpoint(self, n):
         """Set checkpoint with desired id.
 
@@ -1157,6 +1213,7 @@ class Robot:
             assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n)
 
+    @disconnect_on_exception
     def ExpectExternalCheckpoint(self, n):
         """Expect the robot to receive a checkpoint with given id (e.g. from saved program).
 
@@ -1176,6 +1233,7 @@ class Robot:
             assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n, send_to_robot=False)
 
+    @disconnect_on_exception
     def WaitForAnyCheckpoint(self, timeout=None):
         """Pause program execution until any checkpoint has been received from the robot.
 
@@ -1199,6 +1257,7 @@ class Robot:
 
         return event.wait(timeout=timeout)
 
+    @disconnect_on_exception
     def WaitConnected(self, timeout=None):
         """Pause program execution until robot is disconnected.
 
@@ -1215,6 +1274,7 @@ class Robot:
         """
         return self._events.OnRobotConnected.wait(timeout=timeout)
 
+    @disconnect_on_exception
     def WaitDisconnected(self, timeout=None):
         """Pause program execution until the robot is disconnected.
 
@@ -1231,6 +1291,7 @@ class Robot:
         """
         return self._events.OnRobotDisconnected.wait(timeout=timeout)
 
+    @disconnect_on_exception
     def WaitActivated(self, timeout=None):
         """Pause program execution until the robot is activated.
 
@@ -1247,6 +1308,7 @@ class Robot:
         """
         return self._events.OnRobotActivated.wait(timeout=timeout)
 
+    @disconnect_on_exception
     def WaitDeactivated(self, timeout=None):
         """Pause program execution until the robot is deactivated.
 
@@ -1263,6 +1325,7 @@ class Robot:
         """
         return self._events.OnRobotDeactivated.wait(timeout=timeout)
 
+    @disconnect_on_exception
     def WaitHomed(self, timeout=None):
         """Pause program execution until the robot is homed.
 
@@ -1279,6 +1342,7 @@ class Robot:
         """
         return self._events.OnRobotHomed.wait(timeout=timeout)
 
+    @disconnect_on_exception
     def WaitMotionResumed(self, timeout=None):
         """Pause program execution until the robot motion is resumed.
 
@@ -1295,6 +1359,7 @@ class Robot:
         """
         return self._events.OnRobotMotionResumed.wait(timeout=timeout)
 
+    @disconnect_on_exception
     def WaitMotionCleared(self, timeout=None):
         """Pause program execution until the motion queue is cleared.
 
