@@ -24,6 +24,10 @@ class CommunicationError(Exception):
     pass
 
 
+class DisconnectError(Exception):
+    pass
+
+
 class Checkpoint:
     """Class representing a checkpoint object, which can be used to wait.
 
@@ -221,7 +225,10 @@ def disconnect_on_exception(func):
         except BaseException as e:
             if self._disconnect_on_exception:
                 self.Disconnect()
-            raise e
+                raise DisconnectError('Automatically disconnected as a result of exception, '
+                                      'set \'disconnect_on_exception\' to False to disable.') from e
+            else:
+                raise e
 
     return wrap
 
@@ -277,7 +284,11 @@ class Robot:
         If enabled, commands block until action is completed.
 
     """
-    def __init__(self, address=MX_DEFAULT_ROBOT_IP, enable_synchronous_mode=False, disconnect_on_exception=True):
+    def __init__(self,
+                 address=MX_DEFAULT_ROBOT_IP,
+                 enable_synchronous_mode=False,
+                 disconnect_on_exception=True,
+                 offline_mode=False):
         """Constructor for an instance of the Controller class.
 
         Parameters
@@ -286,6 +297,10 @@ class Robot:
             The IP address associated to the Mecademic Robot.
         enable_synchronous_mode : bool
             If true, each command will wait until previous is done executing.
+        disconnect_on_exception : bool
+            If true, will attempt to disconnect from the robot on exception from api call.
+        offline_mode : bool
+            If true, will not check child processes before executing api calls.
 
         """
 
@@ -323,6 +338,7 @@ class Robot:
 
         self._enable_synchronous_mode = enable_synchronous_mode
         self._disconnect_on_exception = disconnect_on_exception
+        self._offline_mode = offline_mode
         self.logger = logging.getLogger(__name__)
 
     #####################################################################################
@@ -674,14 +690,29 @@ class Robot:
         """Check that the processes which handle robot messages are alive. Attempt to disconnect from the robot if not.
 
         """
-        if self._command_response_handler_process:
-            if not self._command_response_handler_process.is_alive():
-                self.Disconnect()
-                raise InvalidStateError('Command response handler process has unexpectedly terminated.')
-        if self._monitor_handler_process:
-            if not self._monitor_handler_process.is_alive():
-                self.Disconnect()
-                raise InvalidStateError('Command response handler process has unexpectedly terminated.')
+        if self._offline_mode:
+            return True
+
+        if not (self._command_response_handler_process and self._command_response_handler_process.is_alive()):
+            self.Disconnect()
+            raise InvalidStateError('Command response handler process has unexpectedly terminated.')
+        if not (self._monitor_handler_process and self._monitor_handler_process.is_alive()):
+            self.Disconnect()
+            raise InvalidStateError('Command response handler process has unexpectedly terminated.')
+
+        if not (self._command_rx_process and self._command_rx_process.is_alive()):
+            self.Disconnect()
+            raise InvalidStateError('Command rx process has unexpectedly terminated.')
+        if not (self._monitor_rx_process and self._monitor_rx_process.is_alive()):
+            self.Disconnect()
+            raise InvalidStateError('Monitor rx process has unexpectedly termianted.')
+
+        # If tx process is down, attempt to directly send deactivate command to the robot.
+        if not (self._command_tx_process and self._command_tx_process.is_alive()):
+            self._command_socket.sendall(b'ClearMotion\0')
+            self._command_socket.sendall(b'DeactivateRobot\0')
+            self.Disconnect()
+            raise InvalidStateError('Command tx process has unexpectedly terminated.')
 
         return True
 
@@ -704,13 +735,8 @@ class Robot:
         # Put command into tx queue.
         self._command_tx_queue.put(command)
 
-    def _establish_socket_connections(self, offline_mode=False):
+    def _establish_socket_connections(self):
         """Establish the socket connections to the robot.
-
-        Parameters
-        ----------
-        offline_mode : bool
-            Immediately return true if enabled.
 
         Return
         ------
@@ -718,7 +744,7 @@ class Robot:
             True if both all connections are successful.
 
         """
-        if offline_mode:
+        if self._offline_mode:
             return True
 
         if self._command_socket is not None:
@@ -771,13 +797,8 @@ class Robot:
         process.start()
         return process
 
-    def _establish_socket_processes(self, offline_mode=False):
+    def _establish_socket_processes(self):
         """Establish the processes responsible for reading/sending messages using the sockets.
-
-        Parameters
-        ----------
-        offline_mode : bool
-            Immediately return true if enabled.
 
         Return
         ------
@@ -785,7 +806,7 @@ class Robot:
             True if both all processes are successfully launched.
 
         """
-        if offline_mode:
+        if self._offline_mode:
             return True
 
         try:
@@ -983,13 +1004,8 @@ class Robot:
     # Public methods = Pascal case is used to maintain consistency with text and c++ API.
     #####################################################################################
 
-    def Connect(self, offline_mode=False):
+    def Connect(self):
         """Attempt to connect to a physical Mecademic Robot.
-
-        Parameters
-        ----------
-        offline_mode : bool
-            Immediately return true if enabled.
 
         Returns
         -------
@@ -998,8 +1014,8 @@ class Robot:
 
         """
         with self._main_lock:
-            self._establish_socket_connections(offline_mode=offline_mode)
-            self._establish_socket_processes(offline_mode=offline_mode)
+            self._establish_socket_connections()
+            self._establish_socket_processes()
             self._initialize_command_connection()
             self._initialize_monitoring_connection()
 

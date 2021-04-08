@@ -99,19 +99,19 @@ def test_successful_connection_split_response():
 
 
 def test_sequential_connections():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3001, ''))
     with pytest.raises(Exception):
-        robot.Connect(offline_mode=True)
+        robot.Connect()
 
     robot._command_rx_queue.put(mdr.Message(99999, ''))
     with pytest.raises(Exception):
-        robot.Connect(offline_mode=True)
+        robot.Connect()
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
     robot.Disconnect()
 
 
@@ -119,12 +119,12 @@ def test_monitoring_connection():
     # Use this as the seed array, add the response code to each element to guarantee uniqueness.
     fake_array = [1, 2, 3, 4, 5, 6, 7]
 
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
 
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
 
     # Send monitor messages.
     robot._monitor_rx_queue.put(mdr.Message(2026, ','.join([str(x + 2026) for x in fake_array[:-1]])))
@@ -181,11 +181,11 @@ def test_monitoring_connection():
 
 
 def test_internal_checkpoints():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
 
     # Validate internal checkpoint waiting.
     checkpoint_1 = robot.SetCheckpoint(1)
@@ -203,11 +203,11 @@ def test_internal_checkpoints():
 
 
 def test_external_checkpoints():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
 
     # Validate external checkpoint waiting.
     checkpoint_1 = robot.ExpectExternalCheckpoint(1)
@@ -225,11 +225,11 @@ def test_external_checkpoints():
 
 
 def test_multiple_checkpoints():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
 
     # Validate multiple checkpoints, internal and external.
     checkpoint_1 = robot.SetCheckpoint(1)
@@ -254,11 +254,11 @@ def test_multiple_checkpoints():
 
 
 def test_repeated_checkpoints():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
 
     # Repeated checkpoints are discouraged, but supported.
     checkpoint_1_a = robot.SetCheckpoint(1)
@@ -278,11 +278,11 @@ def test_repeated_checkpoints():
 
 
 def test_special_checkpoints():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
 
     checkpoint_1 = robot.SetCheckpoint(1)
     checkpoint_2 = robot.SetCheckpoint(2)
@@ -296,11 +296,11 @@ def test_special_checkpoints():
 
 
 def test_unaccounted_checkpoints():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
 
     # Send unexpected checkpoint.
     robot._command_rx_queue.put(mdr.Message(3030, '1'))
@@ -311,7 +311,7 @@ def test_unaccounted_checkpoints():
 
 
 def test_events():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None
 
     assert not robot.WaitActivated(timeout=0)
@@ -320,7 +320,7 @@ def test_events():
     assert robot.WaitDisconnected()
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
-    assert robot.Connect(offline_mode=True)
+    assert robot.Connect()
 
     assert robot.WaitConnected()
     assert not robot.WaitDisconnected(timeout=0)
@@ -365,3 +365,26 @@ def test_events():
     assert not robot.WaitDisconnected(timeout=0)
     robot.Disconnect()
     assert robot.WaitDisconnected()
+
+
+def test_disconnect_on_exception():
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=True)
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect()
+
+    with pytest.raises(mdr.DisconnectError):
+        robot.Home()
+
+    # Test that disabling the feature avoids the disconnect.
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect()
+
+    with pytest.raises(mdr.InvalidStateError):
+        robot.Home()
+
+    robot.Disconnect()
