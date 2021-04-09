@@ -216,8 +216,15 @@ class RobotEvents:
         self.OnRobotMotionResumed.set()
 
 
-# Decorator to call disconnect if an exception is raised. Needs to be declared outside of class.
 def disconnect_on_exception(func):
+    """Decorator to call disconnect if an exception is raised. Needs to be declared outside of class.
+
+    Attributes
+    ----------
+    func : function object
+        Function to wrap.
+
+    """
     @functools.wraps(func)
     def wrap(self, *args, **kwargs):
         try:
