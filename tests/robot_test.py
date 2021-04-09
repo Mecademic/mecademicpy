@@ -342,7 +342,7 @@ def test_events():
     robot.PauseMotion()
     robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,1,0,0'))
     # Wait until pause is successfully set.
-    robot._events.OnRobotMotionPaused.wait()
+    robot._events.on_robot_motion_paused.wait()
 
     assert not robot.WaitMotionResumed(timeout=0)
     robot.ResumeMotion()

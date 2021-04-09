@@ -44,15 +44,15 @@ class Checkpoint:
         self.event = event
 
     def __repr__(self):
-        return "Checkpoint with id={}, is set={}".format(self.id, self.event.is_set())
+        return "Checkpoint with id={}, is reached={}".format(self.id, self.event.is_set())
 
     def wait(self, timeout=None):
         """Pause program execution this checkpoint is received from the robot.
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -137,7 +137,7 @@ class RobotState:
     pause_motion_status : shared memory boolean
         True if motion is currently paused.
     end_of_block_status : shared memory boolean
-        True if robot is idle and motion queue is empty.
+        True if robot is not moving and motion queue is empty.
     end_of_movement_status : shared memory boolean
         True if robot is idle.
 
@@ -183,37 +183,37 @@ class RobotEvents:
 
     Attributes
     ----------
-    OnRobotConnected : event
+    on_robot_connected : event
         Set if robot is connected.
-    OnRobotDisconnected : event
+    on_robot_disconnected : event
         Set if robot is disconnected.
-    OnRobotActivated : event
+    on_robot_activated : event
         Set if robot is activated.
-    OnRobotDeactivated : event
+    on_robot_deactivated : event
         Set if robot is deactivated.
-    OnRobotHomed : event
+    on_robot_homed : event
         Set if robot is homed.
-    OnRobotMotionPaused : event
+    on_robot_motion_paused : event
         Set if robot motion is paused.
-    OnRobotMotionResumed : event
+    on_robot_motion_resumed : event
         Set if robot motion is not paused.
-    OnMotionCleared : event
+    on_robot_motion_cleared : event
         Set if motion queue has been cleared.
 
     """
     def __init__(self):
-        self.OnRobotConnected = mp.Event()
-        self.OnRobotDisconnected = mp.Event()
-        self.OnRobotActivated = mp.Event()
-        self.OnRobotDeactivated = mp.Event()
-        self.OnRobotHomed = mp.Event()
-        self.OnRobotMotionPaused = mp.Event()
-        self.OnRobotMotionResumed = mp.Event()
-        self.OnMotionCleared = mp.Event()
+        self.on_robot_connected = mp.Event()
+        self.on_robot_disconnected = mp.Event()
+        self.on_robot_activated = mp.Event()
+        self.on_robot_deactivated = mp.Event()
+        self.on_robot_homed = mp.Event()
+        self.on_robot_motion_paused = mp.Event()
+        self.on_robot_motion_resumed = mp.Event()
+        self.on_robot_motion_cleared = mp.Event()
 
-        self.OnRobotDisconnected.set()
-        self.OnRobotDeactivated.set()
-        self.OnRobotMotionResumed.set()
+        self.on_robot_disconnected.set()
+        self.on_robot_deactivated.set()
+        self.on_robot_motion_resumed.set()
 
 
 def disconnect_on_exception(func):
@@ -513,7 +513,7 @@ class Robot:
 
             with main_lock:
                 if response.id == MX_ST_CLEAR_MOTION:
-                    events.OnMotionCleared.set()
+                    events.on_robot_motion_cleared.set()
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events)
@@ -560,18 +560,18 @@ class Robot:
 
         if robot_state.activation_state.value != status_flags[0]:
             if status_flags[0]:
-                events.OnRobotActivated.set()
-                events.OnRobotDeactivated.clear()
+                events.on_robot_activated.set()
+                events.on_robot_deactivated.clear()
             else:
-                events.OnRobotDeactivated.set()
-                events.OnRobotActivated.clear()
+                events.on_robot_deactivated.set()
+                events.on_robot_activated.clear()
             robot_state.activation_state.value = status_flags[0]
 
         if robot_state.homing_state.value != status_flags[1]:
             if status_flags[1]:
-                events.OnRobotHomed.set()
+                events.on_robot_homed.set()
             else:
-                events.OnRobotHomed.clear()
+                events.on_robot_homed.clear()
             robot_state.homing_state.value = status_flags[1]
 
         robot_state.simulation_mode.value = status_flags[2]
@@ -579,11 +579,11 @@ class Robot:
 
         if robot_state.pause_motion_status != status_flags[4]:
             if status_flags[4]:
-                events.OnRobotMotionPaused.set()
-                events.OnRobotMotionResumed.clear()
+                events.on_robot_motion_paused.set()
+                events.on_robot_motion_resumed.clear()
             else:
-                events.OnRobotMotionResumed.set()
-                events.OnRobotMotionPaused.clear()
+                events.on_robot_motion_resumed.set()
+                events.on_robot_motion_paused.clear()
             robot_state.pause_motion_status = status_flags[4]
 
         robot_state.end_of_block_status = status_flags[5]
@@ -1003,7 +1003,7 @@ class Robot:
 
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
-                self._events.OnMotionCleared.clear()
+                self._events.on_robot_motion_cleared.clear()
 
             return Checkpoint(n, event)
 
@@ -1026,8 +1026,8 @@ class Robot:
             self._initialize_command_connection()
             self._initialize_monitoring_connection()
 
-            self._events.OnRobotConnected.set()
-            self._events.OnRobotDisconnected.clear()
+            self._events.on_robot_connected.set()
+            self._events.on_robot_disconnected.clear()
 
             return True
 
@@ -1050,7 +1050,7 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
-            if not self._events.OnRobotActivated.is_set():
+            if not self._events.on_robot_activated.is_set():
                 raise InvalidStateError('Robot must be activated before homing.')
             self._send_command('Home')
 
@@ -1075,7 +1075,7 @@ class Robot:
             self._send_command('PauseMotion')
 
         if self._enable_synchronous_mode:
-            self._events.OnRobotMotionPaused.wait()
+            self._events.on_robot_motion_paused.wait()
 
     @disconnect_on_exception
     def ResumeMotion(self):
@@ -1158,8 +1158,8 @@ class Robot:
                     self.logger.error('Error closing monitor socket. ' + str(e))
                 self._monitor_socket = None
 
-            self._events.OnRobotDisconnected.set()
-            self._events.OnRobotConnected.clear()
+            self._events.on_robot_disconnected.set()
+            self._events.on_robot_connected.clear()
 
     @disconnect_on_exception
     def GetJoints(self):
@@ -1201,11 +1201,11 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
-            if not self._events.OnRobotHomed.is_set():
+            if not self._events.on_robot_homed.is_set():
                 raise InvalidStateError('MoveJoints require robot to be homed.')
 
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
-            self._events.OnMotionCleared.clear()
+            self._events.on_robot_motion_cleared.clear()
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
 
@@ -1258,8 +1258,8 @@ class Robot:
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -1282,8 +1282,8 @@ class Robot:
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -1291,7 +1291,7 @@ class Robot:
             True if wait was successful, false otherwise.
 
         """
-        return self._events.OnRobotConnected.wait(timeout=timeout)
+        return self._events.on_robot_connected.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitDisconnected(self, timeout=None):
@@ -1299,8 +1299,8 @@ class Robot:
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -1308,7 +1308,7 @@ class Robot:
             True if wait was successful, false otherwise.
 
         """
-        return self._events.OnRobotDisconnected.wait(timeout=timeout)
+        return self._events.on_robot_disconnected.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitActivated(self, timeout=None):
@@ -1316,8 +1316,8 @@ class Robot:
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -1325,7 +1325,7 @@ class Robot:
             True if wait was successful, false otherwise.
 
         """
-        return self._events.OnRobotActivated.wait(timeout=timeout)
+        return self._events.on_robot_activated.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitDeactivated(self, timeout=None):
@@ -1333,8 +1333,8 @@ class Robot:
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -1342,7 +1342,7 @@ class Robot:
             True if wait was successful, false otherwise.
 
         """
-        return self._events.OnRobotDeactivated.wait(timeout=timeout)
+        return self._events.on_robot_deactivated.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitHomed(self, timeout=None):
@@ -1350,8 +1350,8 @@ class Robot:
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -1359,7 +1359,7 @@ class Robot:
             True if wait was successful, false otherwise.
 
         """
-        return self._events.OnRobotHomed.wait(timeout=timeout)
+        return self._events.on_robot_homed.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitMotionResumed(self, timeout=None):
@@ -1367,8 +1367,8 @@ class Robot:
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -1376,7 +1376,7 @@ class Robot:
             True if wait was successful, false otherwise.
 
         """
-        return self._events.OnRobotMotionResumed.wait(timeout=timeout)
+        return self._events.on_robot_motion_resumed.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitMotionCleared(self, timeout=None):
@@ -1384,8 +1384,8 @@ class Robot:
 
         Parameters
         ----------
-        timeout : int
-            Maximum time to spend waiting for the checkpoint.
+        timeout : float
+            Maximum time to spend waiting for the checkpoint (in seconds).
 
         Return
         ------
@@ -1393,4 +1393,4 @@ class Robot:
             True if wait was successful, false otherwise.
 
         """
-        return self._events.OnMotionCleared.wait(timeout=timeout)
+        return self._events.on_robot_motion_cleared.wait(timeout=timeout)
