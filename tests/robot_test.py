@@ -6,6 +6,7 @@ import socket
 import threading
 import time
 import queue
+from functools import partial
 
 import pytest
 
@@ -354,6 +355,14 @@ def test_events():
     robot._command_rx_queue.put(mdr.Message(2044, ''))
     assert robot.WaitMotionCleared(timeout=1)
 
+    # Robot enters error state.
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,1,0,0,0'))
+    assert robot._robot_events.on_error.wait(timeout=1)
+
+    robot.ResetError()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+    assert robot._robot_events.on_error_reset.wait(timeout=1)
+
     robot.DeactivateRobot()
     robot._monitor_rx_queue.put(mdr.Message(2007, '0,0,0,0,0,0,0'))
 
@@ -388,3 +397,120 @@ def test_disconnect_on_exception():
         robot.Home()
 
     robot.Disconnect()
+
+
+def test_callbacks_in_thread():
+    robot = mdr.Robot(TEST_IP, offline_mode=True, enable_synchronous_mode=True)
+    assert robot is not None
+
+    # Initialize object which will contain all user-defined callback functions.
+    callbacks = mdr.RobotCallbacks()
+
+    # Create list to store names of callbacks which have been called.
+    called_callbacks = []
+
+    # Function to record which callbacks have been called.
+    def test_callback(name, output_array):
+        output_array.append(name)
+
+    # For each available callback 'slot', assign the 'test_callback' function, but with the name of the callback slot.
+    for attr in callbacks.__dict__:
+        callbacks.__dict__[attr] = partial(test_callback, name=attr, output_array=called_callbacks)
+
+    # Register all callbacks.
+    robot.RegisterCallbacks(callbacks, run_callbacks_in_separate_thread=True)
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect()
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,0,0,0,0,0,0'))
+    robot.ActivateRobot()
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+    robot.Home()
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,1,0,0'))
+    robot.PauseMotion()
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+    robot.ResumeMotion()
+
+    robot._command_rx_queue.put(mdr.Message(2044, ''))
+    robot.ClearMotion()
+
+    # # Robot enters error state.
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,1,0,0,0'))
+    # # robot.ClearError()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '0,0,0,0,0,0,0'))
+    robot.DeactivateRobot()
+
+    robot.Disconnect()
+    robot.UnregisterCallbacks()
+
+    # Check that all callbacks have been called.
+    for attr in callbacks.__dict__:
+        assert attr in called_callbacks
+
+    assert robot._callback_thread == None
+
+
+def test_run_callbacks():
+    robot = mdr.Robot(TEST_IP, offline_mode=True, enable_synchronous_mode=True)
+    assert robot is not None
+
+    # Initialize object which will contain all user-defined callback functions.
+    callbacks = mdr.RobotCallbacks()
+
+    # Create list to store names of callbacks which have been called.
+    called_callbacks = []
+
+    # Function to record which callbacks have been called.
+    def test_callback(name, output_array):
+        output_array.append(name)
+
+    # For each available callback 'slot', assign the 'test_callback' function, but with the name of the callback slot.
+    for attr in callbacks.__dict__:
+        callbacks.__dict__[attr] = partial(test_callback, name=attr, output_array=called_callbacks)
+
+    # Register all callbacks.
+    robot.RegisterCallbacks(callbacks, run_callbacks_in_separate_thread=False)
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect()
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,0,0,0,0,0,0'))
+    robot.ActivateRobot()
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+    robot.Home()
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,1,0,0'))
+    robot.PauseMotion()
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+    robot.ResumeMotion()
+
+    robot._command_rx_queue.put(mdr.Message(2044, ''))
+    robot.ClearMotion()
+
+    # # Robot enters error state.
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,1,0,0,0'))
+    # # robot.ClearError()
+    robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+
+    robot._monitor_rx_queue.put(mdr.Message(2007, '0,0,0,0,0,0,0'))
+    robot.DeactivateRobot()
+
+    robot.Disconnect()
+
+    robot.RunCallbacks()
+
+    robot.UnregisterCallbacks()
+
+    # Check that all callbacks have been called.
+    for attr in callbacks.__dict__:
+        assert attr in called_callbacks
+
+    assert robot._callback_thread == None
