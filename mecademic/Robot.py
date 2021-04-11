@@ -83,6 +83,25 @@ class Message:
         return "Message with id={}, data={}".format(self.id, self.data)
 
 
+class CallbackTag:
+    """Class for storing a callback name and associated data.
+
+    Attributes
+    ----------
+    callback_name : string
+        The name of the callback.
+    data : string
+        The associated data.
+
+    """
+    def __init__(self, callback_name, data=None):
+        self.callback_name = callback_name
+        self.data = data
+
+    def __repr__(self):
+        return "Callback name: {}, data: {}".format(self.callback_name, self.data)
+
+
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
 
@@ -223,6 +242,7 @@ class RobotEvents:
 
         self.on_disconnected.set()
         self.on_deactivated.set()
+        self.on_error_reset.set()
         self.on_motion_resumed.set()
 
 
@@ -274,7 +294,7 @@ class RobotCallbacks:
         self.on_motion_paused = None
         self.on_motion_cleared = None
         self.on_motion_resumed = None
-        # self.on_checkpoint_reached = None
+        self.on_checkpoint_reached = None
 
 
 def disconnect_on_exception(func):
@@ -522,7 +542,7 @@ class Robot:
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
-    def _handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger):
+    def _handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger, callback_queue):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.
 
         Parameters
@@ -548,6 +568,8 @@ class Robot:
             if '*' in internal_checkpoints and internal_checkpoints['*']:
                 for event in internal_checkpoints.pop('*'):
                     event.set()
+            # Enque the on_checkpoint_reached callback.
+            callback_queue.put(CallbackTag('on_checkpoint_reached', checkpoint_id))
 
         # Check internal checkpoints.
         elif checkpoint_id in internal_checkpoints and internal_checkpoints[checkpoint_id]:
@@ -593,17 +615,18 @@ class Robot:
 
             with main_lock:
                 if response.id == MX_ST_CLEAR_MOTION:
-                    callback_queue.put('on_motion_cleared')
+                    callback_queue.put(CallbackTag('on_motion_cleared'))
                     events.on_motion_cleared.set()
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
-                    callback_queue.put('on_status_activated')
+                    callback_queue.put(CallbackTag('on_status_activated'))
                     events.on_status_activated.set()
 
                 # Handle checkpoints.
                 elif response.id == MX_ST_CHECKPOINT_REACHED:
-                    Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger)
+                    Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger,
+                                                      callback_queue)
 
     @staticmethod
     def _string_to_floats(input_string):
@@ -646,18 +669,18 @@ class Robot:
 
         if robot_state.activation_state.value != status_flags[0]:
             if status_flags[0]:
-                callback_queue.put('on_activated')
+                callback_queue.put(CallbackTag('on_activated'))
                 events.on_activated.set()
                 events.on_deactivated.clear()
             else:
-                callback_queue.put('on_deactivated')
+                callback_queue.put(CallbackTag('on_deactivated'))
                 events.on_deactivated.set()
                 events.on_activated.clear()
             robot_state.activation_state.value = status_flags[0]
 
         if robot_state.homing_state.value != status_flags[1]:
             if status_flags[1]:
-                callback_queue.put('on_homed')
+                callback_queue.put(CallbackTag('on_homed'))
                 events.on_homed.set()
             else:
                 events.on_homed.clear()
@@ -667,22 +690,22 @@ class Robot:
 
         if robot_state.error_status.value != status_flags[3]:
             if status_flags[3]:
-                callback_queue.put('on_error')
+                callback_queue.put(CallbackTag('on_error'))
                 events.on_error.set()
                 events.on_error_reset.clear()
             else:
                 events.on_error.clear()
-                callback_queue.put('on_error_reset')
+                callback_queue.put(CallbackTag('on_error_reset'))
                 events.on_error_reset.set()
             robot_state.error_status.value = status_flags[3]
 
         if robot_state.pause_motion_status.value != status_flags[4]:
             if status_flags[4]:
-                callback_queue.put('on_motion_paused')
+                callback_queue.put(CallbackTag('on_motion_paused'))
                 events.on_motion_paused.set()
                 events.on_motion_resumed.clear()
             else:
-                callback_queue.put('on_motion_resumed')
+                callback_queue.put(CallbackTag('on_motion_resumed'))
                 events.on_motion_resumed.set()
                 events.on_motion_paused.clear()
             robot_state.pause_motion_status.value = status_flags[4]
@@ -725,7 +748,7 @@ class Robot:
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
-                    callback_queue.put('on_status_updated')
+                    callback_queue.put(CallbackTag('on_status_updated'))
                     events.on_status_updated.set()
 
                 elif response.id == MX_ST_RT_NC_JOINT_POS:
@@ -810,17 +833,20 @@ class Robot:
             If true, will wait on elements from queue. Else will terminate on empty queue.
         """
         while True:
-            element = callback_queue.get(block=block_on_empty)
-            if element == TERMINATE_PROCESS:
-                return
-            else:
-                func = callbacks.__dict__[element]
-                if func != None:
-                    func()
-
             # If we are not blocking on empty, return if empty.
             if not block_on_empty and callback_queue.qsize() == 0:
                 return
+
+            item = callback_queue.get(block=block_on_empty)
+            if item == TERMINATE_PROCESS:
+                return
+            else:
+                func = callbacks.__dict__[item.callback_name]
+                if func != None:
+                    if item.data != None:
+                        func(item.data)
+                    else:
+                        func()
 
     #####################################################################################
     # Private methods.
@@ -1160,7 +1186,7 @@ class Robot:
             self._initialize_command_connection()
             self._initialize_monitoring_connection()
 
-            self._callback_queue.put('on_connected')
+            self._callback_queue.put(CallbackTag('on_connected'))
             self._robot_events.on_connected.set()
             self._robot_events.on_disconnected.clear()
 
@@ -1293,7 +1319,7 @@ class Robot:
                     self.logger.error('Error closing monitor socket. ' + str(e))
                 self._monitor_socket = None
 
-            self._callback_queue.put('on_disconnected')
+            self._callback_queue.put(CallbackTag('on_disconnected'))
             self._robot_events.on_disconnected.set()
             self._robot_events.on_connected.clear()
 
