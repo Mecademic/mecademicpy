@@ -219,6 +219,10 @@ class RobotEvents:
         Set if robot is in error.
     on_error_reset : event
         Set if robot error has been reset.
+    on_p_stop : event
+        Set if robot receives pstop.
+    on_pstop_reset : event
+        Set if pstop is reset.
     on_motion_paused : event
         Set if robot motion is paused.
     on_motion_resumed : event
@@ -236,6 +240,8 @@ class RobotEvents:
         self.on_homed = mp.Event()
         self.on_error = mp.Event()
         self.on_error_reset = mp.Event()
+        self.on_p_stop = mp.Event()
+        self.on_p_stop_reset = mp.Event()
         self.on_motion_paused = mp.Event()
         self.on_motion_resumed = mp.Event()
         self.on_motion_cleared = mp.Event()
@@ -243,6 +249,7 @@ class RobotEvents:
         self.on_disconnected.set()
         self.on_deactivated.set()
         self.on_error_reset.set()
+        self.on_p_stop_reset.set()
         self.on_motion_resumed.set()
 
 
@@ -289,8 +296,8 @@ class RobotCallbacks:
         self.on_homed = None
         self.on_error = None
         self.on_error_reset = None
-        # self.on_p_stop = None
-        # self.on_p_stop_reset = None
+        self.on_p_stop = None
+        self.on_p_stop_reset = None
         self.on_motion_paused = None
         self.on_motion_cleared = None
         self.on_motion_resumed = None
@@ -464,8 +471,9 @@ class Robot:
         try:
             return func(*args, **kwargs)
         except BaseException as e:
-            command_socket.sendall(b'ClearMotion\0')
-            command_socket.sendall(b'DeactivateRobot\0')
+            if command_socket:
+                command_socket.sendall(b'ClearMotion\0')
+                command_socket.sendall(b'DeactivateRobot\0')
             raise e
 
     @staticmethod
@@ -609,6 +617,8 @@ class Robot:
             # Wait for a response to be available from the queue.
             response = rx_queue.get(block=True)
 
+            print(response)
+
             # Terminate process if requested.
             if response == TERMINATE_PROCESS:
                 return
@@ -620,13 +630,22 @@ class Robot:
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
-                    callback_queue.put(CallbackTag('on_status_activated'))
+                    callback_queue.put(CallbackTag('on_status_updated'))
                     events.on_status_activated.set()
 
-                # Handle checkpoints.
                 elif response.id == MX_ST_CHECKPOINT_REACHED:
                     Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger,
                                                       callback_queue)
+
+                elif response.id == MX_ST_PSTOP:
+                    if bool(int(response.data)):
+                        callback_queue.put(CallbackTag('on_p_stop'))
+                        events.on_p_stop.set()
+                        events.on_p_stop_reset.clear()
+                    else:
+                        events.on_p_stop.clear()
+                        callback_queue.put(CallbackTag('on_p_stop_reset'))
+                        events.on_p_stop_reset.set()
 
     @staticmethod
     def _string_to_floats(input_string):
@@ -1364,7 +1383,7 @@ class Robot:
         with self._main_lock:
             self._check_monitor_processes()
             if not self._robot_events.on_homed.is_set():
-                raise InvalidStateError('MoveJoints require robot to be homed.')
+                raise InvalidStateError('This command requires robot to be homed.')
 
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
             self._robot_events.on_motion_cleared.clear()
@@ -1613,3 +1632,36 @@ class Robot:
 
         if self._enable_synchronous_mode:
             self._robot_events.on_error_reset.wait()
+
+    @disconnect_on_exception
+    def ResetPStop(self):
+        """Attempt to reset robot pstop.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('ResetPStop')
+
+        if self._enable_synchronous_mode:
+            self._robot_events.on_p_stop_reset.wait()
+
+    @disconnect_on_exception
+    def Delay(self, t):
+        """Set a delay between motion commands.
+
+        Parameters
+        ----------
+        t : float
+            Desired pause duration in seconds.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            if not self._robot_events.on_homed.is_set():
+                raise InvalidStateError('This command requires robot to be homed.')
+            self._send_command('Delay', [t])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()

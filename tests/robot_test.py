@@ -417,6 +417,7 @@ def test_callbacks():
     for attr in callbacks.__dict__:
         callbacks.__dict__[attr] = partial(test_callback, name=attr)
 
+    # Checkpoint callbacks are different than other callbacks, use different function.
     checkpoint_id = 123
 
     def checkpoint_callback(id):
@@ -450,11 +451,17 @@ def test_callbacks():
         robot._command_rx_queue.put(mdr.Message(2044, ''))
         robot.ClearMotion()
 
-        # # Robot enters error state.
+        # Robot enters error state.
         robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,1,0,0,0'))
 
-        robot.ResetError()
         robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+        robot.ResetError()
+
+        # Robot pstop triggered.
+        robot._command_rx_queue.put(mdr.Message(3032, '1'))
+
+        robot._command_rx_queue.put(mdr.Message(3032, '0'))
+        robot.ResetPStop()
 
         robot._monitor_rx_queue.put(mdr.Message(2007, '0,0,0,0,0,0,0'))
         robot.DeactivateRobot()
