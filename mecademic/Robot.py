@@ -14,15 +14,19 @@ CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 TERMINATE_PROCESS = 'terminate_process'
 
 
-class InvalidStateError(Exception):
+class MecademicException(Exception):
     pass
 
 
-class CommunicationError(Exception):
+class InvalidStateError(MecademicException):
     pass
 
 
-class DisconnectError(Exception):
+class CommunicationError(MecademicException):
+    pass
+
+
+class DisconnectError(MecademicException):
     pass
 
 
@@ -622,13 +626,13 @@ class Robot:
 
             with main_lock:
                 if response.id == MX_ST_CLEAR_MOTION:
-                    callback_queue.put(CallbackTag('on_motion_cleared'))
                     events.on_motion_cleared.set()
+                    callback_queue.put(CallbackTag('on_motion_cleared'))
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
-                    callback_queue.put(CallbackTag('on_status_updated'))
                     events.on_status_activated.set()
+                    callback_queue.put(CallbackTag('on_status_updated'))
 
                 elif response.id == MX_ST_CHECKPOINT_REACHED:
                     Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger,
@@ -636,13 +640,13 @@ class Robot:
 
                 elif response.id == MX_ST_PSTOP:
                     if bool(int(response.data)):
-                        callback_queue.put(CallbackTag('on_p_stop'))
-                        events.on_p_stop.set()
                         events.on_p_stop_reset.clear()
+                        events.on_p_stop.set()
+                        callback_queue.put(CallbackTag('on_p_stop'))
                     else:
                         events.on_p_stop.clear()
-                        callback_queue.put(CallbackTag('on_p_stop_reset'))
                         events.on_p_stop_reset.set()
+                        callback_queue.put(CallbackTag('on_p_stop_reset'))
 
     @staticmethod
     def _string_to_floats(input_string):
@@ -685,19 +689,19 @@ class Robot:
 
         if robot_state.activation_state.value != status_flags[0]:
             if status_flags[0]:
-                callback_queue.put(CallbackTag('on_activated'))
-                events.on_activated.set()
                 events.on_deactivated.clear()
+                events.on_activated.set()
+                callback_queue.put(CallbackTag('on_activated'))
             else:
-                callback_queue.put(CallbackTag('on_deactivated'))
-                events.on_deactivated.set()
                 events.on_activated.clear()
+                events.on_deactivated.set()
+                callback_queue.put(CallbackTag('on_deactivated'))
             robot_state.activation_state.value = status_flags[0]
 
         if robot_state.homing_state.value != status_flags[1]:
             if status_flags[1]:
-                callback_queue.put(CallbackTag('on_homed'))
                 events.on_homed.set()
+                callback_queue.put(CallbackTag('on_homed'))
             else:
                 events.on_homed.clear()
             robot_state.homing_state.value = status_flags[1]
@@ -706,24 +710,24 @@ class Robot:
 
         if robot_state.error_status.value != status_flags[3]:
             if status_flags[3]:
-                callback_queue.put(CallbackTag('on_error'))
-                events.on_error.set()
                 events.on_error_reset.clear()
+                events.on_error.set()
+                callback_queue.put(CallbackTag('on_error'))
             else:
                 events.on_error.clear()
-                callback_queue.put(CallbackTag('on_error_reset'))
                 events.on_error_reset.set()
+                callback_queue.put(CallbackTag('on_error_reset'))
             robot_state.error_status.value = status_flags[3]
 
         if robot_state.pause_motion_status.value != status_flags[4]:
             if status_flags[4]:
-                callback_queue.put(CallbackTag('on_motion_paused'))
-                events.on_motion_paused.set()
                 events.on_motion_resumed.clear()
+                events.on_motion_paused.set()
+                callback_queue.put(CallbackTag('on_motion_paused'))
             else:
-                callback_queue.put(CallbackTag('on_motion_resumed'))
-                events.on_motion_resumed.set()
                 events.on_motion_paused.clear()
+                events.on_motion_resumed.set()
+                callback_queue.put(CallbackTag('on_motion_resumed'))
             robot_state.pause_motion_status.value = status_flags[4]
 
         robot_state.end_of_block_status.value = status_flags[5]
@@ -764,8 +768,8 @@ class Robot:
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
-                    callback_queue.put(CallbackTag('on_status_updated'))
                     events.on_status_updated.set()
+                    callback_queue.put(CallbackTag('on_status_updated'))
 
                 elif response.id == MX_ST_RT_NC_JOINT_POS:
                     robot_state.nc_joint_positions[:] = Robot._string_to_floats(response.data)
@@ -1202,9 +1206,9 @@ class Robot:
             self._initialize_command_connection()
             self._initialize_monitoring_connection()
 
-            self._callback_queue.put(CallbackTag('on_connected'))
-            self._robot_events.on_connected.set()
             self._robot_events.on_disconnected.clear()
+            self._robot_events.on_connected.set()
+            self._callback_queue.put(CallbackTag('on_connected'))
 
             return True
 
@@ -1335,9 +1339,9 @@ class Robot:
                     self.logger.error('Error closing monitor socket. ' + str(e))
                 self._monitor_socket = None
 
-            self._callback_queue.put(CallbackTag('on_disconnected'))
-            self._robot_events.on_disconnected.set()
             self._robot_events.on_connected.clear()
+            self._robot_events.on_disconnected.set()
+            self._callback_queue.put(CallbackTag('on_disconnected'))
 
     @disconnect_on_exception
     def GetJoints(self):
@@ -1573,7 +1577,7 @@ class Robot:
         """
         return self._robot_events.on_motion_cleared.wait(timeout=timeout)
 
-    def RegisterCallbacks(self, callbacks, run_callbacks_in_separate_thread=True):
+    def RegisterCallbacks(self, callbacks, run_callbacks_in_separate_thread):
         """Register callback functions to be executed.
 
         Parameters
@@ -1582,6 +1586,7 @@ class Robot:
             Object containing all callback functions.
         run_callbacks_in_separate_thread : bool
             If true, callbacks are run automatically in thread. If false, RunCallbacks must be used.
+            **Running callbacks in a separate thread means the user application MUST BE THREAD SAFE!**
         """
         # Check that callbacks are an instance of the appropriate class.
         if not isinstance(callbacks, RobotCallbacks):
@@ -1605,6 +1610,7 @@ class Robot:
             self._callback_queue.put(TERMINATE_PROCESS)
             self._callback_thread.join()
 
+        self._callback_queue = mp.Queue()
         self._robot_callbacks = None
         self._callback_thread = None
 

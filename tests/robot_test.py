@@ -63,7 +63,7 @@ def test_connection_no_robot():
     robot = mdr.Robot(TEST_IP)
     assert robot is not None
 
-    with pytest.raises(Exception):
+    with pytest.raises(mdr.CommunicationError):
         robot.Connect()
 
 
