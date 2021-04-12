@@ -410,10 +410,12 @@ def test_callbacks():
     called_callbacks = []
 
     # Function to record which callbacks have been called.
+    # To avoid writing a separate function for each callback, we take in a name parameter.
+    # Just before the callback is assigned, we set the name to be the callback we currently care about.
     def test_callback(name):
         called_callbacks.append(name)
 
-    # For each available callback 'slot', assign the 'test_callback' function, with the slot name as a parameter.
+    # For each available callback 'slot', assign the 'test_callback' function, with the callback name as a parameter.
     for attr in callbacks.__dict__:
         callbacks.__dict__[attr] = partial(test_callback, name=attr)
 
