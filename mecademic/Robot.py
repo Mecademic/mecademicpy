@@ -9,9 +9,6 @@ import functools
 
 from .mx_robot_def import *
 
-COMMAND_PORT = 10000
-MONITOR_PORT = 10001
-
 CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
 TERMINATE_PROCESS = 'terminate_process'
@@ -939,12 +936,12 @@ class Robot:
             raise InvalidStateError('Cannot connect since existing monitor socket exists.')
 
         try:
-            self._command_socket = self._connect_socket(self.logger, self._address, COMMAND_PORT)
+            self._command_socket = self._connect_socket(self.logger, self._address, MX_ROBOT_TCP_PORT_CONTROL)
 
             if self._command_socket is None:
                 raise CommunicationError('Command socket could not be created.')
 
-            self._monitor_socket = self._connect_socket(self.logger, self._address, MONITOR_PORT)
+            self._monitor_socket = self._connect_socket(self.logger, self._address, MX_ROBOT_TCP_PORT_FEED)
 
             if self._monitor_socket is None:
                 raise CommunicationError('Monitor socket could not be created.')
