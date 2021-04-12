@@ -473,7 +473,6 @@ class Robot:
             return func(*args, **kwargs)
         except BaseException as e:
             if command_socket:
-                command_socket.sendall(b'ClearMotion\0')
                 command_socket.sendall(b'DeactivateRobot\0')
             raise e
 
@@ -895,7 +894,6 @@ class Robot:
 
         # If tx process is down, attempt to directly send deactivate command to the robot.
         if not (self._command_tx_process and self._command_tx_process.is_alive()):
-            self._command_socket.sendall(b'ClearMotion\0')
             self._command_socket.sendall(b'DeactivateRobot\0')
             self.Disconnect()
             raise InvalidStateError('Command tx process has unexpectedly terminated.')
@@ -1191,6 +1189,57 @@ class Robot:
     # Public methods = Pascal case is used to maintain consistency with text and c++ API.
     #####################################################################################
 
+    ### General management functions.
+
+    def RegisterCallbacks(self, callbacks, run_callbacks_in_separate_thread):
+        """Register callback functions to be executed.
+
+        Parameters
+        ----------
+        callbacks : RobotCallbacks object
+            Object containing all callback functions.
+        run_callbacks_in_separate_thread : bool
+            If true, callbacks are run automatically in thread. If false, RunCallbacks must be used.
+            **Running callbacks in a separate thread means the user application MUST BE THREAD SAFE!**
+        """
+        # Check that callbacks are an instance of the appropriate class.
+        if not isinstance(callbacks, RobotCallbacks):
+            raise TypeError('Callbacks object is not the appropriate class.')
+
+        self._robot_callbacks = callbacks
+        if run_callbacks_in_separate_thread:
+            self._callback_thread = threading.Thread(target=self._handle_callbacks,
+                                                     args=(
+                                                         self.logger,
+                                                         self._callback_queue,
+                                                         self._robot_callbacks,
+                                                     ))
+            self._callback_thread.start()
+
+    def UnregisterCallbacks(self):
+        """Unregister callback functions and terminate callback handler thread if applicable.
+
+        """
+        if self._callback_thread:
+            self._callback_queue.put(TERMINATE_PROCESS)
+            self._callback_thread.join()
+
+        self._callback_queue = mp.Queue()
+        self._robot_callbacks = None
+        self._callback_thread = None
+
+    def RunCallbacks(self):
+        """Run all triggered callback functions.
+
+        """
+        if self._callback_thread:
+            raise InvalidStateError(
+                'Cannot call RunCallbacks since callback handler is already running in separate thread.')
+
+        self._handle_callbacks(self.logger, self._callback_queue, self._robot_callbacks, block_on_empty=False)
+
+    ### Robot control functions.
+
     def Connect(self):
         """Attempt to connect to a physical Mecademic Robot.
 
@@ -1211,6 +1260,51 @@ class Robot:
             self._callback_queue.put(CallbackTag('on_connected'))
 
             return True
+
+    def Disconnect(self):
+        """Disconnects Mecademic Robot object from the physical Mecademic robot.
+
+        """
+        self.logger.debug('Disconnecting from the robot.')
+
+        # Don't use the normal DeactivateRobot call to avoid checking monitor processes, in case robot is in bad state.
+        self._send_command('DeactivateRobot')
+
+        # Don't acquire _main_lock while shutting down queues to avoid deadlock.
+        self._shut_down_queue_processes()
+
+        with self._main_lock:
+            self._shut_down_socket_processes()
+
+            # Reset communication queues (not strictly necessary since these should be empty).
+            self._command_rx_queue = mp.Queue()
+            self._command_tx_queue = mp.Queue()
+            self._monitor_rx_queue = mp.Queue()
+
+            # Reset robot state.
+            self._robot_state = RobotState()
+            self._robot_events = RobotEvents()
+            self._user_checkpoints = self._manager.dict()
+            self._internal_checkpoints = self._manager.dict()
+            self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+
+            # Finally, close sockets.
+            if self._command_socket is not None:
+                try:
+                    self._command_socket.close()
+                except Exception as e:
+                    self.logger.error('Error closing command socket. ' + str(e))
+                self._command_socket = None
+            if self._monitor_socket is not None:
+                try:
+                    self._monitor_socket.close()
+                except Exception as e:
+                    self.logger.error('Error closing monitor socket. ' + str(e))
+                self._monitor_socket = None
+
+            self._robot_events.on_connected.clear()
+            self._robot_events.on_disconnected.set()
+            self._callback_queue.put(CallbackTag('on_disconnected'))
 
     @disconnect_on_exception
     def ActivateRobot(self):
@@ -1297,79 +1391,6 @@ class Robot:
 
         if self._enable_synchronous_mode:
             self.WaitMotionCleared()
-
-    def Disconnect(self):
-        """Disconnects Mecademic Robot object from the physical Mecademic robot.
-
-        """
-        self.logger.debug('Disconnecting from the robot.')
-
-        # Don't use the normal DeactivateRobot call to avoid checking monitor processes, in case robot is in bad state.
-        self._send_command('DeactivateRobot')
-
-        # Don't acquire _main_lock while shutting down queues to avoid deadlock.
-        self._shut_down_queue_processes()
-
-        with self._main_lock:
-            self._shut_down_socket_processes()
-
-            # Reset communication queues (not strictly necessary since these should be empty).
-            self._command_rx_queue = mp.Queue()
-            self._command_tx_queue = mp.Queue()
-            self._monitor_rx_queue = mp.Queue()
-
-            # Reset robot state.
-            self._robot_state = RobotState()
-            self._robot_events = RobotEvents()
-            self._user_checkpoints = self._manager.dict()
-            self._internal_checkpoints = self._manager.dict()
-            self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
-
-            # Finally, close sockets.
-            if self._command_socket is not None:
-                try:
-                    self._command_socket.close()
-                except Exception as e:
-                    self.logger.error('Error closing command socket. ' + str(e))
-                self._command_socket = None
-            if self._monitor_socket is not None:
-                try:
-                    self._monitor_socket.close()
-                except Exception as e:
-                    self.logger.error('Error closing monitor socket. ' + str(e))
-                self._monitor_socket = None
-
-            self._robot_events.on_connected.clear()
-            self._robot_events.on_disconnected.set()
-            self._callback_queue.put(CallbackTag('on_disconnected'))
-
-    @disconnect_on_exception
-    def GetJoints(self):
-        """Returns the current joint positions of the robot.
-
-        Return
-        ------
-        list of floats
-            Returns list of joint positions in degrees.
-
-        """
-        with self._main_lock:
-            self._check_monitor_processes()
-            return self._robot_state.joint_positions[:]
-
-    @disconnect_on_exception
-    def GetEndEffectorPose(self):
-        """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
-
-        Return
-        ------
-        list of floats
-            Returns end-effector pose [x, y, z, alpha, beta, gamma].
-
-        """
-        with self._main_lock:
-            self._check_monitor_processes()
-            return self._robot_state.end_effector_pose[:]
 
     @disconnect_on_exception
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
@@ -1577,53 +1598,6 @@ class Robot:
         """
         return self._robot_events.on_motion_cleared.wait(timeout=timeout)
 
-    def RegisterCallbacks(self, callbacks, run_callbacks_in_separate_thread):
-        """Register callback functions to be executed.
-
-        Parameters
-        ----------
-        callbacks : RobotCallbacks object
-            Object containing all callback functions.
-        run_callbacks_in_separate_thread : bool
-            If true, callbacks are run automatically in thread. If false, RunCallbacks must be used.
-            **Running callbacks in a separate thread means the user application MUST BE THREAD SAFE!**
-        """
-        # Check that callbacks are an instance of the appropriate class.
-        if not isinstance(callbacks, RobotCallbacks):
-            raise TypeError('Callbacks object is not the appropriate class.')
-
-        self._robot_callbacks = callbacks
-        if run_callbacks_in_separate_thread:
-            self._callback_thread = threading.Thread(target=self._handle_callbacks,
-                                                     args=(
-                                                         self.logger,
-                                                         self._callback_queue,
-                                                         self._robot_callbacks,
-                                                     ))
-            self._callback_thread.start()
-
-    def UnregisterCallbacks(self):
-        """Unregister callback functions and terminate callback handler thread if applicable.
-
-        """
-        if self._callback_thread:
-            self._callback_queue.put(TERMINATE_PROCESS)
-            self._callback_thread.join()
-
-        self._callback_queue = mp.Queue()
-        self._robot_callbacks = None
-        self._callback_thread = None
-
-    def RunCallbacks(self):
-        """Run all triggered callback functions.
-
-        """
-        if self._callback_thread:
-            raise InvalidStateError(
-                'Cannot call RunCallbacks since callback handler is already running in separate thread.')
-
-        self._handle_callbacks(self.logger, self._callback_queue, self._robot_callbacks, block_on_empty=False)
-
     @disconnect_on_exception
     def ResetError(self):
         """Attempt to reset robot error.
@@ -1668,3 +1642,33 @@ class Robot:
 
         if self._enable_synchronous_mode:
             checkpoint.wait()
+
+    ### Information-getting commands.
+
+    @disconnect_on_exception
+    def GetJoints(self):
+        """Returns the current joint positions of the robot.
+
+        Return
+        ------
+        list of floats
+            Returns list of joint positions in degrees.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            return self._robot_state.joint_positions[:]
+
+    @disconnect_on_exception
+    def GetEndEffectorPose(self):
+        """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
+
+        Return
+        ------
+        list of floats
+            Returns end-effector pose [x, y, z, alpha, beta, gamma].
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            return self._robot_state.end_effector_pose[:]
