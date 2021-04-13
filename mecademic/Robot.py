@@ -1031,8 +1031,11 @@ class Robot:
 
         try:
             response = self._command_rx_queue.get(block=True, timeout=10)  # 10s timeout.
+        except Empty:
+            self.logger.error('No response received within timeout interval.')
+            self.Disconnect()
+            raise CommunicationError('No response received within timeout interval.')
         except BaseException as e:
-            self.logger.error('No response received within timeout interval. ' + str(e))
             self.Disconnect()
             raise
 
