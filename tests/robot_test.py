@@ -350,7 +350,6 @@ def test_events():
     robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
     assert robot.WaitMotionResumed(timeout=1)
 
-    assert not robot.WaitMotionCleared(timeout=0)
     robot.ClearMotion()
     robot._command_rx_queue.put(mdr.Message(2044, ''))
     assert robot.WaitMotionCleared(timeout=1)
@@ -451,7 +450,8 @@ def test_callbacks():
         robot.ResumeMotion()
 
         robot._command_rx_queue.put(mdr.Message(2044, ''))
-        robot.ClearMotion()
+        # Note we don't actually run robot.ClearMotion() here as the command will block in synchronous mode.
+        # It is also not necessary for the test.
 
         # Robot enters error state.
         robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,1,0,0,0'))

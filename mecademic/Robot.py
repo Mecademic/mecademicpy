@@ -228,8 +228,6 @@ class RobotEvents:
         Set if robot motion is paused.
     on_motion_resumed : event
         Set if robot motion is not paused.
-    on_motion_cleared : event
-        Set if motion queue has been cleared.
 
     """
     def __init__(self):
@@ -245,7 +243,6 @@ class RobotEvents:
         self.on_p_stop_reset = mp.Event()
         self.on_motion_paused = mp.Event()
         self.on_motion_resumed = mp.Event()
-        self.on_motion_cleared = mp.Event()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -420,28 +417,21 @@ class Robot:
         self._monitor_socket = None
 
         self._command_rx_process = None
-        self._command_rx_queue = mp.Queue()
         self._command_tx_process = None
-        self._command_tx_queue = mp.Queue()
         self._monitor_rx_process = None
-        self._monitor_rx_queue = mp.Queue()
 
         self._command_response_handler_process = None
         self._monitor_handler_process = None
 
         self._main_lock = mp.RLock()
 
-        self._robot_state = RobotState()
-        self._robot_events = RobotEvents()
-
         self._robot_callbacks = RobotCallbacks()
         self._callback_queue = mp.Queue()
         self._callback_thread = None
 
         self._manager = mp.Manager()
-        self._user_checkpoints = self._manager.dict()
-        self._internal_checkpoints = self._manager.dict()
-        self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+
+        self._init_states()
 
         self._enable_synchronous_mode = enable_synchronous_mode
         self._disconnect_on_exception = disconnect_on_exception
@@ -451,6 +441,18 @@ class Robot:
     def __del__(self):
         self.Disconnect()
         self.UnregisterCallbacks()
+
+    def _init_states(self):
+        self._command_rx_queue = mp.Queue()
+        self._command_tx_queue = mp.Queue()
+        self._monitor_rx_queue = mp.Queue()
+
+        self._user_checkpoints = self._manager.dict()
+        self._internal_checkpoints = self._manager.dict()
+        self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+
+        self._robot_state = RobotState()
+        self._robot_events = RobotEvents()
 
     #####################################################################################
     # Static methods.
@@ -617,15 +619,19 @@ class Robot:
             # Wait for a response to be available from the queue.
             response = rx_queue.get(block=True)
 
-            print(response)
-
             # Terminate process if requested.
             if response == TERMINATE_PROCESS:
                 return
 
             with main_lock:
                 if response.id == MX_ST_CLEAR_MOTION:
-                    events.on_motion_cleared.set()
+                    try:
+                        internal_checkpoints['clear_motion'].pop().set()
+                        # If no more pending clear_motion commands, set clear_motion_all.
+                        if not internal_checkpoints['clear_motion']:
+                            [item.set() for item in internal_checkpoints['clear_motion_all']]
+                    except (KeyError, IndexError):
+                        pass
                     callback_queue.put(CallbackTag('on_motion_cleared'))
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
@@ -1025,16 +1031,16 @@ class Robot:
 
         try:
             response = self._command_rx_queue.get(block=True, timeout=10)  # 10s timeout.
-        except Exception as e:
+        except BaseException as e:
             self.logger.error('No response received within timeout interval. ' + str(e))
             self.Disconnect()
-            raise e
+            raise
 
         # Check that response is appropriate.
         if response.id != MX_ST_CONNECTED:
             self.logger.error('Connection error: %s', response)
             self.Disconnect()
-            raise e
+            raise CommunicationError('Connection error: %s', response)
 
         self._command_response_handler_process = self._launch_process(
             target=self._command_response_handler,
@@ -1181,7 +1187,6 @@ class Robot:
 
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
-                self._robot_events.on_motion_cleared.clear()
 
             return Checkpoint(n, event)
 
@@ -1267,26 +1272,14 @@ class Robot:
         """
         self.logger.debug('Disconnecting from the robot.')
 
-        # Don't use the normal DeactivateRobot call to avoid checking monitor processes, in case robot is in bad state.
-        self._send_command('DeactivateRobot')
-
         # Don't acquire _main_lock while shutting down queues to avoid deadlock.
         self._shut_down_queue_processes()
 
         with self._main_lock:
             self._shut_down_socket_processes()
 
-            # Reset communication queues (not strictly necessary since these should be empty).
-            self._command_rx_queue = mp.Queue()
-            self._command_tx_queue = mp.Queue()
-            self._monitor_rx_queue = mp.Queue()
-
             # Reset robot state.
-            self._robot_state = RobotState()
-            self._robot_events = RobotEvents()
-            self._user_checkpoints = self._manager.dict()
-            self._internal_checkpoints = self._manager.dict()
-            self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+            self._init_states()
 
             # Finally, close sockets.
             if self._command_socket is not None:
@@ -1383,14 +1376,22 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
+
+            # Create an event to track when this ClearMotion is acknowledged.
+            if 'clear_motion' not in self._internal_checkpoints:
+                self._internal_checkpoints['clear_motion'] = self._manager.list()
+            event = self._manager.Event()
+            self._internal_checkpoints['clear_motion'].append(event)
+
             self._send_command('ClearMotion')
+
             # Clearing the motion queue also requires clearing checkpoints, as the robot will not send them anymore.
             self._user_checkpoints.clear()
             self._internal_checkpoints.clear()
             self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
         if self._enable_synchronous_mode:
-            self.WaitMotionCleared()
+            event.wait()
 
     @disconnect_on_exception
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
@@ -1404,11 +1405,7 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
-            if not self._robot_events.on_homed.is_set():
-                raise InvalidStateError('This command requires robot to be homed.')
-
             self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
-            self._robot_events.on_motion_cleared.clear()
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
 
@@ -1486,7 +1483,7 @@ class Robot:
         Parameters
         ----------
         timeout : float
-            Maximum time to spend waiting for the checkpoint (in seconds).
+            Maximum time to spend waiting for the event (in seconds).
 
         Return
         ------
@@ -1503,7 +1500,7 @@ class Robot:
         Parameters
         ----------
         timeout : float
-            Maximum time to spend waiting for the checkpoint (in seconds).
+            Maximum time to spend waiting for the event (in seconds).
 
         Return
         ------
@@ -1520,7 +1517,7 @@ class Robot:
         Parameters
         ----------
         timeout : float
-            Maximum time to spend waiting for the checkpoint (in seconds).
+            Maximum time to spend waiting for the event (in seconds).
 
         Return
         ------
@@ -1537,7 +1534,7 @@ class Robot:
         Parameters
         ----------
         timeout : float
-            Maximum time to spend waiting for the checkpoint (in seconds).
+            Maximum time to spend waiting for the event (in seconds).
 
         Return
         ------
@@ -1554,7 +1551,7 @@ class Robot:
         Parameters
         ----------
         timeout : float
-            Maximum time to spend waiting for the checkpoint (in seconds).
+            Maximum time to spend waiting for the event (in seconds).
 
         Return
         ------
@@ -1571,7 +1568,7 @@ class Robot:
         Parameters
         ----------
         timeout : float
-            Maximum time to spend waiting for the checkpoint (in seconds).
+            Maximum time to spend waiting for the event (in seconds).
 
         Return
         ------
@@ -1583,12 +1580,12 @@ class Robot:
 
     @disconnect_on_exception
     def WaitMotionCleared(self, timeout=None):
-        """Pause program execution until the motion queue is cleared.
+        """Pause program execution until all pending request to clear motion have been acknowledged.
 
         Parameters
         ----------
         timeout : float
-            Maximum time to spend waiting for the checkpoint (in seconds).
+            Maximum time to spend waiting for the event (in seconds).
 
         Return
         ------
@@ -1596,7 +1593,21 @@ class Robot:
             True if wait was successful, false otherwise.
 
         """
-        return self._robot_events.on_motion_cleared.wait(timeout=timeout)
+
+        with self._main_lock:
+            self._check_monitor_processes()
+
+            # Only wait if there are pending ClearMotion calls.
+            if 'clear_motion' not in self._internal_checkpoints or not self._internal_checkpoints['clear_motion']:
+                return True
+
+            # Register an event to wait for all ClearMotion calls to be acknowledged.
+            if 'clear_motion_all' not in self._internal_checkpoints:
+                self._internal_checkpoints['clear_motion_all'] = self._manager.list()
+            event = self._manager.Event()
+            self._internal_checkpoints['clear_motion_all'].append(event)
+
+        return event.wait(timeout=timeout)
 
     @disconnect_on_exception
     def ResetError(self):
