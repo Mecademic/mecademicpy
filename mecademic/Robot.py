@@ -228,6 +228,8 @@ class RobotEvents:
         Set if robot motion is paused.
     on_motion_resumed : event
         Set if robot motion is not paused.
+    on_motion_cleared : event
+        Set if there are no pending ClearMotion commands.
 
     """
     def __init__(self):
@@ -243,6 +245,7 @@ class RobotEvents:
         self.on_p_stop_reset = mp.Event()
         self.on_motion_paused = mp.Event()
         self.on_motion_resumed = mp.Event()
+        self.on_motion_cleared = mp.Event()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -454,6 +457,8 @@ class Robot:
         self._robot_state = RobotState()
         self._robot_events = RobotEvents()
 
+        self._clear_motion_requests = mp.Value('i', 0, lock=False)
+
     #####################################################################################
     # Static methods.
     #####################################################################################
@@ -592,7 +597,7 @@ class Robot:
 
     @staticmethod
     def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, events, main_lock,
-                                  logger, callback_queue):
+                                  logger, callback_queue, clear_motion_requests):
         """Handle received messages on the command socket.
 
         Parameters
@@ -613,6 +618,8 @@ class Robot:
             Used for logging.
         callback_queue : queue
             Used to push triggered callbacks onto.
+        clear_motion_requests : int
+            Number of active ClearMotion requests.
 
         """
         while True:
@@ -625,14 +632,12 @@ class Robot:
 
             with main_lock:
                 if response.id == MX_ST_CLEAR_MOTION:
-                    try:
-                        internal_checkpoints['clear_motion'].pop().set()
-                        # If no more pending clear_motion commands, set clear_motion_all.
-                        if not internal_checkpoints['clear_motion']:
-                            [item.set() for item in internal_checkpoints['clear_motion_all']]
-                    except (KeyError, IndexError):
-                        pass
-                    callback_queue.put(CallbackTag('on_motion_cleared'))
+                    if clear_motion_requests.value <= 1:
+                        clear_motion_requests.value = 0
+                        events.on_motion_cleared.set()
+                        callback_queue.put(CallbackTag('on_motion_cleared'))
+                    else:
+                        clear_motion_requests.value -= 1
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
@@ -1048,7 +1053,7 @@ class Robot:
         self._command_response_handler_process = self._launch_process(
             target=self._command_response_handler,
             args=(self._command_rx_queue, self._robot_state, self._user_checkpoints, self._internal_checkpoints,
-                  self._robot_events, self._main_lock, self.logger, self._callback_queue))
+                  self._robot_events, self._main_lock, self.logger, self._callback_queue, self._clear_motion_requests))
         return True
 
     def _initialize_monitoring_connection(self):
@@ -1380,11 +1385,9 @@ class Robot:
         with self._main_lock:
             self._check_monitor_processes()
 
-            # Create an event to track when this ClearMotion is acknowledged.
-            if 'clear_motion' not in self._internal_checkpoints:
-                self._internal_checkpoints['clear_motion'] = self._manager.list()
-            event = self._manager.Event()
-            self._internal_checkpoints['clear_motion'].append(event)
+            # Increment the number of pending ClearMotion requests.
+            self._clear_motion_requests.value += 1
+            self._robot_events.on_motion_cleared.clear()
 
             self._send_command('ClearMotion')
 
@@ -1394,7 +1397,7 @@ class Robot:
             self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
         if self._enable_synchronous_mode:
-            event.wait()
+            self.WaitMotionCleared()
 
     @disconnect_on_exception
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
@@ -1597,20 +1600,7 @@ class Robot:
 
         """
 
-        with self._main_lock:
-            self._check_monitor_processes()
-
-            # Only wait if there are pending ClearMotion calls.
-            if 'clear_motion' not in self._internal_checkpoints or not self._internal_checkpoints['clear_motion']:
-                return True
-
-            # Register an event to wait for all ClearMotion calls to be acknowledged.
-            if 'clear_motion_all' not in self._internal_checkpoints:
-                self._internal_checkpoints['clear_motion_all'] = self._manager.list()
-            event = self._manager.Event()
-            self._internal_checkpoints['clear_motion_all'].append(event)
-
-        return event.wait(timeout=timeout)
+        return self._robot_events.on_motion_cleared.wait(timeout=timeout)
 
     @disconnect_on_exception
     def ResetError(self):
