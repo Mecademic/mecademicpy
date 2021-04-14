@@ -1507,6 +1507,173 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
+    def MoveJointsVel(self, joint1, joint2, joint3, joint4, joint5, joint6):
+        """Moves joints to at desired velocities.
+
+        Parameters
+        ----------
+        joint1...joint6 : float
+            Desired joint velocities in degrees per second.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('MoveJointsVel', [joint1, joint2, joint3, joint4, joint5, joint6])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def MoveLin(self, x, y, z, alpha, beta, gamma):
+        """Moves robot such that the TRF has the given transformation relative to the WRF.
+           End effector moves in straight line.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired end effector coordinates in mm.
+        alpha, beta, gamma
+            Desired end effector orientation in degrees.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('MoveLin', [x, y, z, alpha, beta, gamma])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def MoveLinRelTRF(self, x, y, z, alpha, beta, gamma):
+        """Moves robot such that the new TRF has the given transformation relative to the existing TRF.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired displacement in mm.
+        alpha, beta, gamma
+            Desired orientation change in deg.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('MoveLinRelTRF', [x, y, z, alpha, beta, gamma])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def MoveLinRelWRF(self, x, y, z, alpha, beta, gamma):
+        """Moves robot such that the new TRF has the given translation to the
+           TCP, but has the given orientation relative to the WRF.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired displacement in mm.
+        alpha, beta, gamma
+            Desired orientation change in deg.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('MoveLinRelWRF', [x, y, z, alpha, beta, gamma])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def MoveLinVelTRF(self, x, y, z, alpha, beta, gamma):
+        """Moves robot using instaneous velocities given relative to TRF.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired velocity in mm/s.
+        alpha, beta, gamma
+            Desired angular velocity in degrees/s.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('MoveLinVelTRF', [x, y, z, alpha, beta, gamma])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def MovePose(self, x, y, z, alpha, beta, gamma):
+        """Moves robot such that the TRF has the given transformation relative to the WRF.
+           Motors move at constant speed. End effector does not move in a straight line.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired end effector coordinates in mm.
+        alpha, beta, gamma
+            Desired end effector orientation in degrees.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('MovePose', [x, y, z, alpha, beta, gamma])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def MoveLinVelWRF(self, x, y, z, alpha, beta, gamma):
+        """Moves robot using instaneous velocities given relative to WRF.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired velocity in mm/s.
+        alpha, beta, gamma
+            Desired angular velocity in degrees/s.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('MoveLinVelWRF', [x, y, z, alpha, beta, gamma])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def SetVelTimeout(self, t):
+        """Sets the duration for which a velocity-mode motion command is executed.
+
+        Parameters
+        ----------
+        t : float
+            Desired duration for velocity-mode motion commands.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetVelTimeout', [t])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
     def SetCheckpoint(self, n):
         """Set checkpoint with desired id.
 
