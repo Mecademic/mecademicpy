@@ -5,6 +5,7 @@ import time
 import socket
 import multiprocessing as mp
 import threading
+import queue
 import functools
 
 from .mx_robot_def import *
@@ -27,6 +28,10 @@ class CommunicationError(MecademicException):
 
 
 class DisconnectError(MecademicException):
+    pass
+
+
+class EventError(MecademicException):
     pass
 
 
@@ -63,6 +68,40 @@ class Checkpoint:
 
         """
         return self.event.wait(timeout=timeout)
+
+
+class EventWithException:
+    def __init__(self):
+        self._event = mp.Event()
+        self._throw_exception = mp.Value('b', False)
+
+    def wait(self, timeout=None):
+        success = self._event.wait(timeout=timeout)
+        if self._throw_exception.value:
+            raise EventError('Event received exception, possibly because event will never be triggered.')
+        return success
+
+    def set(self):
+        with self._throw_exception.get_lock():
+            self._event.set()
+
+    def raise_exception(self):
+        with self._throw_exception.get_lock():
+            if not self._event.is_set():
+                self._throw_exception.value = True
+                self._event.set()
+
+    def clear(self):
+        with self._throw_exception.get_lock():
+            self._throw_exception.value = False
+            self._event.clear()
+
+    def is_set(self):
+        with self._throw_exception.get_lock():
+            if self._throw_exception.value:
+                return False
+            else:
+                return self._event.is_set()
 
 
 class Message:
@@ -233,19 +272,19 @@ class RobotEvents:
 
     """
     def __init__(self):
-        self.on_connected = mp.Event()
-        self.on_disconnected = mp.Event()
-        self.on_status_updated = mp.Event()
-        self.on_activated = mp.Event()
-        self.on_deactivated = mp.Event()
-        self.on_homed = mp.Event()
-        self.on_error = mp.Event()
-        self.on_error_reset = mp.Event()
-        self.on_p_stop = mp.Event()
-        self.on_p_stop_reset = mp.Event()
-        self.on_motion_paused = mp.Event()
-        self.on_motion_resumed = mp.Event()
-        self.on_motion_cleared = mp.Event()
+        self.on_connected = EventWithException()
+        self.on_disconnected = EventWithException()
+        self.on_status_updated = EventWithException()
+        self.on_activated = EventWithException()
+        self.on_deactivated = EventWithException()
+        self.on_homed = EventWithException()
+        self.on_error = EventWithException()
+        self.on_error_reset = EventWithException()
+        self.on_p_stop = EventWithException()
+        self.on_p_stop_reset = EventWithException()
+        self.on_motion_paused = EventWithException()
+        self.on_motion_resumed = EventWithException()
+        self.on_motion_cleared = EventWithException()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -1036,11 +1075,11 @@ class Robot:
 
         try:
             response = self._command_rx_queue.get(block=True, timeout=10)  # 10s timeout.
-        except Empty:
+        except queue.Empty:
             self.logger.error('No response received within timeout interval.')
             self.Disconnect()
             raise CommunicationError('No response received within timeout interval.')
-        except BaseException as e:
+        except BaseException:
             self.Disconnect()
             raise
 
@@ -1268,6 +1307,23 @@ class Robot:
             self._initialize_command_connection()
             self._initialize_monitoring_connection()
 
+            self._robot_events.on_status_updated.clear()
+            self._robot_events.on_activated.clear()
+            self._robot_events.on_deactivated.clear()
+            self._robot_events.on_homed.clear()
+            self._robot_events.on_error.clear()
+            self._robot_events.on_error_reset.clear()
+            self._robot_events.on_p_stop.clear()
+            self._robot_events.on_p_stop_reset.clear()
+            self._robot_events.on_motion_paused.clear()
+            self._robot_events.on_motion_resumed.clear()
+            self._robot_events.on_motion_cleared.clear()
+
+            self._robot_events.on_deactivated.set()
+            self._robot_events.on_error_reset.set()
+            self._robot_events.on_p_stop_reset.set()
+            self._robot_events.on_motion_resumed.set()
+
             self._robot_events.on_disconnected.clear()
             self._robot_events.on_connected.set()
             self._callback_queue.put(CallbackTag('on_connected'))
@@ -1307,6 +1363,18 @@ class Robot:
             self._robot_events.on_disconnected.set()
             self._callback_queue.put(CallbackTag('on_disconnected'))
 
+            self._robot_events.on_status_updated.raise_exception()
+            self._robot_events.on_activated.raise_exception()
+            self._robot_events.on_deactivated.raise_exception()
+            self._robot_events.on_homed.raise_exception()
+            self._robot_events.on_error.raise_exception()
+            self._robot_events.on_error_reset.raise_exception()
+            self._robot_events.on_p_stop.raise_exception()
+            self._robot_events.on_p_stop_reset.raise_exception()
+            self._robot_events.on_motion_paused.raise_exception()
+            self._robot_events.on_motion_resumed.raise_exception()
+            self._robot_events.on_motion_cleared.raise_exception()
+
     @disconnect_on_exception
     def ActivateRobot(self):
         """Activate the robot.
@@ -1326,8 +1394,6 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
-            if not self._robot_events.on_activated.is_set():
-                raise InvalidStateError('Robot must be activated before homing.')
             self._send_command('Home')
 
         if self._enable_synchronous_mode:

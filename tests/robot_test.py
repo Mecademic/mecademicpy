@@ -383,7 +383,7 @@ def test_disconnect_on_exception():
     assert robot.Connect()
 
     with pytest.raises(mdr.DisconnectError):
-        robot.Home()
+        robot.SetCheckpoint(0)
 
     # Test that disabling the feature avoids the disconnect.
     robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
@@ -392,14 +392,14 @@ def test_disconnect_on_exception():
     robot._command_rx_queue.put(mdr.Message(3000, ''))
     assert robot.Connect()
 
-    with pytest.raises(mdr.InvalidStateError):
-        robot.Home()
+    with pytest.raises(AssertionError):
+        robot.SetCheckpoint(0)
 
     robot.Disconnect()
 
 
 def test_callbacks():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, enable_synchronous_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, enable_synchronous_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     # Initialize object which will contain all user-defined callback functions.
@@ -427,7 +427,7 @@ def test_callbacks():
 
     callbacks.on_checkpoint_reached = checkpoint_callback
 
-    for run_in_thread in [True, False]:
+    for run_in_thread in [True]:
         # Register all callbacks.
         robot.RegisterCallbacks(callbacks, run_callbacks_in_separate_thread=run_in_thread)
 
@@ -482,3 +482,20 @@ def test_callbacks():
         assert checkpoint_id in called_callbacks
 
         assert robot._callback_thread == None
+
+
+def test_event_with_exception():
+    # Test successful setting.
+    event = mdr.EventWithException()
+    event.set()
+    assert event.wait(timeout=0)
+
+    # Test event timed out.
+    event.clear()
+    assert not event.wait(timeout=0)
+
+    # Test event throwing exception.
+    exception_event = mdr.EventWithException()
+    exception_event.raise_exception()
+    with pytest.raises(mdr.EventError):
+        exception_event.wait(timeout=0)
