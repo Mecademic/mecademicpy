@@ -311,6 +311,22 @@ def test_unaccounted_checkpoints():
     robot.Disconnect()
 
 
+def test_stranded_checkpoints():
+    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect()
+
+    checkpoint_1 = robot.SetCheckpoint(1)
+
+    robot.Disconnect()
+
+    # Checkpoint should throw error instead of blocking since robot is already disconnected.
+    with pytest.raises(mdr.EventError):
+        checkpoint_1.wait()
+
+
 def test_events():
     robot = mdr.Robot(TEST_IP, offline_mode=True)
     assert robot is not None

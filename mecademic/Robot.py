@@ -46,9 +46,10 @@ class Checkpoint:
         A standard event-type object used to signal when the checkpoint is reached.
 
     """
-    def __init__(self, id, event):
+    def __init__(self, id, event, exception_event):
         self.id = id
         self.event = event
+        self.exception_event = exception_event
 
     def __repr__(self):
         return "Checkpoint with id={}, is reached={}".format(self.id, self.event.is_set())
@@ -67,7 +68,11 @@ class Checkpoint:
             True if wait was successful, false otherwise.
 
         """
-        return self.event.wait(timeout=timeout)
+        result = self.event.wait(timeout=timeout)
+        if self.exception_event.is_set():
+            raise EventError('Checkpoint will never be reached.')
+        else:
+            return result
 
 
 class EventWithException:
@@ -492,6 +497,8 @@ class Robot:
         self._user_checkpoints = self._manager.dict()
         self._internal_checkpoints = self._manager.dict()
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+
+        self._invalidate_checkpoints_event = mp.Event()
 
         self._robot_state = RobotState()
         self._robot_events = RobotEvents()
@@ -1235,7 +1242,21 @@ class Robot:
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
 
-            return Checkpoint(n, event)
+            return Checkpoint(n, event, self._invalidate_checkpoints_event)
+
+    def _invalidate_checkpoints(self):
+        '''Set all checkpoints to be invalid.
+        '''
+
+        self._invalidate_checkpoints_event.set()
+
+        for checkpoints_dict in [self._internal_checkpoints, self._user_checkpoints]:
+            for key, checkpoints_list in checkpoints_dict.items():
+                for event in checkpoints_list:
+                    event.set()
+            checkpoints_dict.clear()
+
+        self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
     #####################################################################################
     # Public methods = Pascal case is used to maintain consistency with text and c++ API.
@@ -1341,6 +1362,9 @@ class Robot:
 
         with self._main_lock:
             self._shut_down_socket_processes()
+
+            # Invalidate checkpoints.
+            self._invalidate_checkpoints()
 
             # Reset robot state.
             self._init_states()
@@ -1458,9 +1482,7 @@ class Robot:
             self._send_command('ClearMotion')
 
             # Clearing the motion queue also requires clearing checkpoints, as the robot will not send them anymore.
-            self._user_checkpoints.clear()
-            self._internal_checkpoints.clear()
-            self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+            self._invalidate_checkpoints()
 
         if self._enable_synchronous_mode:
             self.WaitMotionCleared()
