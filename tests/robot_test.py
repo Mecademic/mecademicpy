@@ -156,7 +156,7 @@ def test_monitoring_connection():
     robot._monitor_handler_process = None
 
     assert robot.GetJoints() == [x + 2026 for x in fake_array[:-1]]
-    assert robot.GetEndEffectorPose() == [x + 2027 for x in fake_array[:-1]]
+    assert robot.GetPose() == [x + 2027 for x in fake_array[:-1]]
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
     assert robot._robot_state.nc_joint_positions[:] == [x + 2200 for x in fake_array]
@@ -480,6 +480,11 @@ def test_callbacks():
 
         robot._command_rx_queue.put(mdr.Message(3032, '0'))
         robot.ResetPStop()
+
+        robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,1,0,0,0,0'))
+        robot.ActivateSim()
+        robot._monitor_rx_queue.put(mdr.Message(2007, '1,1,0,0,0,0,0'))
+        robot.DeactivateSim()
 
         robot._monitor_rx_queue.put(mdr.Message(2007, '0,0,0,0,0,0,0'))
         robot.DeactivateRobot()

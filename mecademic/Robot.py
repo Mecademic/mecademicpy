@@ -332,6 +332,10 @@ class RobotEvents:
         Set if robot motion is not paused.
     on_motion_cleared : event
         Set if there are no pending ClearMotion commands.
+    on_activate_sim : event
+        Set if robot is in sim mode.
+    on_deactivate_sim : event
+        Set if robot is not in sim mode.
 
     """
     def __init__(self):
@@ -348,12 +352,15 @@ class RobotEvents:
         self.on_motion_paused = EventWithException()
         self.on_motion_resumed = EventWithException()
         self.on_motion_cleared = EventWithException()
+        self.on_activate_sim = EventWithException()
+        self.on_deactivate_sim = EventWithException()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
         self.on_error_reset.set()
         self.on_p_stop_reset.set()
         self.on_motion_resumed.set()
+        self.on_deactivate_sim.set()
 
 
 class RobotCallbacks:
@@ -389,6 +396,10 @@ class RobotCallbacks:
             Function to be called once motion is resumed.
         on_checkpoint_reached : function object
             Function to be called if a checkpoint is reached.
+        on_activate_sim : function object
+            Function to be called once sim mode is activated.
+        on_deactivate_sim : function object
+            Function to be called once sim mode is deactivated.
     """
     def __init__(self):
         self.on_connected = None
@@ -405,6 +416,8 @@ class RobotCallbacks:
         self.on_motion_cleared = None
         self.on_motion_resumed = None
         self.on_checkpoint_reached = None
+        self.on_activate_sim = None
+        self.on_deactivate_sim = None
 
 
 def disconnect_on_exception(func):
@@ -820,7 +833,16 @@ class Robot:
                 events.on_homed.clear()
             robot_state.homing_state.value = status_flags[1]
 
-        robot_state.simulation_mode.value = status_flags[2]
+        if robot_state.simulation_mode.value != status_flags[2]:
+            if status_flags[2]:
+                events.on_deactivate_sim.clear()
+                events.on_activate_sim.set()
+                callback_queue.put(CallbackTag('on_activate_sim'))
+            else:
+                events.on_activate_sim.clear()
+                events.on_deactivate_sim.set()
+                callback_queue.put(CallbackTag('on_deactivate_sim'))
+            robot_state.simulation_mode.value = status_flags[2]
 
         if robot_state.error_status.value != status_flags[3]:
             if status_flags[3]:
@@ -2118,7 +2140,7 @@ class Robot:
         if self._enable_synchronous_mode:
             checkpoint.wait()
 
-    ### Information-getting commands.
+    ### Non-motion commands.
 
     @disconnect_on_exception
     def GetJoints(self):
@@ -2135,7 +2157,7 @@ class Robot:
             return self._robot_state.joint_positions[:]
 
     @disconnect_on_exception
-    def GetEndEffectorPose(self):
+    def GetPose(self):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
         Return
@@ -2147,3 +2169,49 @@ class Robot:
         with self._main_lock:
             self._check_monitor_processes()
             return self._robot_state.end_effector_pose[:]
+
+    @disconnect_on_exception
+    def SetMonitoringInterval(self, t):
+        """Sets the rate at which the monitoring port sends data.
+
+        Parameters
+        ----------
+        t : float
+            Monitoring interval duration in seconds.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes
+            self._send_command('SetMonitoringInterval', [t])
+
+    @disconnect_on_exception
+    def SetRTC(self, t):
+        """Sets the rate at which the monitoring port sends data.
+
+        Parameters
+        ----------
+        t : int
+            Unix epoch time (seconds since 00:00:00 UTC Jan 1, 1970).
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes
+            self._send_command('SetRTC', [t])
+
+    @disconnect_on_exception
+    def ActivateSim(self):
+        """Enables simulation mode. Motors don't move, but commands will be processed.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes
+            self._send_command('ActivateSim')
+
+    @disconnect_on_exception
+    def DeactivateSim(self):
+        """Disables simulation mode. Motors don't move, but commands will be processed.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes
+            self._send_command('DeactivateSim')
