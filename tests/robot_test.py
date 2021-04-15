@@ -524,9 +524,13 @@ def test_motion_commands():
     robot._command_rx_queue.put(mdr.Message(3000, ''))
     assert robot.Connect()
 
+    skip_list = ['MoveGripper']
+
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
-        if name[0:4] == 'Move' or name[0:3] == 'Set':
+        if name in skip_list:
+            continue
+        elif name[0:4] == 'Move' or name[0:3] == 'Set':
             method = getattr(robot, name)
 
             # Assemble parameter list. Note we need to get the wrapped function since a decorator is used.
@@ -538,7 +542,7 @@ def test_motion_commands():
             method(*test_args)
 
             # We convert the command to lowercase since capitialization differs slightly to match C++ api.
-            text_command = robot._command_tx_queue.get().lower()
+            text_command = robot._command_tx_queue.get(block=True, timeout=1).lower()
 
             # Check that the text commands begins with the appropriate name.
             assert text_command.find(name.lower()) == 0, 'Method {} does not match text command'.format(name)

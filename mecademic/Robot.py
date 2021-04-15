@@ -14,6 +14,9 @@ CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
 TERMINATE_PROCESS = 'terminate_process'
 
+GRIPPER_OPEN = True
+GRIPPER_CLOSE = False
+
 
 class MecademicException(Exception):
     """Base exception class for Mecademic-related exceptions.
@@ -1313,7 +1316,7 @@ class Robot:
 
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
-    def _send_motion_command(self, command, args):
+    def _send_motion_command(self, command, arg_list=None):
         """Send generic motion command with support for synchronous mode and locking.
 
         Parameters
@@ -1326,7 +1329,7 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
-            self._send_command(command, args)
+            self._send_command(command, arg_list)
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
 
@@ -1587,6 +1590,20 @@ class Robot:
         self._send_motion_command('MoveJointsVel', [joint1, joint2, joint3, joint4, joint5, joint6])
 
     @disconnect_on_exception
+    def MovePose(self, x, y, z, alpha, beta, gamma):
+        """Move robot's tool to an absolute Cartesian position (non-linear move, but all joints arrive simultaneously).
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired end effector coordinates in mm.
+        alpha, beta, gamma
+            Desired end effector orientation in degrees.
+
+        """
+        self._send_motion_command('MovePose', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
     def MoveLin(self, x, y, z, alpha, beta, gamma):
         """Linearly move robot's tool to an absolute Cartesian position.
 
@@ -1778,6 +1795,99 @@ class Robot:
 
         """
         self._send_motion_command('SetCartLinVel', [w])
+
+    @disconnect_on_exception
+    def MoveGripper(self, state=GRIPPER_OPEN):
+        """Open or close the gripper.
+
+        Corresponds to text API calls "GripperOpen" / "GripperClose".
+
+        Parameters
+        ----------
+        state : boolean
+            Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+
+        """
+        if state:
+            self._send_motion_command('GripperOpen')
+        else:
+            self._send_motion_command('GripperClose')
+
+    @disconnect_on_exception
+    def SetGripperForce(self, p):
+        """Set the gripper's force in percent.
+
+        Parameters
+        ----------
+        p : float
+            The desired force in percent.
+
+        """
+        self._send_motion_command('SetGripperForce', [p])
+
+    @disconnect_on_exception
+    def SetGripperVel(self, p):
+        """Set the gripper's velocity in percent.
+
+        Parameters
+        ----------
+        p : float
+            The desired velocity in percent.
+
+        """
+        self._send_motion_command('SetGripperVel', [p])
+
+    @disconnect_on_exception
+    def SetJointAcc(self, p):
+        """Set target joint acceleration during MoveJoints commands.
+
+        Parameters
+        ----------
+        p : float
+            Target acceleration, in percent.
+
+        """
+        self._send_motion_command('SetJointAcc', [p])
+
+    @disconnect_on_exception
+    def SetJointVel(self, p):
+        """Set target joint velocity during MoveJoints commands.
+
+        Parameters
+        ----------
+        p : float
+            Target joint velocity, in percent.
+
+        """
+        self._send_motion_command('SetJointVel', [p])
+
+    @disconnect_on_exception
+    def SetTRF(self, x, y, z, alpha, beta, gamma):
+        """Set the TRF (tool reference frame) Cartesian position.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired reference coordinates in mm.
+        alpha, beta, gamma
+            Desired reference orientation in degrees.
+
+        """
+        self._send_motion_command('SetTRF', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def SetWRF(self, x, y, z, alpha, beta, gamma):
+        """Set the WRF (world reference frame) Cartesian position.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired reference coordinates in mm.
+        alpha, beta, gamma
+            Desired reference orientation in degrees.
+
+        """
+        self._send_motion_command('SetWRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def SetCheckpoint(self, n):
