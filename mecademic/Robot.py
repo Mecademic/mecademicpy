@@ -1313,6 +1313,26 @@ class Robot:
 
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
+    def _send_motion_command(self, command, args):
+        """Send generic motion command with support for synchronous mode and locking.
+
+        Parameters
+        ----------
+        command : string
+            The command to send.
+        args : list
+            List of arguments to be sent.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command(command, args)
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
     #####################################################################################
     # Public methods = Pascal case is used to maintain consistency with text and c++ API.
     #####################################################################################
@@ -1552,14 +1572,7 @@ class Robot:
             Desired joint angles in degrees.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
 
     @disconnect_on_exception
     def MoveJointsVel(self, joint1, joint2, joint3, joint4, joint5, joint6):
@@ -1571,14 +1584,7 @@ class Robot:
             Desired joint velocities in degrees per second.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MoveJointsVel', [joint1, joint2, joint3, joint4, joint5, joint6])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('MoveJointsVel', [joint1, joint2, joint3, joint4, joint5, joint6])
 
     @disconnect_on_exception
     def MoveLin(self, x, y, z, alpha, beta, gamma):
@@ -1592,14 +1598,7 @@ class Robot:
             Desired end effector orientation in degrees.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MoveLin', [x, y, z, alpha, beta, gamma])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('MoveLin', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def MoveLinRelTrf(self, x, y, z, alpha, beta, gamma):
@@ -1613,14 +1612,7 @@ class Robot:
             Desired orientation change in deg.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MoveLinRelTRF', [x, y, z, alpha, beta, gamma])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('MoveLinRelTRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def MoveLinRelWrf(self, x, y, z, alpha, beta, gamma):
@@ -1635,14 +1627,7 @@ class Robot:
             Desired orientation change in deg.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MoveLinRelWRF', [x, y, z, alpha, beta, gamma])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('MoveLinRelWRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def MoveLinVelTrf(self, x, y, z, alpha, beta, gamma):
@@ -1658,14 +1643,7 @@ class Robot:
             Desired angular velocity in degrees/s.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MoveLinVelTRF', [x, y, z, alpha, beta, gamma])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('MoveLinVelTRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def MoveLinVelWrf(self, x, y, z, alpha, beta, gamma):
@@ -1681,14 +1659,7 @@ class Robot:
             Desired angular velocity in degrees/s.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MoveLinVelWRF', [x, y, z, alpha, beta, gamma])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('MoveLinVelWRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def SetVelTimeout(self, t):
@@ -1702,14 +1673,7 @@ class Robot:
             Desired duration for velocity-mode motion commands.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetVelTimeout', [t])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetVelTimeout', [t])
 
     @disconnect_on_exception
     def SetConf(self, c1, c3, c5):
@@ -1725,14 +1689,7 @@ class Robot:
             Third inverse kinematics parameter.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetConf', [c1, c3, c5])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetConf', [c1, c3, c5])
 
     @disconnect_on_exception
     def SetAutoConf(self, e):
@@ -1744,14 +1701,7 @@ class Robot:
             If true, robot will automatically choose the best configuation for the desired pose.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetAutoConf', [int(e)])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetAutoConf', [int(e)])
 
     @disconnect_on_exception
     def SetConfMultiTurn(self, n):
@@ -1763,14 +1713,7 @@ class Robot:
             The turn number for joint 6.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetConfMultiTurn', [n])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetConfMultiTurn', [n])
 
     @disconnect_on_exception
     def SetAutoConfMultiTurn(self, e):
@@ -1782,14 +1725,7 @@ class Robot:
             If true, robot will automatically choose the best configuation for the desired pose.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetAutoConfMultiTurn', [int(e)])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetAutoConfMultiTurn', [int(e)])
 
     @disconnect_on_exception
     def SetBlending(self, p):
@@ -1803,14 +1739,7 @@ class Robot:
             Percentage blending between actions.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetBlending', [p])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetBlending', [p])
 
     @disconnect_on_exception
     def SetCartAcc(self, p):
@@ -1822,14 +1751,7 @@ class Robot:
             Percentage of maximum acceleration.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetCartAcc', [p])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetCartAcc', [p])
 
     @disconnect_on_exception
     def SetCartAngVel(self, w):
@@ -1841,14 +1763,7 @@ class Robot:
             Maximum angular velocity in deg/s.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetCartAngVel', [w])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetCartAngVel', [w])
 
     @disconnect_on_exception
     def SetCartLinVel(self, w):
@@ -1862,14 +1777,7 @@ class Robot:
             Maximum angular velocity in deg/s.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('SetCartLinVel', [w])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+        self._send_motion_command('SetCartLinVel', [w])
 
     @disconnect_on_exception
     def SetCheckpoint(self, n):
