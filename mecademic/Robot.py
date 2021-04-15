@@ -16,22 +16,37 @@ TERMINATE_PROCESS = 'terminate_process'
 
 
 class MecademicException(Exception):
+    """Base exception class for Mecademic-related exceptions.
+
+    """
     pass
 
 
 class InvalidStateError(MecademicException):
+    """The internal state of the instance is invalid.
+
+    """
     pass
 
 
 class CommunicationError(MecademicException):
+    """There is a communication issue with the robot.
+
+    """
     pass
 
 
 class DisconnectError(MecademicException):
+    """A non-nominal disconnection has occurred.
+
+    """
     pass
 
 
 class EventError(MecademicException):
+    """An event has encountered an error. Perhaps it will never be set.
+
+    """
     pass
 
 
@@ -76,32 +91,72 @@ class Checkpoint:
 
 
 class EventWithException:
+    """Extend default event class to also be able to unblock and raise an exception.
+
+    Attributes
+    ----------
+    _event : event object
+        A standard event-type object.
+    _throw_exception : shared boolean
+        If true, event is in an error state.
+
+    """
     def __init__(self):
         self._event = mp.Event()
         self._throw_exception = mp.Value('b', False)
 
     def wait(self, timeout=None):
+        """Block until event is set or should raise an exception.
+
+        Attributes
+        ----------
+        timeout : float
+            Maximum duration to wait in seconds.
+
+        Return
+        ------
+        success : boolean
+            False if event timed out, true otherwise.
+
+        """
         success = self._event.wait(timeout=timeout)
         if self._throw_exception.value:
             raise EventError('Event received exception, possibly because event will never be triggered.')
         return success
 
     def set(self):
+        """Set the event and unblock all waits.
+
+        """
         with self._throw_exception.get_lock():
             self._event.set()
 
     def raise_exception(self):
+        """Unblock any waits and raise an exception.
+
+        """
         with self._throw_exception.get_lock():
             if not self._event.is_set():
                 self._throw_exception.value = True
                 self._event.set()
 
     def clear(self):
+        """Reset the event to its initial state.
+
+        """
         with self._throw_exception.get_lock():
             self._throw_exception.value = False
             self._event.clear()
 
     def is_set(self):
+        """Checks if the event is set.
+
+        Return
+        ------
+        boolean
+            False if event is not set or instance should '_throw_exception'. True otherwise.
+
+        """
         with self._throw_exception.get_lock():
             if self._throw_exception.value:
                 return False
@@ -1245,9 +1300,9 @@ class Robot:
             return Checkpoint(n, event, self._invalidate_checkpoints_event)
 
     def _invalidate_checkpoints(self):
-        '''Set all checkpoints to be invalid.
-        '''
+        '''Unblock all waiting checkpoints and have them throw EventError exception.
 
+        '''
         self._invalidate_checkpoints_event.set()
 
         for checkpoints_dict in [self._internal_checkpoints, self._user_checkpoints]:
@@ -1489,7 +1544,7 @@ class Robot:
 
     @disconnect_on_exception
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
-        """Moves joints to desired positions.
+        """Move the robot by specifying each joint's target angular position.
 
         Parameters
         ----------
@@ -1527,8 +1582,7 @@ class Robot:
 
     @disconnect_on_exception
     def MoveLin(self, x, y, z, alpha, beta, gamma):
-        """Moves robot such that the TRF has the given transformation relative to the WRF.
-           End effector moves in straight line.
+        """Linearly move robot's tool to an absolute Cartesian position.
 
         Parameters
         ----------
@@ -1548,8 +1602,8 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def MoveLinRelTRF(self, x, y, z, alpha, beta, gamma):
-        """Moves robot such that the new TRF has the given transformation relative to the existing TRF.
+    def MoveLinRelTrf(self, x, y, z, alpha, beta, gamma):
+        """Linearly move robot's tool to a Cartesian position relative to current TRF position.
 
         Parameters
         ----------
@@ -1569,9 +1623,9 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def MoveLinRelWRF(self, x, y, z, alpha, beta, gamma):
-        """Moves robot such that the new TRF has the given translation to the
-           TCP, but has the given orientation relative to the WRF.
+    def MoveLinRelWrf(self, x, y, z, alpha, beta, gamma):
+        """Linearly move robot's tool to a Cartesian position relative to a reference frame that has the same
+        orientation.
 
         Parameters
         ----------
@@ -1591,8 +1645,10 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def MoveLinVelTRF(self, x, y, z, alpha, beta, gamma):
-        """Moves robot using instaneous velocities given relative to TRF.
+    def MoveLinVelTrf(self, x, y, z, alpha, beta, gamma):
+        """Move robot's by Cartesian velocity relative to the TRF.
+
+           Joints will move for a time controlled by velocity timeout (SetVelTimeout).
 
         Parameters
         ----------
@@ -1612,30 +1668,10 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def MovePose(self, x, y, z, alpha, beta, gamma):
-        """Moves robot such that the TRF has the given transformation relative to the WRF.
-           Motors move at constant speed. End effector does not move in a straight line.
+    def MoveLinVelWrf(self, x, y, z, alpha, beta, gamma):
+        """Move robot's by Cartesian velocity relative to the WRF.
 
-        Parameters
-        ----------
-        x, y, z : float
-            Desired end effector coordinates in mm.
-        alpha, beta, gamma
-            Desired end effector orientation in degrees.
-
-        """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MovePose', [x, y, z, alpha, beta, gamma])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
-
-    @disconnect_on_exception
-    def MoveLinVelWRF(self, x, y, z, alpha, beta, gamma):
-        """Moves robot using instaneous velocities given relative to WRF.
+           Joints will move for a time controlled by velocity timeout (SetVelTimeout).
 
         Parameters
         ----------
@@ -1656,7 +1692,9 @@ class Robot:
 
     @disconnect_on_exception
     def SetVelTimeout(self, t):
-        """Sets the duration for which a velocity-mode motion command is executed.
+        """Maximum time the robot will continue to move after a velocity move command was sent.
+
+        (Can be stopped earlier by sending a velocity command with 0 velocity values.)
 
         Parameters
         ----------
