@@ -524,18 +524,26 @@ def test_motion_commands():
     robot._command_rx_queue.put(mdr.Message(3000, ''))
     assert robot.Connect()
 
-    test_args = [1, 2, 3, 4, 5, 6]
-    test_args_text = ','.join([str(x) for x in test_args])
-
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
-        if name[0:4] == 'Move':
-            getattr(robot, name)(*test_args)
+        if name[0:4] == 'Move' or name[0:3] == 'Set':
+            method = getattr(robot, name)
+
+            # Assemble parameter list. Note we need to get the wrapped function since a decorator is used.
+            num_args = method.__wrapped__.__code__.co_argcount
+            test_args = list(range(1, num_args))
+            test_args_text = ','.join([str(x) for x in test_args])
+
+            # Call method.
+            method(*test_args)
+
             # We convert the command to lowercase since capitialization differs slightly to match C++ api.
             text_command = robot._command_tx_queue.get().lower()
+
             # Check that the text commands begins with the appropriate name.
-            assert text_command.index(name.lower()) == 0
+            assert text_command.find(name.lower()) == 0, 'Method {} does not match text command'.format(name)
+
             # Check that the test arguments.
-            text_command.index(test_args_text)
+            assert text_command.find(test_args_text) != -1, 'Method {} args do not match text command'.format(name)
 
     robot.Disconnect()

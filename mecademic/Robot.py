@@ -1712,6 +1712,166 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
+    def SetConf(self, c1, c3, c5):
+        """Manually set inverse kinematics options (and disable auto-conf).
+
+        Parameters
+        ----------
+        c1 : +1 or -1
+            First inverse kinematics parameter.
+        c3 : +1 or -1
+            Second inverse kinematics parameter.
+        c5 : +1 or -1
+            Third inverse kinematics parameter.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetConf', [c1, c3, c5])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def SetAutoConf(self, e):
+        """Enable or disable auto-conf (automatic selection of inverse kinematics options).
+
+        Parameters
+        ----------
+        e : boolean
+            If true, robot will automatically choose the best configuation for the desired pose.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetAutoConf', [int(e)])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def SetConfMultiTurn(self, n):
+        """Manually set the multi-turn configuration parameter.
+
+        Parameters
+        ----------
+        n : integer
+            The turn number for joint 6.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetConfMultiTurn', [n])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def SetAutoConfMultiTurn(self, e):
+        """Enable or disable auto-conf (automatic selection of inverse kinematics options) for joint 6..
+
+        Parameters
+        ----------
+        e : boolean
+            If true, robot will automatically choose the best configuation for the desired pose.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetAutoConfMultiTurn', [int(e)])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def SetBlending(self, p):
+        """Set percentage of blending between consecutive movements in the same mode (velocity or cartesian).
+
+        Note: There can't be blending between joint mode and Cartesian mode moves.
+
+        Parameters
+        ----------
+        p : float
+            Percentage blending between actions.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetBlending', [p])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def SetCartAcc(self, p):
+        """Set target acceleration (linear and angular) during MoveLin commands.
+
+        Parameters
+        ----------
+        p : float
+            Percentage of maximum acceleration.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetCartAcc', [p])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def SetCartAngVel(self, w):
+        """Set maximum angular velocity during MoveLin commands.
+
+        Parameters
+        ----------
+        p : float
+            Maximum angular velocity in deg/s.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetCartAngVel', [w])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
+    def SetCartLinVel(self, w):
+        """Set maximum linear velocity during MoveLin commands.
+
+        Note: Actual linear velocity may be lower if necessary to avoid exceeding maximum angular velocity.
+
+        Parameters
+        ----------
+        p : float
+            Maximum angular velocity in deg/s.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetCartLinVel', [w])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
+
+    @disconnect_on_exception
     def SetCheckpoint(self, n):
         """Set checkpoint with desired id.
 
