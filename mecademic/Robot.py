@@ -352,6 +352,10 @@ class RobotEvents:
         Set if joint angles has been updated.
     on_pose_updated : event
         Set if robot pose has been updated.
+    on_brakes_activated : event
+        Set if brakes are activated.
+    on_brakes_deactivated : event
+        Set if brakes are deactivated.
 
     """
     def __init__(self):
@@ -374,6 +378,8 @@ class RobotEvents:
         self.on_cmd_pending_count_updated = InterruptableEvent()
         self.on_joints_updated = InterruptableEvent()
         self.on_pose_updated = InterruptableEvent()
+        self.on_brakes_activated = InterruptableEvent()
+        self.on_brakes_deactivated = InterruptableEvent()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -387,6 +393,7 @@ class RobotEvents:
         self.on_cmd_pending_count_updated.set()
         self.on_joints_updated.set()
         self.on_pose_updated.set()
+        self.on_brakes_activated.set()
 
 
 class RobotCallbacks:
@@ -819,6 +826,14 @@ class Robot:
                     robot_state.configuration[:] = Robot._string_to_floats(response.data)
                     events.on_conf_updated.set()
 
+                elif response.id == MX_ST_BRAKES_ON:
+                    events.on_brakes_deactivated.clear()
+                    events.on_brakes_activated.set()
+
+                elif response.id == MX_ST_BRAKES_OFF:
+                    events.on_brakes_activated.clear()
+                    events.on_brakes_deactivated.set()
+
     @staticmethod
     def _string_to_floats(input_string):
         """Convert comma-separated floats in string form to list of floats.
@@ -862,10 +877,14 @@ class Robot:
             if status_flags[0]:
                 events.on_deactivated.clear()
                 events.on_activated.set()
+                events.on_brakes_activated.clear()
+                events.on_brakes_deactivated.set()
                 callback_queue.put(CallbackTag('on_activated'))
             else:
                 events.on_activated.clear()
                 events.on_deactivated.set()
+                events.on_brakes_deactivated.clear()
+                events.on_brakes_activated.set()
                 callback_queue.put(CallbackTag('on_deactivated'))
             robot_state.activation_state.value = status_flags[0]
 
@@ -1485,11 +1504,14 @@ class Robot:
             self._robot_events.on_motion_paused.clear()
             self._robot_events.on_motion_resumed.clear()
             self._robot_events.on_motion_cleared.clear()
+            self._robot_events.on_brakes_activated.clear()
+            self._robot_events.on_brakes_deactivated.clear()
 
             self._robot_events.on_deactivated.set()
             self._robot_events.on_error_reset.set()
             self._robot_events.on_p_stop_reset.set()
             self._robot_events.on_motion_resumed.set()
+            self._robot_events.on_brakes_activated.set()
 
             self._robot_events.on_disconnected.clear()
             self._robot_events.on_connected.set()
@@ -1547,6 +1569,8 @@ class Robot:
             self._robot_events.on_motion_cleared.abort()
             self._robot_events.on_activate_sim.abort()
             self._robot_events.on_deactivate_sim.abort()
+            self._robot_events.on_brakes_activated.abort()
+            self._robot_events.on_brakes_deactivated.abort()
 
     @disconnect_on_exception
     def ActivateRobot(self):
@@ -2315,6 +2339,7 @@ class Robot:
         """
         if updated:
             with self._main_lock:
+                self._check_monitor_processes()
                 if self._robot_events.on_conf_updated.is_set():
                     self._robot_events.on_conf_updated.clear()
                     self._send_command('GetConf')
@@ -2323,3 +2348,24 @@ class Robot:
                 raise TimeoutError
 
         return self._robot_state.configuration[:]
+
+    @disconnect_on_exception
+    def ActivateBrakes(self, activated=True):
+        """Enable/disable the brakes. These commands are only available when the robot is deactivated.
+
+        By default, brakes are enabled until robot is activated (brakes are automatically disabled upon activation).
+        Corresponds to text API calls "BrakesOn" / "BrakesOff".
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            if activated:
+                self._send_command('BrakesOn')
+            else:
+                self._send_command('BrakesOff')
+
+        if self._enable_synchronous_mode:
+            if activated:
+                self._robot_events.on_brakes_activated.wait()
+            else:
+                self._robot_events.on_brakes_deactivated.wait()

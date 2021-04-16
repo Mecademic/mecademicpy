@@ -393,6 +393,12 @@ def test_events():
     assert robot.WaitDeactivated(timeout=1)
     assert not robot.WaitActivated(timeout=0)
 
+    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_BRAKES_OFF, ''))
+    assert robot._robot_events.on_brakes_deactivated.wait()
+
+    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_BRAKES_ON, ''))
+    assert robot._robot_events.on_brakes_activated.wait()
+
     assert not robot.WaitDisconnected(timeout=0)
     robot.Disconnect()
     assert robot.WaitDisconnected()
