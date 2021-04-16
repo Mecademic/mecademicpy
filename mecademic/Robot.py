@@ -554,6 +554,7 @@ class Robot:
             If true, will not check child processes before executing api calls.
 
         """
+        self._is_initialized = False
 
         # Check that the ip address is a string.
         if not isinstance(address, str):
@@ -589,9 +590,11 @@ class Robot:
         self._offline_mode = offline_mode
         self.logger = logging.getLogger(__name__)
 
+        self._is_initialized = True
+
     def __del__(self):
         # Only attempt to disconnect if logger is present, meaning the object was initialized.
-        if hasattr(self, 'logger'):
+        if self._is_initialized:
             self.Disconnect()
             self.UnregisterCallbacks()
 
@@ -1523,8 +1526,7 @@ class Robot:
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
 
         """
-        if self.logger:
-            self.logger.debug('Disconnecting from the robot.')
+        self.logger.debug('Disconnecting from the robot.')
 
         # Don't acquire _main_lock while shutting down queues to avoid deadlock.
         self._shut_down_queue_processes()
