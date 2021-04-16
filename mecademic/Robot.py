@@ -62,7 +62,7 @@ class Checkpoint:
         The id of the checkpoint. Not required to be unique.
     event : event object
         A standard event-type object used to signal when the checkpoint is reached.
-    is_invalid : shared boolean
+    is_invalid : reference to shared boolean
         If true, checkpoint is invalid and unblocked despite not successful.
 
     """
@@ -2208,7 +2208,8 @@ class Robot:
                     self._robot_events.on_joints_updated.clear()
                     self._send_command('GetJoints')
 
-            assert self._robot_events.on_joints_updated.wait(timeout=timeout)
+            if not self._robot_events.on_joints_updated.wait(timeout=timeout):
+                raise TimeoutError
 
         return self._robot_state.joint_positions[:]
 
@@ -2229,7 +2230,8 @@ class Robot:
                     self._robot_events.on_pose_updated.clear()
                     self._send_command('GetPose')
 
-            assert self._robot_events.on_pose_updated.wait(timeout=timeout)
+            if not self._robot_events.on_pose_updated.wait(timeout=timeout):
+                raise TimeoutError
 
         return self._robot_state.end_effector_pose[:]
 
@@ -2296,7 +2298,8 @@ class Robot:
                     self._robot_events.on_cmd_pending_count_updated.clear()
                     self._send_command('GetCmdPendingCount')
 
-            assert self._robot_events.on_cmd_pending_count_updated.wait(timeout=timeout)
+            if not self._robot_events.on_cmd_pending_count_updated.wait(timeout=timeout):
+                raise TimeoutError
 
         return self._robot_state.cmd_pending_count.value
 
@@ -2316,6 +2319,7 @@ class Robot:
                     self._robot_events.on_conf_updated.clear()
                     self._send_command('GetConf')
 
-            assert self._robot_events.on_conf_updated.wait(timeout=timeout)
+            if not self._robot_events.on_conf_updated.wait(timeout=timeout):
+                raise TimeoutError
 
         return self._robot_state.configuration[:]

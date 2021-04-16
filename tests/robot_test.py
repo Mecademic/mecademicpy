@@ -630,16 +630,16 @@ def test_simple_gets():
 
     # Attempting these gets without the appropriate robot response should result in timeout.
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(TimeoutError):
         robot.GetJoints(updated=True, timeout=0)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(TimeoutError):
         robot.GetPose(updated=True, timeout=0)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(TimeoutError):
         robot.GetCmdPendingCount(updated=True, timeout=0)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(TimeoutError):
         robot.GetConf(updated=True, timeout=0)
 
     robot.Disconnect()
