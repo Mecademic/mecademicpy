@@ -62,6 +62,8 @@ class Checkpoint:
         The id of the checkpoint. Not required to be unique.
     event : event object
         A standard event-type object used to signal when the checkpoint is reached.
+    is_invalid : shared boolean
+        If true, checkpoint is invalid and unblocked despite not successful.
 
     """
     def __init__(self, id, event, is_invalid):
@@ -264,7 +266,7 @@ class RobotState:
     end_of_movement_status : shared memory boolean
         True if robot is idle.
     cmd_pending_count : shared memory int
-        Number of commands pending on the robot.
+        Number of commands pending in the robot's motion queue.
     configuration : share memory array
         Current configuration of the robot.
 
