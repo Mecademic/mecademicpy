@@ -323,7 +323,7 @@ def test_stranded_checkpoints():
     robot.Disconnect()
 
     # Checkpoint should throw error instead of blocking since robot is already disconnected.
-    with pytest.raises(mdr.EventError):
+    with pytest.raises(mdr.InterruptException):
         checkpoint_1.wait()
 
 
@@ -507,7 +507,7 @@ def test_callbacks():
 
 def test_event_with_exception():
     # Test successful setting.
-    event = mdr.EventWithException()
+    event = mdr.InterruptableEvent()
     event.set()
     assert event.wait(timeout=0)
 
@@ -516,9 +516,9 @@ def test_event_with_exception():
     assert not event.wait(timeout=0)
 
     # Test event throwing exception.
-    exception_event = mdr.EventWithException()
-    exception_event.raise_exception()
-    with pytest.raises(mdr.EventError):
+    exception_event = mdr.InterruptableEvent()
+    exception_event.abort()
+    with pytest.raises(mdr.InterruptException):
         exception_event.wait(timeout=0)
 
 
@@ -535,7 +535,7 @@ def test_motion_commands():
     for name in dir(robot):
         if name in skip_list:
             continue
-        elif name[0:4] == 'Move' or name[0:3] == 'Set':
+        elif name.startswith('Move') or name.startswith('Set'):
             method = getattr(robot, name)
 
             # Assemble parameter list. Note we need to get the wrapped function since a decorator is used.

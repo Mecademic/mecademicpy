@@ -46,7 +46,7 @@ class DisconnectError(MecademicException):
     pass
 
 
-class EventError(MecademicException):
+class InterruptException(MecademicException):
     """An event has encountered an error. Perhaps it will never be set.
 
     """
@@ -64,10 +64,10 @@ class Checkpoint:
         A standard event-type object used to signal when the checkpoint is reached.
 
     """
-    def __init__(self, id, event, exception_event):
+    def __init__(self, id, event, is_invalid):
         self.id = id
         self.event = event
-        self.exception_event = exception_event
+        self._is_invalid = is_invalid
 
     def __repr__(self):
         return "Checkpoint with id={}, is reached={}".format(self.id, self.event.is_set())
@@ -87,26 +87,26 @@ class Checkpoint:
 
         """
         result = self.event.wait(timeout=timeout)
-        if self.exception_event.is_set():
-            raise EventError('Checkpoint will never be reached.')
+        if self._is_invalid.value:
+            raise InterruptException('Checkpoint has been invalidated, perhaps because it will never be reached.')
         else:
             return result
 
 
-class EventWithException:
+class InterruptableEvent:
     """Extend default event class to also be able to unblock and raise an exception.
 
     Attributes
     ----------
     _event : event object
         A standard event-type object.
-    _throw_exception : shared boolean
+    _interrupted : shared boolean
         If true, event is in an error state.
 
     """
     def __init__(self):
         self._event = mp.Event()
-        self._throw_exception = mp.Value('b', False)
+        self._interrupted = mp.Value('b', False)
 
     def wait(self, timeout=None):
         """Block until event is set or should raise an exception.
@@ -123,32 +123,32 @@ class EventWithException:
 
         """
         success = self._event.wait(timeout=timeout)
-        if self._throw_exception.value:
-            raise EventError('Event received exception, possibly because event will never be triggered.')
+        if self._interrupted.value:
+            raise InterruptException('Event received exception, possibly because event will never be triggered.')
         return success
 
     def set(self):
         """Set the event and unblock all waits.
 
         """
-        with self._throw_exception.get_lock():
+        with self._interrupted.get_lock():
             self._event.set()
 
-    def raise_exception(self):
+    def abort(self):
         """Unblock any waits and raise an exception.
 
         """
-        with self._throw_exception.get_lock():
+        with self._interrupted.get_lock():
             if not self._event.is_set():
-                self._throw_exception.value = True
+                self._interrupted.value = True
                 self._event.set()
 
     def clear(self):
         """Reset the event to its initial state.
 
         """
-        with self._throw_exception.get_lock():
-            self._throw_exception.value = False
+        with self._interrupted.get_lock():
+            self._interrupted.value = False
             self._event.clear()
 
     def is_set(self):
@@ -157,11 +157,11 @@ class EventWithException:
         Return
         ------
         boolean
-            False if event is not set or instance should '_throw_exception'. True otherwise.
+            False if event is not set or instance should '_interrupted'. True otherwise.
 
         """
-        with self._throw_exception.get_lock():
-            if self._throw_exception.value:
+        with self._interrupted.get_lock():
+            if self._interrupted.value:
                 return False
             else:
                 return self._event.is_set()
@@ -353,25 +353,25 @@ class RobotEvents:
 
     """
     def __init__(self):
-        self.on_connected = EventWithException()
-        self.on_disconnected = EventWithException()
-        self.on_status_updated = EventWithException()
-        self.on_activated = EventWithException()
-        self.on_deactivated = EventWithException()
-        self.on_homed = EventWithException()
-        self.on_error = EventWithException()
-        self.on_error_reset = EventWithException()
-        self.on_p_stop = EventWithException()
-        self.on_p_stop_reset = EventWithException()
-        self.on_motion_paused = EventWithException()
-        self.on_motion_resumed = EventWithException()
-        self.on_motion_cleared = EventWithException()
-        self.on_activate_sim = EventWithException()
-        self.on_deactivate_sim = EventWithException()
-        self.on_conf_updated = EventWithException()
-        self.on_cmd_pending_count_updated = EventWithException()
-        self.on_joints_updated = EventWithException()
-        self.on_pose_updated = EventWithException()
+        self.on_connected = InterruptableEvent()
+        self.on_disconnected = InterruptableEvent()
+        self.on_status_updated = InterruptableEvent()
+        self.on_activated = InterruptableEvent()
+        self.on_deactivated = InterruptableEvent()
+        self.on_homed = InterruptableEvent()
+        self.on_error = InterruptableEvent()
+        self.on_error_reset = InterruptableEvent()
+        self.on_p_stop = InterruptableEvent()
+        self.on_p_stop_reset = InterruptableEvent()
+        self.on_motion_paused = InterruptableEvent()
+        self.on_motion_resumed = InterruptableEvent()
+        self.on_motion_cleared = InterruptableEvent()
+        self.on_activate_sim = InterruptableEvent()
+        self.on_deactivate_sim = InterruptableEvent()
+        self.on_conf_updated = InterruptableEvent()
+        self.on_cmd_pending_count_updated = InterruptableEvent()
+        self.on_joints_updated = InterruptableEvent()
+        self.on_pose_updated = InterruptableEvent()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -595,7 +595,7 @@ class Robot:
         self._internal_checkpoints = self._manager.dict()
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
-        self._invalidate_checkpoints_event = mp.Event()
+        self._checkpoints_invalid = mp.Value('b', False, lock=False)
 
         self._robot_state = RobotState()
         self._robot_events = RobotEvents()
@@ -1366,13 +1366,13 @@ class Robot:
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
 
-            return Checkpoint(n, event, self._invalidate_checkpoints_event)
+            return Checkpoint(n, event, self._checkpoints_invalid)
 
     def _invalidate_checkpoints(self):
-        '''Unblock all waiting checkpoints and have them throw EventError exception.
+        '''Unblock all waiting checkpoints and have them throw InterruptException.
 
         '''
-        self._invalidate_checkpoints_event.set()
+        self._checkpoints_invalid.value = True
 
         for checkpoints_dict in [self._internal_checkpoints, self._user_checkpoints]:
             for key, checkpoints_list in checkpoints_dict.items():
@@ -1532,19 +1532,19 @@ class Robot:
             self._robot_events.on_disconnected.set()
             self._callback_queue.put(CallbackTag('on_disconnected'))
 
-            self._robot_events.on_status_updated.raise_exception()
-            self._robot_events.on_activated.raise_exception()
-            self._robot_events.on_deactivated.raise_exception()
-            self._robot_events.on_homed.raise_exception()
-            self._robot_events.on_error.raise_exception()
-            self._robot_events.on_error_reset.raise_exception()
-            self._robot_events.on_p_stop.raise_exception()
-            self._robot_events.on_p_stop_reset.raise_exception()
-            self._robot_events.on_motion_paused.raise_exception()
-            self._robot_events.on_motion_resumed.raise_exception()
-            self._robot_events.on_motion_cleared.raise_exception()
-            self._robot_events.on_activate_sim.raise_exception()
-            self._robot_events.on_deactivate_sim.raise_exception()
+            self._robot_events.on_status_updated.abort()
+            self._robot_events.on_activated.abort()
+            self._robot_events.on_deactivated.abort()
+            self._robot_events.on_homed.abort()
+            self._robot_events.on_error.abort()
+            self._robot_events.on_error_reset.abort()
+            self._robot_events.on_p_stop.abort()
+            self._robot_events.on_p_stop_reset.abort()
+            self._robot_events.on_motion_paused.abort()
+            self._robot_events.on_motion_resumed.abort()
+            self._robot_events.on_motion_cleared.abort()
+            self._robot_events.on_activate_sim.abort()
+            self._robot_events.on_deactivate_sim.abort()
 
     @disconnect_on_exception
     def ActivateRobot(self):
