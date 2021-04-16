@@ -263,7 +263,10 @@ class RobotState:
         True if robot is not moving and motion queue is empty.
     end_of_movement_status : shared memory boolean
         True if robot is idle.
-
+    cmd_pending_count : shared memory int
+        Number of commands pending on the robot.
+    configuration : share memory array
+        Current configuration of the robot.
 
     """
     def __init__(self):
@@ -299,6 +302,9 @@ class RobotState:
         self.pause_motion_status = mp.Value('b', False, lock=False)
         self.end_of_block_status = mp.Value('b', False, lock=False)
         self.end_of_movement_status = mp.Value('b', False, lock=False)
+
+        self.cmd_pending_count = mp.Value('i', 0, lock=False)
+        self.configuration = mp.Array('f', 3, lock=False)
 
 
 class RobotEvents:
@@ -336,6 +342,14 @@ class RobotEvents:
         Set if robot is in sim mode.
     on_deactivate_sim : event
         Set if robot is not in sim mode.
+    on_conf_updated : event
+        Set if robot configuration has been updated.
+    on_cmd_pending_count_updated : event
+        Set if robot number of pending commands has been updated.
+    on_joints_updated : event
+        Set if joint angles has been updated.
+    on_pose_updated : event
+        Set if robot pose has been updated.
 
     """
     def __init__(self):
@@ -354,6 +368,10 @@ class RobotEvents:
         self.on_motion_cleared = EventWithException()
         self.on_activate_sim = EventWithException()
         self.on_deactivate_sim = EventWithException()
+        self.on_conf_updated = EventWithException()
+        self.on_cmd_pending_count_updated = EventWithException()
+        self.on_joints_updated = EventWithException()
+        self.on_pose_updated = EventWithException()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -361,6 +379,12 @@ class RobotEvents:
         self.on_p_stop_reset.set()
         self.on_motion_resumed.set()
         self.on_deactivate_sim.set()
+
+        self.on_status_updated.set()
+        self.on_conf_updated.set()
+        self.on_cmd_pending_count_updated.set()
+        self.on_joints_updated.set()
+        self.on_pose_updated.set()
 
 
 class RobotCallbacks:
@@ -557,8 +581,10 @@ class Robot:
         self.logger = logging.getLogger(__name__)
 
     def __del__(self):
-        self.Disconnect()
-        self.UnregisterCallbacks()
+        # Only attempt to disconnect if logger is present, meaning the object was initialized.
+        if hasattr(self, 'logger'):
+            self.Disconnect()
+            self.UnregisterCallbacks()
 
     def _init_states(self):
         self._command_rx_queue = mp.Queue()
@@ -748,6 +774,14 @@ class Robot:
                 return
 
             with main_lock:
+                if response.id == MX_ST_GET_JOINTS:
+                    robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
+                    events.on_joints_updated.set()
+
+                elif response.id == MX_ST_GET_POSE:
+                    robot_state.end_effector_pose[:] = Robot._string_to_floats(response.data)
+                    events.on_pose_updated.set()
+
                 if response.id == MX_ST_CLEAR_MOTION:
                     if clear_motion_requests.value <= 1:
                         clear_motion_requests.value = 0
@@ -774,6 +808,14 @@ class Robot:
                         events.on_p_stop.clear()
                         events.on_p_stop_reset.set()
                         callback_queue.put(CallbackTag('on_p_stop_reset'))
+
+                elif response.id == MX_ST_GET_CMD_PENDING_COUNT:
+                    robot_state.cmd_pending_count.value = int(response.data)
+                    events.on_cmd_pending_count_updated.set()
+
+                elif response.id == MX_ST_GET_CONF:
+                    robot_state.configuration[:] = Robot._string_to_floats(response.data)
+                    events.on_conf_updated.set()
 
     @staticmethod
     def _string_to_floats(input_string):
@@ -898,9 +940,11 @@ class Robot:
             with main_lock:
                 if response.id == MX_ST_GET_JOINTS:
                     robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
+                    events.on_joints_updated.set()
 
                 elif response.id == MX_ST_GET_POSE:
                     robot_state.end_effector_pose[:] = Robot._string_to_floats(response.data)
+                    events.on_pose_updated.set()
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
@@ -1455,7 +1499,8 @@ class Robot:
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
 
         """
-        self.logger.debug('Disconnecting from the robot.')
+        if self.logger:
+            self.logger.debug('Disconnecting from the robot.')
 
         # Don't acquire _main_lock while shutting down queues to avoid deadlock.
         self._shut_down_queue_processes()
@@ -1498,6 +1543,8 @@ class Robot:
             self._robot_events.on_motion_paused.raise_exception()
             self._robot_events.on_motion_resumed.raise_exception()
             self._robot_events.on_motion_cleared.raise_exception()
+            self._robot_events.on_activate_sim.raise_exception()
+            self._robot_events.on_deactivate_sim.raise_exception()
 
     @disconnect_on_exception
     def ActivateRobot(self):
@@ -2143,7 +2190,7 @@ class Robot:
     ### Non-motion commands.
 
     @disconnect_on_exception
-    def GetJoints(self):
+    def GetJoints(self, updated=True, timeout=None):
         """Returns the current joint positions of the robot.
 
         Return
@@ -2152,12 +2199,19 @@ class Robot:
             Returns list of joint positions in degrees.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            return self._robot_state.joint_positions[:]
+        if updated:
+            with self._main_lock:
+                self._check_monitor_processes()
+                if self._robot_events.on_joints_updated.is_set():
+                    self._robot_events.on_joints_updated.clear()
+                    self._send_command('GetJoints')
+
+            assert self._robot_events.on_joints_updated.wait(timeout=timeout)
+
+        return self._robot_state.joint_positions[:]
 
     @disconnect_on_exception
-    def GetPose(self):
+    def GetPose(self, updated=True, timeout=None):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
         Return
@@ -2166,9 +2220,16 @@ class Robot:
             Returns end-effector pose [x, y, z, alpha, beta, gamma].
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            return self._robot_state.end_effector_pose[:]
+        if updated:
+            with self._main_lock:
+                self._check_monitor_processes()
+                if self._robot_events.on_pose_updated.is_set():
+                    self._robot_events.on_pose_updated.clear()
+                    self._send_command('GetPose')
+
+            assert self._robot_events.on_pose_updated.wait(timeout=timeout)
+
+        return self._robot_state.end_effector_pose[:]
 
     @disconnect_on_exception
     def SetMonitoringInterval(self, t):
@@ -2181,7 +2242,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes
+            self._check_monitor_processes()
             self._send_command('SetMonitoringInterval', [t])
 
     @disconnect_on_exception
@@ -2195,7 +2256,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes
+            self._check_monitor_processes()
             self._send_command('SetRTC', [t])
 
     @disconnect_on_exception
@@ -2204,7 +2265,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes
+            self._check_monitor_processes()
             self._send_command('ActivateSim')
 
     @disconnect_on_exception
@@ -2213,5 +2274,46 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes
+            self._check_monitor_processes()
             self._send_command('DeactivateSim')
+
+    @disconnect_on_exception
+    def GetCmdPendingCount(self, updated=True, timeout=None):
+        """Gets the number of pending commands on the robot.
+
+        Returns
+        -------
+        integer
+            Number of pending events on the robot.
+
+        """
+        if updated:
+            with self._main_lock:
+                self._check_monitor_processes()
+                if self._robot_events.on_cmd_pending_count_updated.is_set():
+                    self._robot_events.on_cmd_pending_count_updated.clear()
+                    self._send_command('GetCmdPendingCount')
+
+            assert self._robot_events.on_cmd_pending_count_updated.wait(timeout=timeout)
+
+        return self._robot_state.cmd_pending_count.value
+
+    @disconnect_on_exception
+    def GetConf(self, updated=True, timeout=None):
+        """Get robot's current (physical) inverse-kinematics configuration.
+
+        Returns
+        -------
+        integer
+            Number of pending events on the robot.
+
+        """
+        if updated:
+            with self._main_lock:
+                if self._robot_events.on_conf_updated.is_set():
+                    self._robot_events.on_conf_updated.clear()
+                    self._send_command('GetConf')
+
+            assert self._robot_events.on_conf_updated.wait(timeout=timeout)
+
+        return self._robot_state.configuration[:]

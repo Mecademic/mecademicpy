@@ -100,7 +100,7 @@ def test_successful_connection_split_response():
 
 
 def test_sequential_connections():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3001, ''))
@@ -120,7 +120,7 @@ def test_monitoring_connection():
     # Use this as the seed array, add the response code to each element to guarantee uniqueness.
     fake_array = [1, 2, 3, 4, 5, 6, 7]
 
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
@@ -150,13 +150,13 @@ def test_monitoring_connection():
 
     robot._monitor_rx_queue.put(mdr.Message(2220, ','.join([str(x + 2220) for x in fake_array[:5]])))
 
-    robot._monitor_rx_queue.put('Terminate process')
+    robot._monitor_rx_queue.put(mdr.TERMINATE_PROCESS)
     # Wait until process ends to ensure the monitor messages are processed.
     robot._monitor_handler_process.join()
     robot._monitor_handler_process = None
 
-    assert robot.GetJoints() == [x + 2026 for x in fake_array[:-1]]
-    assert robot.GetPose() == [x + 2027 for x in fake_array[:-1]]
+    assert robot.GetJoints(updated=False) == [x + 2026 for x in fake_array[:-1]]
+    assert robot.GetPose(updated=False) == [x + 2027 for x in fake_array[:-1]]
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
     assert robot._robot_state.nc_joint_positions[:] == [x + 2200 for x in fake_array]
@@ -182,7 +182,7 @@ def test_monitoring_connection():
 
 
 def test_internal_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
@@ -204,7 +204,7 @@ def test_internal_checkpoints():
 
 
 def test_external_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
@@ -226,7 +226,7 @@ def test_external_checkpoints():
 
 
 def test_multiple_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
@@ -255,7 +255,7 @@ def test_multiple_checkpoints():
 
 
 def test_repeated_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
@@ -279,7 +279,7 @@ def test_repeated_checkpoints():
 
 
 def test_special_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
@@ -297,7 +297,7 @@ def test_special_checkpoints():
 
 
 def test_unaccounted_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
@@ -312,7 +312,7 @@ def test_unaccounted_checkpoints():
 
 
 def test_stranded_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(3000, ''))
@@ -328,7 +328,7 @@ def test_stranded_checkpoints():
 
 
 def test_events():
-    robot = mdr.Robot(TEST_IP, offline_mode=True)
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     assert robot is not None
 
     assert not robot.WaitActivated(timeout=0)
@@ -554,5 +554,85 @@ def test_motion_commands():
 
             # Check that the test arguments.
             assert text_command.find(test_args_text) != -1, 'Method {} args do not match text command'.format(name)
+
+    robot.Disconnect()
+
+
+def simple_response_handler(queue_in, queue_out, expected_in, desired_out):
+    assert queue_in.get(block=True, timeout=1) == expected_in
+    queue_out.put(desired_out)
+
+
+def test_simple_gets():
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(3000, ''))
+    assert robot.Connect()
+
+    test_data = [1, 2, 3, 4, 5, 6]
+    test_data_string = ','.join([str(x) for x in test_data])
+
+    # Test GetJoints.
+    expected_command = 'GetJoints'
+    robot_response = mdr.Message(mdr.MX_ST_GET_JOINTS, test_data_string)
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    assert robot.GetJoints(updated=True, timeout=1) == test_data
+    fake_robot.join()
+
+    # Test GetPose.
+    expected_command = 'GetPose'
+    robot_response = mdr.Message(mdr.MX_ST_GET_POSE, test_data_string)
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    assert robot.GetPose(updated=True, timeout=1) == test_data
+    fake_robot.join()
+
+    # Test GetCmdPendingCount.
+    expected_command = 'GetCmdPendingCount'
+    robot_response = mdr.Message(mdr.MX_ST_GET_CMD_PENDING_COUNT, '5')
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    assert robot.GetCmdPendingCount(updated=True, timeout=1) == 5
+    fake_robot.join()
+
+    # Test GetCmdPendingCount.
+    expected_command = 'GetConf'
+    robot_response = mdr.Message(mdr.MX_ST_GET_CONF, '1,-1,1')
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    assert robot.GetConf(updated=True, timeout=1) == [1, -1, 1]
+    fake_robot.join()
+
+    # Attempting these gets without the appropriate robot response should result in timeout.
+
+    with pytest.raises(AssertionError):
+        robot.GetJoints(updated=True, timeout=0)
+
+    with pytest.raises(AssertionError):
+        robot.GetPose(updated=True, timeout=0)
+
+    with pytest.raises(AssertionError):
+        robot.GetCmdPendingCount(updated=True, timeout=0)
+
+    with pytest.raises(AssertionError):
+        robot.GetConf(updated=True, timeout=0)
 
     robot.Disconnect()
