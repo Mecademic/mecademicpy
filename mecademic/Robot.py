@@ -361,23 +361,31 @@ class RobotEvents:
     def __init__(self):
         self.on_connected = InterruptableEvent()
         self.on_disconnected = InterruptableEvent()
+
         self.on_status_updated = InterruptableEvent()
+
         self.on_activated = InterruptableEvent()
         self.on_deactivated = InterruptableEvent()
+
         self.on_homed = InterruptableEvent()
+
         self.on_error = InterruptableEvent()
         self.on_error_reset = InterruptableEvent()
         self.on_p_stop = InterruptableEvent()
         self.on_p_stop_reset = InterruptableEvent()
+
         self.on_motion_paused = InterruptableEvent()
         self.on_motion_resumed = InterruptableEvent()
         self.on_motion_cleared = InterruptableEvent()
+
         self.on_activate_sim = InterruptableEvent()
         self.on_deactivate_sim = InterruptableEvent()
+
         self.on_conf_updated = InterruptableEvent()
         self.on_cmd_pending_count_updated = InterruptableEvent()
         self.on_joints_updated = InterruptableEvent()
         self.on_pose_updated = InterruptableEvent()
+
         self.on_brakes_activated = InterruptableEvent()
         self.on_brakes_deactivated = InterruptableEvent()
 
@@ -394,6 +402,21 @@ class RobotEvents:
         self.on_joints_updated.set()
         self.on_pose_updated.set()
         self.on_brakes_activated.set()
+
+    def clear_all(self):
+        """Clear all events.
+
+        """
+        for attr in self.__dict__:
+            self.__dict__[attr].clear()
+
+    def abort_all_except_on_connected(self):
+        """Abort all events, except for on_disconnected.
+
+        """
+        for attr in self.__dict__:
+            if attr != 'on_connected':
+                self.__dict__[attr].abort()
 
 
 class RobotCallbacks:
@@ -784,6 +807,9 @@ class Robot:
             # Terminate process if requested.
             if response == TERMINATE_PROCESS:
                 return
+
+            elif not (hasattr(response, 'id') and hasattr(response, 'data')):
+                continue
 
             with main_lock:
                 if response.id == MX_ST_GET_JOINTS:
@@ -1496,19 +1522,7 @@ class Robot:
             self._initialize_command_connection()
             self._initialize_monitoring_connection()
 
-            self._robot_events.on_status_updated.clear()
-            self._robot_events.on_activated.clear()
-            self._robot_events.on_deactivated.clear()
-            self._robot_events.on_homed.clear()
-            self._robot_events.on_error.clear()
-            self._robot_events.on_error_reset.clear()
-            self._robot_events.on_p_stop.clear()
-            self._robot_events.on_p_stop_reset.clear()
-            self._robot_events.on_motion_paused.clear()
-            self._robot_events.on_motion_resumed.clear()
-            self._robot_events.on_motion_cleared.clear()
-            self._robot_events.on_brakes_activated.clear()
-            self._robot_events.on_brakes_deactivated.clear()
+            self._robot_events.clear_all()
 
             self._robot_events.on_deactivated.set()
             self._robot_events.on_error_reset.set()
@@ -1516,7 +1530,12 @@ class Robot:
             self._robot_events.on_motion_resumed.set()
             self._robot_events.on_brakes_activated.set()
 
-            self._robot_events.on_disconnected.clear()
+            self._robot_events.on_status_updated.set()
+            self._robot_events.on_conf_updated.set()
+            self._robot_events.on_cmd_pending_count_updated.set()
+            self._robot_events.on_joints_updated.set()
+            self._robot_events.on_pose_updated.set()
+
             self._robot_events.on_connected.set()
             self._callback_queue.put(CallbackTag('on_connected'))
 
@@ -1558,21 +1577,7 @@ class Robot:
             self._robot_events.on_disconnected.set()
             self._callback_queue.put(CallbackTag('on_disconnected'))
 
-            self._robot_events.on_status_updated.abort()
-            self._robot_events.on_activated.abort()
-            self._robot_events.on_deactivated.abort()
-            self._robot_events.on_homed.abort()
-            self._robot_events.on_error.abort()
-            self._robot_events.on_error_reset.abort()
-            self._robot_events.on_p_stop.abort()
-            self._robot_events.on_p_stop_reset.abort()
-            self._robot_events.on_motion_paused.abort()
-            self._robot_events.on_motion_resumed.abort()
-            self._robot_events.on_motion_cleared.abort()
-            self._robot_events.on_activate_sim.abort()
-            self._robot_events.on_deactivate_sim.abort()
-            self._robot_events.on_brakes_activated.abort()
-            self._robot_events.on_brakes_deactivated.abort()
+            self._robot_events.abort_all_except_on_connected()
 
     @disconnect_on_exception
     def ActivateRobot(self):
