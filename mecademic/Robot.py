@@ -2298,6 +2298,19 @@ class Robot:
         if self._enable_synchronous_mode:
             checkpoint.wait()
 
+    @disconnect_on_exception
+    def SendCustomCommand(self, command):
+        """Send custom command to robot.
+
+        Parameters
+        ----------
+        command : str
+            Desired custom command.
+
+        """
+        with self._main_lock:
+            self._send_command(command)
+
     ### Non-motion commands.
 
     @disconnect_on_exception
