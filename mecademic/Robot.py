@@ -441,6 +441,8 @@ class RobotCallbacks:
             Function to be called each time a command response is received.
         on_monitor_response : function object
             Function to be called each time a monitor response is received.
+        on_offline_program_started : function object
+            Function to be called each time an offline program starts.
     """
     def __init__(self):
         self.on_connected = None
@@ -469,6 +471,8 @@ class RobotCallbacks:
 
         self.on_command_message = None
         self.on_monitor_message = None
+
+        self.on_offline_program_started = None
 
 
 class CallbackQueue():
@@ -929,6 +933,9 @@ class Robot:
                 elif response.id == MX_ST_BRAKES_OFF:
                     events.on_brakes_activated.clear()
                     events.on_brakes_deactivated.set()
+
+                elif response.id == MX_ST_OFFLINE_START:
+                    callback_queue.put('on_offline_program_started')
 
     @staticmethod
     def _string_to_floats(input_string):
@@ -2310,6 +2317,23 @@ class Robot:
         """
         with self._main_lock:
             self._send_command(command)
+
+    @disconnect_on_exception
+    def StartOfflineProgram(self, n):
+        """Start an offline program.
+
+        Offline programs need to be recorded using the robot's Web Portal (or text API).
+        This API can only start an already recorded offline program.
+        Callback OnOfflineProgramState will indicate when program is started or stopped.
+
+        Parameters
+        ----------
+        n : int
+            Id of offline program to start.
+
+        """
+        with self._main_lock:
+            self._send_command('StartProgram', [n])
 
     ### Non-motion commands.
 

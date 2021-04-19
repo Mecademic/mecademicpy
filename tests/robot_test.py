@@ -510,6 +510,8 @@ def test_callbacks():
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
         robot.DeactivateSim()
 
+        robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_OFFLINE_START, ''))
+
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '0,0,0,0,0,0,0'))
         robot.DeactivateRobot()
 
