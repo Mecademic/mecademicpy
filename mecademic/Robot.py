@@ -188,25 +188,6 @@ class Message:
         return "Message with id={}, data={}".format(self.id, self.data)
 
 
-class CallbackTag:
-    """Class for storing a callback name and associated data.
-
-    Attributes
-    ----------
-    callback_name : string
-        The name of the callback.
-    data : string
-        The associated data.
-
-    """
-    def __init__(self, callback_name, data=None):
-        self.callback_name = callback_name
-        self.data = data
-
-    def __repr__(self):
-        return "Callback name: {}, data: {}".format(self.callback_name, self.data)
-
-
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
 
@@ -491,11 +472,17 @@ class RobotCallbacks:
 
 
 class CallbackQueue():
-    """Queue class for storing triggered callbacks.
+    """Queue class for storing triggered callbacks. Only registered callbacks are added to the queue.
+
+    Attributes
+    ----------
+    _queue : multiprocessing queue
+        Queue to use to store callback names and associated data.
+    _registered_callbacks : set
+        Set of names of registered callbacks.
 
     """
     def __init__(self, robot_callbacks):
-
         self._queue = mp.Queue()
         self._registered_callbacks = set()
 
@@ -504,13 +491,40 @@ class CallbackQueue():
                 self._registered_callbacks.add(attr)
 
     def qsize(self):
+        """Returns the queue size.
+
+        """
         return self._queue.qsize()
 
     def put(self, callback_name, data=None):
+        """Put the callback name and associated data into the queue if is registered.
+
+        Parameters
+        ----------
+        callback_name : str
+            Name of callback.
+        data : any object type
+            Associated data.
+
+        """
         if callback_name in self._registered_callbacks or callback_name == TERMINATE_PROCESS:
-            self._queue.put([callback_name, data])
+            self._queue.put((callback_name, data))
 
     def get(self, block=False, timeout=None):
+        """Get the next callback in the queue.
+
+        Parameters
+        ----------
+        block : bool
+            Block on next available callback if true.
+        timeout : float
+            Maximum time to wait on a callback.
+
+        Returns
+        -------
+        tuple of callback name and data
+
+        """
         return self._queue.get(block=block, timeout=timeout)
 
 
@@ -595,6 +609,18 @@ class Robot:
     _enable_synchronous_mode : boolean
         If enabled, commands block until action is completed.
 
+    _checkpoints_invalid : reference to shared boolean
+        If true, all pending checkpoints should be aborted.
+
+    _clear_motion_requests : reference to shared int
+        Number of pending ClearMotion requests.
+
+    logger : logger object
+        Logger used throughout class.
+
+    default_timeout : float
+        Default timeout to use for blocking operations.
+
     """
     def __init__(self,
                  address=MX_DEFAULT_ROBOT_IP,
@@ -650,6 +676,7 @@ class Robot:
         self._disconnect_on_exception = disconnect_on_exception
         self._offline_mode = offline_mode
         self.logger = logging.getLogger(__name__)
+        self.default_timeout = 10
 
         self._is_initialized = True
 
@@ -1351,7 +1378,7 @@ class Robot:
             except Exception as e:
                 self._command_tx_process.terminate()
                 self.logger.error('Error shutting down tx process. ' + str(e))
-            self._command_tx_process.join()
+            self._command_tx_process.join(timeout=self.default_timeout)
             self._command_tx_process = None
 
         if self._command_response_handler_process is not None:
@@ -1360,7 +1387,7 @@ class Robot:
             except Exception as e:
                 self._command_response_handler_process.terminate()
                 self.logger.error('Error shutting down command response handler process. ' + str(e))
-            self._command_response_handler_process.join()
+            self._command_response_handler_process.join(timeout=self.default_timeout)
             self._command_response_handler_process = None
 
         if self._monitor_handler_process is not None:
@@ -1369,7 +1396,7 @@ class Robot:
             except Exception as e:
                 self._monitor_handler_process.terminate()
                 self.logger.error('Error shutting down monitor handler process. ' + str(e))
-            self._monitor_handler_process.join()
+            self._monitor_handler_process.join(timeout=self.default_timeout)
             self._monitor_handler_process = None
 
     def _shut_down_socket_processes(self):
@@ -1396,12 +1423,12 @@ class Robot:
 
             # Join processes which wait on a socket.
             if self._command_rx_process is not None:
-                if not self._command_rx_process.join(timeout=1):
+                if not self._command_rx_process.join(timeout=self.default_timeout):
                     self._command_rx_process.terminate()
                 self._command_rx_process = None
 
             if self._monitor_rx_process is not None:
-                if not self._monitor_rx_process.join(timeout=1):
+                if not self._monitor_rx_process.join(timeout=self.default_timeout):
                     self._monitor_rx_process.terminate()
                 self._monitor_rx_process = None
 
@@ -1540,7 +1567,7 @@ class Robot:
         """
         if self._callback_thread:
             self._callback_queue.put(TERMINATE_PROCESS)
-            self._callback_thread.join()
+            self._callback_thread.join(timeout=self.default_timeout)
 
         self._robot_callbacks = RobotCallbacks()
         self._callback_queue = CallbackQueue(self._robot_callbacks)
@@ -1672,7 +1699,7 @@ class Robot:
             self._send_command('PauseMotion')
 
         if self._enable_synchronous_mode:
-            self._robot_events.on_motion_paused.wait()
+            self._robot_events.on_motion_paused.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def ResumeMotion(self):
@@ -1684,7 +1711,7 @@ class Robot:
             self._send_command('ResumeMotion')
 
         if self._enable_synchronous_mode:
-            self.WaitMotionResumed()
+            self.WaitMotionResumed(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def DeactivateRobot(self):
@@ -1716,7 +1743,7 @@ class Robot:
             self._invalidate_checkpoints()
 
         if self._enable_synchronous_mode:
-            self.WaitMotionCleared()
+            self.WaitMotionCleared(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
