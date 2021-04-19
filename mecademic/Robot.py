@@ -5,6 +5,7 @@ import time
 import socket
 import multiprocessing as mp
 import threading
+import queue
 import functools
 
 from .mx_robot_def import *
@@ -13,20 +14,42 @@ CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
 TERMINATE_PROCESS = 'terminate_process'
 
+GRIPPER_OPEN = True
+GRIPPER_CLOSE = False
+
 
 class MecademicException(Exception):
+    """Base exception class for Mecademic-related exceptions.
+
+    """
     pass
 
 
 class InvalidStateError(MecademicException):
+    """The internal state of the instance is invalid.
+
+    """
     pass
 
 
 class CommunicationError(MecademicException):
+    """There is a communication issue with the robot.
+
+    """
     pass
 
 
 class DisconnectError(MecademicException):
+    """A non-nominal disconnection has occurred.
+
+    """
+    pass
+
+
+class InterruptException(MecademicException):
+    """An event has encountered an error. Perhaps it will never be set.
+
+    """
     pass
 
 
@@ -39,11 +62,14 @@ class Checkpoint:
         The id of the checkpoint. Not required to be unique.
     event : event object
         A standard event-type object used to signal when the checkpoint is reached.
+    is_invalid : reference to shared boolean
+        If true, checkpoint is invalid and unblocked despite not successful.
 
     """
-    def __init__(self, id, event):
+    def __init__(self, id, event, is_invalid):
         self.id = id
         self.event = event
+        self._is_invalid = is_invalid
 
     def __repr__(self):
         return "Checkpoint with id={}, is reached={}".format(self.id, self.event.is_set())
@@ -62,7 +88,85 @@ class Checkpoint:
             True if wait was successful, false otherwise.
 
         """
-        return self.event.wait(timeout=timeout)
+        result = self.event.wait(timeout=timeout)
+        if self._is_invalid.value:
+            raise InterruptException('Checkpoint has been invalidated, perhaps because it will never be reached.')
+        else:
+            return result
+
+
+class InterruptableEvent:
+    """Extend default event class to also be able to unblock and raise an exception.
+
+    Attributes
+    ----------
+    _event : event object
+        A standard event-type object.
+    _interrupted : shared boolean
+        If true, event is in an error state.
+
+    """
+    def __init__(self):
+        self._event = mp.Event()
+        self._interrupted = mp.Value('b', False)
+
+    def wait(self, timeout=None):
+        """Block until event is set or should raise an exception.
+
+        Attributes
+        ----------
+        timeout : float
+            Maximum duration to wait in seconds.
+
+        Return
+        ------
+        success : boolean
+            False if event timed out, true otherwise.
+
+        """
+        success = self._event.wait(timeout=timeout)
+        if self._interrupted.value:
+            raise InterruptException('Event received exception, possibly because event will never be triggered.')
+        return success
+
+    def set(self):
+        """Set the event and unblock all waits.
+
+        """
+        with self._interrupted.get_lock():
+            self._event.set()
+
+    def abort(self):
+        """Unblock any waits and raise an exception.
+
+        """
+        with self._interrupted.get_lock():
+            if not self._event.is_set():
+                self._interrupted.value = True
+                self._event.set()
+
+    def clear(self):
+        """Reset the event to its initial state.
+
+        """
+        with self._interrupted.get_lock():
+            self._interrupted.value = False
+            self._event.clear()
+
+    def is_set(self):
+        """Checks if the event is set.
+
+        Return
+        ------
+        boolean
+            False if event is not set or instance should '_interrupted'. True otherwise.
+
+        """
+        with self._interrupted.get_lock():
+            if self._interrupted.value:
+                return False
+            else:
+                return self._event.is_set()
 
 
 class Message:
@@ -161,7 +265,10 @@ class RobotState:
         True if robot is not moving and motion queue is empty.
     end_of_movement_status : shared memory boolean
         True if robot is idle.
-
+    cmd_pending_count : shared memory int
+        Number of commands pending in the robot's motion queue.
+    configuration : share memory array
+        Current configuration of the robot.
 
     """
     def __init__(self):
@@ -198,6 +305,9 @@ class RobotState:
         self.end_of_block_status = mp.Value('b', False, lock=False)
         self.end_of_movement_status = mp.Value('b', False, lock=False)
 
+        self.cmd_pending_count = mp.Value('i', 0, lock=False)
+        self.configuration = mp.Array('f', 3, lock=False)
+
 
 class RobotEvents:
     """Class for storing possible status events for the generic Mecademic robot.
@@ -230,28 +340,60 @@ class RobotEvents:
         Set if robot motion is not paused.
     on_motion_cleared : event
         Set if there are no pending ClearMotion commands.
+    on_activate_sim : event
+        Set if robot is in sim mode.
+    on_deactivate_sim : event
+        Set if robot is not in sim mode.
+    on_conf_updated : event
+        Set if robot configuration has been updated.
+    on_cmd_pending_count_updated : event
+        Set if robot number of pending commands has been updated.
+    on_joints_updated : event
+        Set if joint angles has been updated.
+    on_pose_updated : event
+        Set if robot pose has been updated.
+    on_brakes_activated : event
+        Set if brakes are activated.
+    on_brakes_deactivated : event
+        Set if brakes are deactivated.
 
     """
     def __init__(self):
-        self.on_connected = mp.Event()
-        self.on_disconnected = mp.Event()
-        self.on_status_updated = mp.Event()
-        self.on_activated = mp.Event()
-        self.on_deactivated = mp.Event()
-        self.on_homed = mp.Event()
-        self.on_error = mp.Event()
-        self.on_error_reset = mp.Event()
-        self.on_p_stop = mp.Event()
-        self.on_p_stop_reset = mp.Event()
-        self.on_motion_paused = mp.Event()
-        self.on_motion_resumed = mp.Event()
-        self.on_motion_cleared = mp.Event()
+        self.on_connected = InterruptableEvent()
+        self.on_disconnected = InterruptableEvent()
+        self.on_status_updated = InterruptableEvent()
+        self.on_activated = InterruptableEvent()
+        self.on_deactivated = InterruptableEvent()
+        self.on_homed = InterruptableEvent()
+        self.on_error = InterruptableEvent()
+        self.on_error_reset = InterruptableEvent()
+        self.on_p_stop = InterruptableEvent()
+        self.on_p_stop_reset = InterruptableEvent()
+        self.on_motion_paused = InterruptableEvent()
+        self.on_motion_resumed = InterruptableEvent()
+        self.on_motion_cleared = InterruptableEvent()
+        self.on_activate_sim = InterruptableEvent()
+        self.on_deactivate_sim = InterruptableEvent()
+        self.on_conf_updated = InterruptableEvent()
+        self.on_cmd_pending_count_updated = InterruptableEvent()
+        self.on_joints_updated = InterruptableEvent()
+        self.on_pose_updated = InterruptableEvent()
+        self.on_brakes_activated = InterruptableEvent()
+        self.on_brakes_deactivated = InterruptableEvent()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
         self.on_error_reset.set()
         self.on_p_stop_reset.set()
         self.on_motion_resumed.set()
+        self.on_deactivate_sim.set()
+
+        self.on_status_updated.set()
+        self.on_conf_updated.set()
+        self.on_cmd_pending_count_updated.set()
+        self.on_joints_updated.set()
+        self.on_pose_updated.set()
+        self.on_brakes_activated.set()
 
 
 class RobotCallbacks:
@@ -287,6 +429,10 @@ class RobotCallbacks:
             Function to be called once motion is resumed.
         on_checkpoint_reached : function object
             Function to be called if a checkpoint is reached.
+        on_activate_sim : function object
+            Function to be called once sim mode is activated.
+        on_deactivate_sim : function object
+            Function to be called once sim mode is deactivated.
     """
     def __init__(self):
         self.on_connected = None
@@ -303,6 +449,8 @@ class RobotCallbacks:
         self.on_motion_cleared = None
         self.on_motion_resumed = None
         self.on_checkpoint_reached = None
+        self.on_activate_sim = None
+        self.on_deactivate_sim = None
 
 
 def disconnect_on_exception(func):
@@ -406,6 +554,7 @@ class Robot:
             If true, will not check child processes before executing api calls.
 
         """
+        self._is_initialized = False
 
         # Check that the ip address is a string.
         if not isinstance(address, str):
@@ -441,9 +590,13 @@ class Robot:
         self._offline_mode = offline_mode
         self.logger = logging.getLogger(__name__)
 
+        self._is_initialized = True
+
     def __del__(self):
-        self.Disconnect()
-        self.UnregisterCallbacks()
+        # Only attempt to disconnect if logger is present, meaning the object was initialized.
+        if self._is_initialized:
+            self.Disconnect()
+            self.UnregisterCallbacks()
 
     def _init_states(self):
         self._command_rx_queue = mp.Queue()
@@ -453,6 +606,8 @@ class Robot:
         self._user_checkpoints = self._manager.dict()
         self._internal_checkpoints = self._manager.dict()
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+
+        self._checkpoints_invalid = mp.Value('b', False, lock=False)
 
         self._robot_state = RobotState()
         self._robot_events = RobotEvents()
@@ -631,6 +786,14 @@ class Robot:
                 return
 
             with main_lock:
+                if response.id == MX_ST_GET_JOINTS:
+                    robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
+                    events.on_joints_updated.set()
+
+                elif response.id == MX_ST_GET_POSE:
+                    robot_state.end_effector_pose[:] = Robot._string_to_floats(response.data)
+                    events.on_pose_updated.set()
+
                 if response.id == MX_ST_CLEAR_MOTION:
                     if clear_motion_requests.value <= 1:
                         clear_motion_requests.value = 0
@@ -657,6 +820,22 @@ class Robot:
                         events.on_p_stop.clear()
                         events.on_p_stop_reset.set()
                         callback_queue.put(CallbackTag('on_p_stop_reset'))
+
+                elif response.id == MX_ST_GET_CMD_PENDING_COUNT:
+                    robot_state.cmd_pending_count.value = int(response.data)
+                    events.on_cmd_pending_count_updated.set()
+
+                elif response.id == MX_ST_GET_CONF:
+                    robot_state.configuration[:] = Robot._string_to_floats(response.data)
+                    events.on_conf_updated.set()
+
+                elif response.id == MX_ST_BRAKES_ON:
+                    events.on_brakes_deactivated.clear()
+                    events.on_brakes_activated.set()
+
+                elif response.id == MX_ST_BRAKES_OFF:
+                    events.on_brakes_activated.clear()
+                    events.on_brakes_deactivated.set()
 
     @staticmethod
     def _string_to_floats(input_string):
@@ -701,10 +880,14 @@ class Robot:
             if status_flags[0]:
                 events.on_deactivated.clear()
                 events.on_activated.set()
+                events.on_brakes_activated.clear()
+                events.on_brakes_deactivated.set()
                 callback_queue.put(CallbackTag('on_activated'))
             else:
                 events.on_activated.clear()
                 events.on_deactivated.set()
+                events.on_brakes_deactivated.clear()
+                events.on_brakes_activated.set()
                 callback_queue.put(CallbackTag('on_deactivated'))
             robot_state.activation_state.value = status_flags[0]
 
@@ -716,7 +899,16 @@ class Robot:
                 events.on_homed.clear()
             robot_state.homing_state.value = status_flags[1]
 
-        robot_state.simulation_mode.value = status_flags[2]
+        if robot_state.simulation_mode.value != status_flags[2]:
+            if status_flags[2]:
+                events.on_deactivate_sim.clear()
+                events.on_activate_sim.set()
+                callback_queue.put(CallbackTag('on_activate_sim'))
+            else:
+                events.on_activate_sim.clear()
+                events.on_deactivate_sim.set()
+                callback_queue.put(CallbackTag('on_deactivate_sim'))
+            robot_state.simulation_mode.value = status_flags[2]
 
         if robot_state.error_status.value != status_flags[3]:
             if status_flags[3]:
@@ -772,9 +964,11 @@ class Robot:
             with main_lock:
                 if response.id == MX_ST_GET_JOINTS:
                     robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
+                    events.on_joints_updated.set()
 
                 elif response.id == MX_ST_GET_POSE:
                     robot_state.end_effector_pose[:] = Robot._string_to_floats(response.data)
+                    events.on_pose_updated.set()
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
@@ -1036,11 +1230,11 @@ class Robot:
 
         try:
             response = self._command_rx_queue.get(block=True, timeout=10)  # 10s timeout.
-        except Empty:
+        except queue.Empty:
             self.logger.error('No response received within timeout interval.')
             self.Disconnect()
             raise CommunicationError('No response received within timeout interval.')
-        except BaseException as e:
+        except BaseException:
             self.Disconnect()
             raise
 
@@ -1196,7 +1390,41 @@ class Robot:
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
 
-            return Checkpoint(n, event)
+            return Checkpoint(n, event, self._checkpoints_invalid)
+
+    def _invalidate_checkpoints(self):
+        '''Unblock all waiting checkpoints and have them throw InterruptException.
+
+        '''
+        self._checkpoints_invalid.value = True
+
+        for checkpoints_dict in [self._internal_checkpoints, self._user_checkpoints]:
+            for key, checkpoints_list in checkpoints_dict.items():
+                for event in checkpoints_list:
+                    event.set()
+            checkpoints_dict.clear()
+
+        self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+
+    def _send_motion_command(self, command, arg_list=None):
+        """Send generic motion command with support for synchronous mode and locking.
+
+        Parameters
+        ----------
+        command : string
+            The command to send.
+        args : list
+            List of arguments to be sent.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command(command, arg_list)
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+
+        if self._enable_synchronous_mode:
+            checkpoint.wait()
 
     #####################################################################################
     # Public methods = Pascal case is used to maintain consistency with text and c++ API.
@@ -1268,6 +1496,26 @@ class Robot:
             self._initialize_command_connection()
             self._initialize_monitoring_connection()
 
+            self._robot_events.on_status_updated.clear()
+            self._robot_events.on_activated.clear()
+            self._robot_events.on_deactivated.clear()
+            self._robot_events.on_homed.clear()
+            self._robot_events.on_error.clear()
+            self._robot_events.on_error_reset.clear()
+            self._robot_events.on_p_stop.clear()
+            self._robot_events.on_p_stop_reset.clear()
+            self._robot_events.on_motion_paused.clear()
+            self._robot_events.on_motion_resumed.clear()
+            self._robot_events.on_motion_cleared.clear()
+            self._robot_events.on_brakes_activated.clear()
+            self._robot_events.on_brakes_deactivated.clear()
+
+            self._robot_events.on_deactivated.set()
+            self._robot_events.on_error_reset.set()
+            self._robot_events.on_p_stop_reset.set()
+            self._robot_events.on_motion_resumed.set()
+            self._robot_events.on_brakes_activated.set()
+
             self._robot_events.on_disconnected.clear()
             self._robot_events.on_connected.set()
             self._callback_queue.put(CallbackTag('on_connected'))
@@ -1285,6 +1533,9 @@ class Robot:
 
         with self._main_lock:
             self._shut_down_socket_processes()
+
+            # Invalidate checkpoints.
+            self._invalidate_checkpoints()
 
             # Reset robot state.
             self._init_states()
@@ -1307,6 +1558,22 @@ class Robot:
             self._robot_events.on_disconnected.set()
             self._callback_queue.put(CallbackTag('on_disconnected'))
 
+            self._robot_events.on_status_updated.abort()
+            self._robot_events.on_activated.abort()
+            self._robot_events.on_deactivated.abort()
+            self._robot_events.on_homed.abort()
+            self._robot_events.on_error.abort()
+            self._robot_events.on_error_reset.abort()
+            self._robot_events.on_p_stop.abort()
+            self._robot_events.on_p_stop_reset.abort()
+            self._robot_events.on_motion_paused.abort()
+            self._robot_events.on_motion_resumed.abort()
+            self._robot_events.on_motion_cleared.abort()
+            self._robot_events.on_activate_sim.abort()
+            self._robot_events.on_deactivate_sim.abort()
+            self._robot_events.on_brakes_activated.abort()
+            self._robot_events.on_brakes_deactivated.abort()
+
     @disconnect_on_exception
     def ActivateRobot(self):
         """Activate the robot.
@@ -1326,8 +1593,6 @@ class Robot:
         """
         with self._main_lock:
             self._check_monitor_processes()
-            if not self._robot_events.on_activated.is_set():
-                raise InvalidStateError('Robot must be activated before homing.')
             self._send_command('Home')
 
         if self._enable_synchronous_mode:
@@ -1392,16 +1657,14 @@ class Robot:
             self._send_command('ClearMotion')
 
             # Clearing the motion queue also requires clearing checkpoints, as the robot will not send them anymore.
-            self._user_checkpoints.clear()
-            self._internal_checkpoints.clear()
-            self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
+            self._invalidate_checkpoints()
 
         if self._enable_synchronous_mode:
             self.WaitMotionCleared()
 
     @disconnect_on_exception
     def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
-        """Moves joints to desired positions.
+        """Move the robot by specifying each joint's target angular position.
 
         Parameters
         ----------
@@ -1409,14 +1672,319 @@ class Robot:
             Desired joint angles in degrees.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            self._send_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
+        self._send_motion_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
 
-        if self._enable_synchronous_mode:
-            checkpoint.wait()
+    @disconnect_on_exception
+    def MoveJointsVel(self, joint1, joint2, joint3, joint4, joint5, joint6):
+        """Moves joints to at desired velocities.
+
+        Parameters
+        ----------
+        joint1...joint6 : float
+            Desired joint velocities in degrees per second.
+
+        """
+        self._send_motion_command('MoveJointsVel', [joint1, joint2, joint3, joint4, joint5, joint6])
+
+    @disconnect_on_exception
+    def MovePose(self, x, y, z, alpha, beta, gamma):
+        """Move robot's tool to an absolute Cartesian position (non-linear move, but all joints arrive simultaneously).
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired end effector coordinates in mm.
+        alpha, beta, gamma
+            Desired end effector orientation in degrees.
+
+        """
+        self._send_motion_command('MovePose', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def MoveLin(self, x, y, z, alpha, beta, gamma):
+        """Linearly move robot's tool to an absolute Cartesian position.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired end effector coordinates in mm.
+        alpha, beta, gamma
+            Desired end effector orientation in degrees.
+
+        """
+        self._send_motion_command('MoveLin', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def MoveLinRelTrf(self, x, y, z, alpha, beta, gamma):
+        """Linearly move robot's tool to a Cartesian position relative to current TRF position.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired displacement in mm.
+        alpha, beta, gamma
+            Desired orientation change in deg.
+
+        """
+        self._send_motion_command('MoveLinRelTRF', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def MoveLinRelWrf(self, x, y, z, alpha, beta, gamma):
+        """Linearly move robot's tool to a Cartesian position relative to a reference frame that has the same
+        orientation.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired displacement in mm.
+        alpha, beta, gamma
+            Desired orientation change in deg.
+
+        """
+        self._send_motion_command('MoveLinRelWRF', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def MoveLinVelTrf(self, x, y, z, alpha, beta, gamma):
+        """Move robot's by Cartesian velocity relative to the TRF.
+
+           Joints will move for a time controlled by velocity timeout (SetVelTimeout).
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired velocity in mm/s.
+        alpha, beta, gamma
+            Desired angular velocity in degrees/s.
+
+        """
+        self._send_motion_command('MoveLinVelTRF', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def MoveLinVelWrf(self, x, y, z, alpha, beta, gamma):
+        """Move robot's by Cartesian velocity relative to the WRF.
+
+           Joints will move for a time controlled by velocity timeout (SetVelTimeout).
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired velocity in mm/s.
+        alpha, beta, gamma
+            Desired angular velocity in degrees/s.
+
+        """
+        self._send_motion_command('MoveLinVelWRF', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def SetVelTimeout(self, t):
+        """Maximum time the robot will continue to move after a velocity move command was sent.
+
+        (Can be stopped earlier by sending a velocity command with 0 velocity values.)
+
+        Parameters
+        ----------
+        t : float
+            Desired duration for velocity-mode motion commands.
+
+        """
+        self._send_motion_command('SetVelTimeout', [t])
+
+    @disconnect_on_exception
+    def SetConf(self, c1, c3, c5):
+        """Manually set inverse kinematics options (and disable auto-conf).
+
+        Parameters
+        ----------
+        c1 : +1 or -1
+            First inverse kinematics parameter.
+        c3 : +1 or -1
+            Second inverse kinematics parameter.
+        c5 : +1 or -1
+            Third inverse kinematics parameter.
+
+        """
+        self._send_motion_command('SetConf', [c1, c3, c5])
+
+    @disconnect_on_exception
+    def SetAutoConf(self, e):
+        """Enable or disable auto-conf (automatic selection of inverse kinematics options).
+
+        Parameters
+        ----------
+        e : boolean
+            If true, robot will automatically choose the best configuation for the desired pose.
+
+        """
+        self._send_motion_command('SetAutoConf', [int(e)])
+
+    @disconnect_on_exception
+    def SetConfMultiTurn(self, n):
+        """Manually set the multi-turn configuration parameter.
+
+        Parameters
+        ----------
+        n : integer
+            The turn number for joint 6.
+
+        """
+        self._send_motion_command('SetConfMultiTurn', [n])
+
+    @disconnect_on_exception
+    def SetAutoConfMultiTurn(self, e):
+        """Enable or disable auto-conf (automatic selection of inverse kinematics options) for joint 6..
+
+        Parameters
+        ----------
+        e : boolean
+            If true, robot will automatically choose the best configuation for the desired pose.
+
+        """
+        self._send_motion_command('SetAutoConfMultiTurn', [int(e)])
+
+    @disconnect_on_exception
+    def SetBlending(self, p):
+        """Set percentage of blending between consecutive movements in the same mode (velocity or cartesian).
+
+        Note: There can't be blending between joint mode and Cartesian mode moves.
+
+        Parameters
+        ----------
+        p : float
+            Percentage blending between actions.
+
+        """
+        self._send_motion_command('SetBlending', [p])
+
+    @disconnect_on_exception
+    def SetCartAcc(self, p):
+        """Set target acceleration (linear and angular) during MoveLin commands.
+
+        Parameters
+        ----------
+        p : float
+            Percentage of maximum acceleration.
+
+        """
+        self._send_motion_command('SetCartAcc', [p])
+
+    @disconnect_on_exception
+    def SetCartAngVel(self, w):
+        """Set maximum angular velocity during MoveLin commands.
+
+        Parameters
+        ----------
+        p : float
+            Maximum angular velocity in deg/s.
+
+        """
+        self._send_motion_command('SetCartAngVel', [w])
+
+    @disconnect_on_exception
+    def SetCartLinVel(self, w):
+        """Set maximum linear velocity during MoveLin commands.
+
+        Note: Actual linear velocity may be lower if necessary to avoid exceeding maximum angular velocity.
+
+        Parameters
+        ----------
+        p : float
+            Maximum angular velocity in deg/s.
+
+        """
+        self._send_motion_command('SetCartLinVel', [w])
+
+    @disconnect_on_exception
+    def MoveGripper(self, state=GRIPPER_OPEN):
+        """Open or close the gripper.
+
+        Corresponds to text API calls "GripperOpen" / "GripperClose".
+
+        Parameters
+        ----------
+        state : boolean
+            Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+
+        """
+        if state:
+            self._send_motion_command('GripperOpen')
+        else:
+            self._send_motion_command('GripperClose')
+
+    @disconnect_on_exception
+    def SetGripperForce(self, p):
+        """Set the gripper's force in percent.
+
+        Parameters
+        ----------
+        p : float
+            The desired force in percent.
+
+        """
+        self._send_motion_command('SetGripperForce', [p])
+
+    @disconnect_on_exception
+    def SetGripperVel(self, p):
+        """Set the gripper's velocity in percent.
+
+        Parameters
+        ----------
+        p : float
+            The desired velocity in percent.
+
+        """
+        self._send_motion_command('SetGripperVel', [p])
+
+    @disconnect_on_exception
+    def SetJointAcc(self, p):
+        """Set target joint acceleration during MoveJoints commands.
+
+        Parameters
+        ----------
+        p : float
+            Target acceleration, in percent.
+
+        """
+        self._send_motion_command('SetJointAcc', [p])
+
+    @disconnect_on_exception
+    def SetJointVel(self, p):
+        """Set target joint velocity during MoveJoints commands.
+
+        Parameters
+        ----------
+        p : float
+            Target joint velocity, in percent.
+
+        """
+        self._send_motion_command('SetJointVel', [p])
+
+    @disconnect_on_exception
+    def SetTRF(self, x, y, z, alpha, beta, gamma):
+        """Set the TRF (tool reference frame) Cartesian position.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired reference coordinates in mm.
+        alpha, beta, gamma
+            Desired reference orientation in degrees.
+
+        """
+        self._send_motion_command('SetTRF', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def SetWRF(self, x, y, z, alpha, beta, gamma):
+        """Set the WRF (world reference frame) Cartesian position.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired reference coordinates in mm.
+        alpha, beta, gamma
+            Desired reference orientation in degrees.
+
+        """
+        self._send_motion_command('SetWRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def SetCheckpoint(self, n):
@@ -1647,10 +2215,10 @@ class Robot:
         if self._enable_synchronous_mode:
             checkpoint.wait()
 
-    ### Information-getting commands.
+    ### Non-motion commands.
 
     @disconnect_on_exception
-    def GetJoints(self):
+    def GetJoints(self, updated=True, timeout=None):
         """Returns the current joint positions of the robot.
 
         Return
@@ -1659,12 +2227,20 @@ class Robot:
             Returns list of joint positions in degrees.
 
         """
-        with self._main_lock:
-            self._check_monitor_processes()
-            return self._robot_state.joint_positions[:]
+        if updated:
+            with self._main_lock:
+                self._check_monitor_processes()
+                if self._robot_events.on_joints_updated.is_set():
+                    self._robot_events.on_joints_updated.clear()
+                    self._send_command('GetJoints')
+
+            if not self._robot_events.on_joints_updated.wait(timeout=timeout):
+                raise TimeoutError
+
+        return self._robot_state.joint_positions[:]
 
     @disconnect_on_exception
-    def GetEndEffectorPose(self):
+    def GetPose(self, updated=True, timeout=None):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
         Return
@@ -1673,6 +2249,125 @@ class Robot:
             Returns end-effector pose [x, y, z, alpha, beta, gamma].
 
         """
+        if updated:
+            with self._main_lock:
+                self._check_monitor_processes()
+                if self._robot_events.on_pose_updated.is_set():
+                    self._robot_events.on_pose_updated.clear()
+                    self._send_command('GetPose')
+
+            if not self._robot_events.on_pose_updated.wait(timeout=timeout):
+                raise TimeoutError
+
+        return self._robot_state.end_effector_pose[:]
+
+    @disconnect_on_exception
+    def SetMonitoringInterval(self, t):
+        """Sets the rate at which the monitoring port sends data.
+
+        Parameters
+        ----------
+        t : float
+            Monitoring interval duration in seconds.
+
+        """
         with self._main_lock:
             self._check_monitor_processes()
-            return self._robot_state.end_effector_pose[:]
+            self._send_command('SetMonitoringInterval', [t])
+
+    @disconnect_on_exception
+    def SetRTC(self, t):
+        """Sets the rate at which the monitoring port sends data.
+
+        Parameters
+        ----------
+        t : int
+            Unix epoch time (seconds since 00:00:00 UTC Jan 1, 1970).
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('SetRTC', [t])
+
+    @disconnect_on_exception
+    def ActivateSim(self):
+        """Enables simulation mode. Motors don't move, but commands will be processed.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('ActivateSim')
+
+    @disconnect_on_exception
+    def DeactivateSim(self):
+        """Disables simulation mode. Motors don't move, but commands will be processed.
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            self._send_command('DeactivateSim')
+
+    @disconnect_on_exception
+    def GetCmdPendingCount(self, updated=True, timeout=None):
+        """Gets the number of pending commands on the robot.
+
+        Returns
+        -------
+        integer
+            Number of pending events on the robot.
+
+        """
+        if updated:
+            with self._main_lock:
+                self._check_monitor_processes()
+                if self._robot_events.on_cmd_pending_count_updated.is_set():
+                    self._robot_events.on_cmd_pending_count_updated.clear()
+                    self._send_command('GetCmdPendingCount')
+
+            if not self._robot_events.on_cmd_pending_count_updated.wait(timeout=timeout):
+                raise TimeoutError
+
+        return self._robot_state.cmd_pending_count.value
+
+    @disconnect_on_exception
+    def GetConf(self, updated=True, timeout=None):
+        """Get robot's current (physical) inverse-kinematics configuration.
+
+        Returns
+        -------
+        integer
+            Number of pending events on the robot.
+
+        """
+        if updated:
+            with self._main_lock:
+                self._check_monitor_processes()
+                if self._robot_events.on_conf_updated.is_set():
+                    self._robot_events.on_conf_updated.clear()
+                    self._send_command('GetConf')
+
+            if not self._robot_events.on_conf_updated.wait(timeout=timeout):
+                raise TimeoutError
+
+        return self._robot_state.configuration[:]
+
+    @disconnect_on_exception
+    def ActivateBrakes(self, activated=True):
+        """Enable/disable the brakes. These commands are only available when the robot is deactivated.
+
+        By default, brakes are enabled until robot is activated (brakes are automatically disabled upon activation).
+        Corresponds to text API calls "BrakesOn" / "BrakesOff".
+
+        """
+        with self._main_lock:
+            self._check_monitor_processes()
+            if activated:
+                self._send_command('BrakesOn')
+            else:
+                self._send_command('BrakesOff')
+
+        if self._enable_synchronous_mode:
+            if activated:
+                self._robot_events.on_brakes_activated.wait()
+            else:
+                self._robot_events.on_brakes_deactivated.wait()
