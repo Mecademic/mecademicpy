@@ -456,6 +456,17 @@ def test_callbacks():
 
     callbacks.on_checkpoint_reached = checkpoint_callback
 
+    # The two message callbacks are also unique.
+
+    def command_message_callback(message):
+        called_callbacks.append('on_command_message')
+
+    def monitor_message_callback(message):
+        called_callbacks.append('on_monitor_message')
+
+    callbacks.on_command_message = command_message_callback
+    callbacks.on_monitor_message = monitor_message_callback
+
     for run_in_thread in [True]:
         # Register all callbacks.
         robot.RegisterCallbacks(callbacks, run_callbacks_in_separate_thread=run_in_thread)
