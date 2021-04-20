@@ -396,7 +396,7 @@ class RobotEvents:
             self.__dict__[attr].clear()
 
     def abort_all_except_on_connected(self):
-        """Abort all events, except for on_disconnected.
+        """Abort all events, except for on_connected.
 
         """
         for attr in self.__dict__:
