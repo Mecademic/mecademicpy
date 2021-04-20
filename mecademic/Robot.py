@@ -1155,7 +1155,7 @@ class Robot:
         return new_socket
 
     @staticmethod
-    def _handle_callbacks(logger, callback_queue, callbacks, block_on_empty=True):
+    def _handle_callbacks(logger, callback_queue, callbacks, timeout=None):
         """Runs callbacks found in callback_queue.
 
         Parameters
@@ -1166,15 +1166,17 @@ class Robot:
             Stores triggered callbacks.
         callbacks : RobotCallbacks instance
             Stores user-defined callback functions.
-        block_on_empty : bool
-            If true, will wait on elements from queue. Else will terminate on empty queue.
+        timeout : float or none
+            If none, block forever on empty queue, if 0, don't block, else block with timeout.
         """
+        block_on_empty = (timeout != 0)
+
         while True:
             # If we are not blocking on empty, return if empty.
             if not block_on_empty and callback_queue.qsize() == 0:
                 return
 
-            callback_name, data = callback_queue.get(block=block_on_empty)
+            callback_name, data = callback_queue.get(block=block_on_empty, timeout=timeout)
 
             if callback_name == TERMINATE_PROCESS:
                 return
@@ -1596,7 +1598,8 @@ class Robot:
             raise InvalidStateError(
                 'Cannot call RunCallbacks since callback handler is already running in separate thread.')
 
-        self._handle_callbacks(self.logger, self._callback_queue, self._robot_callbacks, block_on_empty=False)
+        # Setting timeout=0 means we don't block on an empty queue.
+        self._handle_callbacks(self.logger, self._callback_queue, self._robot_callbacks, timeout=0)
 
     ### Robot control functions.
 
