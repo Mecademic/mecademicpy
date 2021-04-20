@@ -337,6 +337,8 @@ class RobotEvents:
         Set if brakes are activated.
     on_brakes_deactivated : event
         Set if brakes are deactivated.
+    on_offline_program_started : event
+        Set if there has been a change in the offline program state.
 
     """
     def __init__(self):
@@ -369,6 +371,8 @@ class RobotEvents:
 
         self.on_brakes_activated = InterruptableEvent()
         self.on_brakes_deactivated = InterruptableEvent()
+
+        self.on_offline_program_started = InterruptableEvent()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -441,8 +445,8 @@ class RobotCallbacks:
             Function to be called each time a command response is received.
         on_monitor_response : function object
             Function to be called each time a monitor response is received.
-        on_offline_program_started : function object
-            Function to be called each time an offline program starts.
+        on_offline_program_state : function object
+            Function to be called each time an offline program starts or fails to start.
     """
     def __init__(self):
         self.on_connected = None
@@ -472,7 +476,7 @@ class RobotCallbacks:
         self.on_command_message = None
         self.on_monitor_message = None
 
-        self.on_offline_program_started = None
+        self.on_offline_program_state = None
 
 
 class CallbackQueue():
@@ -935,7 +939,11 @@ class Robot:
                     events.on_brakes_deactivated.set()
 
                 elif response.id == MX_ST_OFFLINE_START:
-                    callback_queue.put('on_offline_program_started')
+                    events.on_offline_program_started.set()
+                    callback_queue.put('on_offline_program_state')
+
+                elif response.id == MX_ST_NO_OFFLINE_SAVED:
+                    events.on_offline_program_started.abort()
 
     @staticmethod
     def _string_to_floats(input_string):
@@ -2319,12 +2327,12 @@ class Robot:
             self._send_command(command)
 
     @disconnect_on_exception
-    def StartOfflineProgram(self, n):
+    def StartOfflineProgram(self, n, timeout=None):
         """Start an offline program.
 
         Offline programs need to be recorded using the robot's Web Portal (or text API).
         This API can only start an already recorded offline program.
-        Callback OnOfflineProgramState will indicate when program is started or stopped.
+        Callback on_offline_program_state will indicate when program is started or not.
 
         Parameters
         ----------
@@ -2333,7 +2341,15 @@ class Robot:
 
         """
         with self._main_lock:
+            self._robot_events.on_offline_program_started.clear()
+
             self._send_command('StartProgram', [n])
+
+        if self._enable_synchronous_mode:
+            try:
+                self._robot_events.on_offline_program_started.wait(timeout=timeout)
+            except InterruptException:
+                raise InvalidStateError('Offline program start not confirmed. Does program {} exist?'.format(n))
 
     ### Non-motion commands.
 

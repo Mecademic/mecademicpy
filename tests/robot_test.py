@@ -662,3 +662,38 @@ def test_simple_gets():
         robot.GetConf(updated=True, timeout=0)
 
     robot.Disconnect()
+
+
+def test_start_offline_program():
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=True)
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, ''))
+    assert robot.Connect()
+
+    expected_command = 'StartProgram(1)'
+
+    # Report that the program has been started successfully.
+    robot_response = mdr.Message(mdr.MX_ST_OFFLINE_START, '')
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+    fake_robot.start()
+
+    robot.StartOfflineProgram(1, timeout=1)
+
+    fake_robot.join(timeout=1)
+
+    # Report that the program does not exist.
+    robot_response = mdr.Message(mdr.MX_ST_NO_OFFLINE_SAVED, '')
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+    fake_robot.start()
+
+    with pytest.raises(mdr.InvalidStateError):
+        robot.StartOfflineProgram(1, timeout=1)
+
+    fake_robot.join(timeout=1)
+
+    robot.Disconnect()
