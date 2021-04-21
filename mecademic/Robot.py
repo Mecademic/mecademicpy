@@ -441,9 +441,9 @@ class RobotCallbacks:
             Function to be called once sim mode is activated.
         on_deactivate_sim : function object
             Function to be called once sim mode is deactivated.
-        on_command_response : function object
+        on_command_message : function object
             Function to be called each time a command response is received.
-        on_monitor_response : function object
+        on_monitor_message : function object
             Function to be called each time a monitor response is received.
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
@@ -881,9 +881,6 @@ class Robot:
             if response == TERMINATE_PROCESS:
                 return
 
-            elif not (hasattr(response, 'id') and hasattr(response, 'data')):
-                continue
-
             with main_lock:
                 callback_queue.put('on_command_message', response)
 
@@ -1069,9 +1066,6 @@ class Robot:
             if response == TERMINATE_PROCESS:
                 return
 
-            elif not (hasattr(response, 'id') and hasattr(response, 'data')):
-                continue
-
             with main_lock:
                 callback_queue.put('on_monitor_message', response)
 
@@ -1166,7 +1160,7 @@ class Robot:
             Stores triggered callbacks.
         callbacks : RobotCallbacks instance
             Stores user-defined callback functions.
-        timeout : float or none
+        timeout : float or None
             If none, block forever on empty queue, if 0, don't block, else block with timeout.
         """
         block_on_empty = (timeout != 0)
