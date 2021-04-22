@@ -277,6 +277,8 @@ class RobotState:
 
         self.accelerometer = mp.Array('f', 5, lock=False)  # 16000 = 1g
 
+        self.max_queue_size = mp.Value('i', 0, lock=False)
+
         # The following status fields are updated together, and is protected by a single lock.
         self.activation_state = mp.Value('b', False, lock=False)
         self.homing_state = mp.Value('b', False, lock=False)
@@ -1066,8 +1068,13 @@ class Robot:
             if response == TERMINATE_PROCESS:
                 return
 
+            callback_queue.put('on_monitor_message', response)
+
+            queue_size = monitor_queue.qsize()
+            if queue_size > robot_state.max_queue_size.value:
+                robot_state.max_queue_size.value = queue_size
+
             with main_lock:
-                callback_queue.put('on_monitor_message', response)
 
                 if response.id == MX_ST_GET_JOINTS:
                     robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
