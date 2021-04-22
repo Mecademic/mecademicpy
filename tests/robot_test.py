@@ -157,10 +157,10 @@ def test_monitoring_connection():
 
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_ACCELEROMETER, fake_array[:5]))
 
-    robot._monitor_rx_queue.put(mdr.TERMINATE_PROCESS)
-    # Wait until process ends to ensure the monitor messages are processed.
-    robot._monitor_handler_process.join()
-    robot._monitor_handler_process = None
+    robot._monitor_rx_queue.put(mdr.TERMINATE)
+    # Wait until thread ends to ensure the monitor messages are processed.
+    robot._monitor_handler_thread.join()
+    robot._monitor_handler_thread = None
 
     assert robot.GetJoints(updated=False) == make_test_array(mdr.MX_ST_GET_JOINTS, fake_array[:-1])
     assert robot.GetPose(updated=False) == make_test_array(mdr.MX_ST_GET_POSE, fake_array[:-1])
@@ -313,7 +313,7 @@ def test_unaccounted_checkpoints():
     # Send unexpected checkpoint.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
 
-    assert robot._check_monitor_processes()
+    assert robot._check_background_threads()
 
     robot.Disconnect()
 

@@ -3,7 +3,6 @@ import logging
 import ipaddress
 import time
 import socket
-import multiprocessing as mp
 import threading
 import queue
 import functools
@@ -12,7 +11,7 @@ from .mx_robot_def import *
 
 CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
-TERMINATE_PROCESS = 'terminate_process'
+TERMINATE = '--terminate--'
 
 GRIPPER_OPEN = True
 GRIPPER_CLOSE = False
@@ -53,62 +52,26 @@ class InterruptException(MecademicException):
     pass
 
 
-class Checkpoint:
-    """Class representing a checkpoint object, which can be used to wait.
-
-    Attributes
-    ----------
-    id : integer
-        The id of the checkpoint. Not required to be unique.
-    event : event object
-        A standard event-type object used to signal when the checkpoint is reached.
-    is_invalid : reference to shared boolean
-        If true, checkpoint is invalid and unblocked despite not successful.
-
-    """
-    def __init__(self, id, event, is_invalid):
-        self.id = id
-        self.event = event
-        self._is_invalid = is_invalid
-
-    def __repr__(self):
-        return "Checkpoint with id={}, is reached={}".format(self.id, self.event.is_set())
-
-    def wait(self, timeout=None):
-        """Pause program execution this checkpoint is received from the robot.
-
-        Parameters
-        ----------
-        timeout : float
-            Maximum time to spend waiting for the checkpoint (in seconds).
-
-        Return
-        ------
-        boolean
-            True if wait was successful, false otherwise.
-
-        """
-        result = self.event.wait(timeout=timeout)
-        if self._is_invalid.value:
-            raise InterruptException('Checkpoint has been invalidated, perhaps because it will never be reached.')
-        else:
-            return result
-
-
 class InterruptableEvent:
     """Extend default event class to also be able to unblock and raise an exception.
 
     Attributes
     ----------
+    id : int or None
+        Id for event.
     _event : event object
         A standard event-type object.
-    _interrupted : shared boolean
+    _lock : lock object
+        Used to ensure atomic operations.
+    _interrupted : boolean
         If true, event is in an error state.
 
     """
-    def __init__(self):
-        self._event = mp.Event()
-        self._interrupted = mp.Value('b', False)
+    def __init__(self, id=None):
+        self.id = id
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._interrupted = False
 
     def wait(self, timeout=None):
         """Block until event is set or should raise an exception.
@@ -125,7 +88,7 @@ class InterruptableEvent:
 
         """
         success = self._event.wait(timeout=timeout)
-        if self._interrupted.value:
+        if self._interrupted:
             raise InterruptException('Event received exception, possibly because event will never be triggered.')
         return success
 
@@ -133,24 +96,24 @@ class InterruptableEvent:
         """Set the event and unblock all waits.
 
         """
-        with self._interrupted.get_lock():
+        with self._lock:
             self._event.set()
 
     def abort(self):
         """Unblock any waits and raise an exception.
 
         """
-        with self._interrupted.get_lock():
+        with self._lock:
             if not self._event.is_set():
-                self._interrupted.value = True
+                self._interrupted = True
                 self._event.set()
 
     def clear(self):
         """Reset the event to its initial state.
 
         """
-        with self._interrupted.get_lock():
-            self._interrupted.value = False
+        with self._lock:
+            self._interrupted = False
             self._event.clear()
 
     def is_set(self):
@@ -162,8 +125,8 @@ class InterruptableEvent:
             False if event is not set or instance should '_interrupted'. True otherwise.
 
         """
-        with self._interrupted.get_lock():
-            if self._interrupted.value:
+        with self._lock:
+            if self._interrupted:
                 return False
             else:
                 return self._event.is_set()
@@ -193,103 +156,103 @@ class RobotState:
 
     Attributes
     ----------
-    joint_positions : shared memory vector
+    joint_positions : vector
         The positions of the robot joints in degrees.
-    end_effector_pose : shared memory vector
+    end_effector_pose : vector
         The end effector pose in [x, y, z, alpha, beta, gamma] (mm and degrees).
 
-    nc_joint_positions : shared memory vector
+    nc_joint_positions : vector
         Controller desired joint positions in degrees [timestamp, theta_1...6].
-    nc_end_effector_pose : shared memory vector
+    nc_end_effector_pose : vector
         Controller desired end effector pose [timestamp, x, y, z, alpha, beta, gamma].
 
-    nc_joint_velocity : shared memory vector
+    nc_joint_velocity : vector
         Controller desired joint velocity in degrees/second [timestamp, theta_dot_1...6].
-    nc_end_effector_velocity : shared memory vector
+    nc_end_effector_velocity : vector
         Controller desired end effector velocity in mm/s and degrees/s, includes timestamp.
-    nc_joint_configurations : shared memory vector
+    nc_joint_configurations : vector
         Controller desired joint configurations.
-    nc_multiturn : shared memory vector
+    nc_multiturn : vector
         Controller desired joint 6 multiturn configuration.
 
-    drive_joint_positions : shared memory vector
+    drive_joint_positions : vector
         Drive-measured joint positions in degrees [timestamp, theta_1...6].
-    drive_end_effector_pose : shared memory vector
+    drive_end_effector_pose : vector
         Drive-measured end effector pose [timestamp, x, y, z, alpha, beta, gamma].
 
-    drive_joint_velocity : shared memory vector
+    drive_joint_velocity : vector
         Drive-measured joint velocity in degrees/second [timestamp, theta_dot_1...6].
-    drive_joint_torque_ratio : shared memory vector
+    drive_joint_torque_ratio : vector
         Drive-measured torque ratio as a percent of maximum [timestamp, torque_1...6]
-    drive_end_effector_velocity : shared memory vector
+    drive_end_effector_velocity : vector
         Drive-measured end effector velocity in mm/s and degrees/s, includes timestamp.
 
-    drive_joint_configurations : shared memory vector
+    drive_joint_configurations : vector
         Drive-measured joint configurations.
-    drive_multiturn : shared memory vector
+    drive_multiturn : vector
         Drive-measured joint 6 multiturn configuration.
 
-    accelerometer : shared memory vector
+    accelerometer : vector
         Raw accelerometer measurements [timestamp, accelerometer_id, x, y, z]. 16000 = 1g.
 
-    activation_state : shared memory boolean
+    activation_state : boolean
         True if the robot is activated.
-    homing_state : shared memory boolean
+    homing_state : boolean
         True if the robot is homed.
-    simulation_mode : shared memory boolean
+    simulation_mode : boolean
         True if the robot is in simulation-only mode.
-    error_status : shared memory boolean
+    error_status : boolean
         True if the robot is in error.
-    pause_motion_status : shared memory boolean
+    pause_motion_status : boolean
         True if motion is currently paused.
-    end_of_block_status : shared memory boolean
+    end_of_block_status : boolean
         True if robot is not moving and motion queue is empty.
-    end_of_movement_status : shared memory boolean
+    end_of_movement_status : boolean
         True if robot is idle.
-    cmd_pending_count : shared memory int
+    cmd_pending_count : int
         Number of commands pending in the robot's motion queue.
-    configuration : share memory array
+    configuration : array
         Current configuration of the robot.
 
     """
     def __init__(self):
-        self.joint_positions = mp.Array('f', 6, lock=False)  # degrees
-        self.end_effector_pose = mp.Array('f', 6, lock=False)  # mm and degrees
+        self.joint_positions = [0, 0, 0, 0, 0, 0]  # degrees
+        self.end_effector_pose = [0, 0, 0, 0, 0, 0]  # mm and degrees
 
-        self.nc_joint_positions = mp.Array('f', 7, lock=False)  # degrees
-        self.nc_end_effector_pose = mp.Array('f', 7, lock=False)  # mm and degrees
+        self.nc_joint_positions = [0, 0, 0, 0, 0, 0, 0]  # degrees
+        self.nc_end_effector_pose = [0, 0, 0, 0, 0, 0, 0]  # mm and degrees
 
-        self.nc_joint_velocity = mp.Array('f', 7, lock=False)  # degrees/second
-        self.nc_end_effector_velocity = mp.Array('f', 7, lock=False)  # mm/s and degrees/s
+        self.nc_joint_velocity = [0, 0, 0, 0, 0, 0, 0]  # degrees/second
+        self.nc_end_effector_velocity = [0, 0, 0, 0, 0, 0, 0]  # mm/s and degrees/s
 
-        self.nc_joint_configurations = mp.Array('f', 4, lock=False)
-        self.nc_multiturn = mp.Array('f', 2, lock=False)
+        self.nc_joint_configurations = [0, 0, 0, 0]
+        self.nc_multiturn = [0, 0]
 
-        self.drive_joint_positions = mp.Array('f', 7, lock=False)  # degrees
-        self.drive_end_effector_pose = mp.Array('f', 7, lock=False)  # mm and degrees
+        self.drive_joint_positions = [0, 0, 0, 0, 0, 0, 0]  # degrees
+        self.drive_end_effector_pose = [0, 0, 0, 0, 0, 0, 0]  # mm and degrees
 
-        self.drive_joint_velocity = mp.Array('f', 7, lock=False)  # degrees/second
-        self.drive_joint_torque_ratio = mp.Array('f', 7, lock=False)  # percent of maximum
-        self.drive_end_effector_velocity = mp.Array('f', 7, lock=False)  # mm/s and degrees/s
+        self.drive_joint_velocity = [0, 0, 0, 0, 0, 0, 0]  # degrees/second
+        self.drive_joint_torque_ratio = [0, 0, 0, 0, 0, 0, 0]  # percent of maximum
+        self.drive_end_effector_velocity = [0, 0, 0, 0, 0, 0, 0]  # mm/s and degrees/s
 
-        self.drive_joint_configurations = mp.Array('f', 4, lock=False)
-        self.drive_multiturn = mp.Array('f', 2, lock=False)
+        self.drive_joint_configurations = [0, 0, 0, 0]
+        self.drive_multiturn = [0, 0]
 
-        self.accelerometer = mp.Array('f', 5, lock=False)  # 16000 = 1g
+        self.accelerometer = [0, 0, 0, 0, 0]  # 16000 = 1g
 
-        self.max_queue_size = mp.Value('i', 0, lock=False)
+        self.max_queue_size = 0
 
         # The following status fields are updated together, and is protected by a single lock.
-        self.activation_state = mp.Value('b', False, lock=False)
-        self.homing_state = mp.Value('b', False, lock=False)
-        self.simulation_mode = mp.Value('b', False, lock=False)
-        self.error_status = mp.Value('b', False, lock=False)
-        self.pause_motion_status = mp.Value('b', False, lock=False)
-        self.end_of_block_status = mp.Value('b', False, lock=False)
-        self.end_of_movement_status = mp.Value('b', False, lock=False)
+        self.activation_state = False
+        self.homing_state = False
+        self.simulation_mode = False
+        self.error_status = False
+        self.pause_motion_status = False
+        self.end_of_block_status = False
+        self.end_of_movement_status = False
 
-        self.cmd_pending_count = mp.Value('i', 0, lock=False)
-        self.configuration = mp.Array('f', 3, lock=False)
+        self.cmd_pending_count = 0
+        self.configuration = [0, 0, 0]
 
 
 class RobotEvents:
@@ -486,14 +449,14 @@ class CallbackQueue():
 
     Attributes
     ----------
-    _queue : multiprocessing queue
+    _queue : queue
         Queue to use to store callback names and associated data.
     _registered_callbacks : set
         Set of names of registered callbacks.
 
     """
     def __init__(self, robot_callbacks):
-        self._queue = mp.Queue()
+        self._queue = queue.Queue()
         self._registered_callbacks = set()
 
         for attr in robot_callbacks.__dict__:
@@ -517,7 +480,7 @@ class CallbackQueue():
             Associated data.
 
         """
-        if callback_name in self._registered_callbacks or callback_name == TERMINATE_PROCESS:
+        if callback_name in self._registered_callbacks or callback_name == TERMINATE:
             self._queue.put((callback_name, data))
 
     def get(self, block=False, timeout=None):
@@ -574,23 +537,23 @@ class Robot:
     _monitor_socket : socket object
         Socket connecting to the monitor port of the physical Mecademic robot.
 
-    _command_rx_process : process handle
-        Process used to receive messages from the command port.
-    _command_rx_queue : multiprocessing queue
+    _command_rx_thread : thread handle
+        Thread used to receive messages from the command port.
+    _command_rx_queue : queue
         Queue used to temporarily store messages from the command port.
-    _command_tx_process : process handle
-        Process used to transmit messages to the command port.
-    _command_tx_queue : multiprocessing queue
+    _command_tx_thread : thread handle
+        Thread used to transmit messages to the command port.
+    _command_tx_queue : queue
         Queue used to temporarily store commands to be sent to the command port.
-    _monitor_rx_process : process handle
-        Process used to receive messages from the monitor port.
-    _monitor_rx_queue : multiprocessing queue
+    _monitor_rx_thread : thread handle
+        Thread used to receive messages from the monitor port.
+    _monitor_rx_queue : queue
         Queue used to temporarily store messages from the monitor port.
 
-    _command_response_handler_process : process handle
-        Process used to read messages from the command response queue.
-    _monitor_handler_process : process handle
-        Process used to read messages from the monitor queue.
+    _command_response_handler_thread : thread handle
+        Thread used to read messages from the command response queue.
+    _monitor_handler_thread : thread handle
+        Thread used to read messages from the monitor queue.
 
     _main_lock : recursive lock object
         Used to protect internal state of the robot object.
@@ -602,16 +565,14 @@ class Robot:
 
     _robot_callbacks : RobotCallbacks instance
         Stores user-defined callback functions.
-    _callback_queue : multiprocessing queue
+    _callback_queue : queue
         Queue storing triggered callbacks.
     _callback_thread : thread handle
         Callbacks will run in this thread if so configured.
 
-    _manager : multiprocessing manager
-        Manages checkpoint-related objects shared between processes.
-    _user_checkpoints : manager dictionary
+    _user_checkpoints : dictionary
         Stores checkpoints set or expected by user.
-    _internal_checkpoints : manager dictionary
+    _internal_checkpoints : dictionary
         Stores checkpoints set internally by the Robot class.
     _internal_checkpoint_counter : int
         Stores the next available checkpoint id for internal checkpoints.
@@ -619,10 +580,7 @@ class Robot:
     _enable_synchronous_mode : boolean
         If enabled, commands block until action is completed.
 
-    _checkpoints_invalid : reference to shared boolean
-        If true, all pending checkpoints should be aborted.
-
-    _clear_motion_requests : reference to shared int
+    _clear_motion_requests : int
         Number of pending ClearMotion requests.
 
     logger : logger object
@@ -648,7 +606,7 @@ class Robot:
         disconnect_on_exception : bool
             If true, will attempt to disconnect from the robot on exception from api call.
         offline_mode : bool
-            If true, will not check child processes before executing api calls.
+            If true, will not check child threads before executing api calls.
 
         """
         self._is_initialized = False
@@ -665,20 +623,18 @@ class Robot:
         self._command_socket = None
         self._monitor_socket = None
 
-        self._command_rx_process = None
-        self._command_tx_process = None
-        self._monitor_rx_process = None
+        self._command_rx_thread = None
+        self._command_tx_thread = None
+        self._monitor_rx_thread = None
 
-        self._command_response_handler_process = None
-        self._monitor_handler_process = None
+        self._command_response_handler_thread = None
+        self._monitor_handler_thread = None
 
-        self._main_lock = mp.RLock()
+        self._main_lock = threading.RLock()
 
         self._robot_callbacks = RobotCallbacks()
         self._callback_queue = CallbackQueue(self._robot_callbacks)
         self._callback_thread = None
-
-        self._manager = mp.Manager()
 
         self._init_states()
 
@@ -697,20 +653,18 @@ class Robot:
             self.UnregisterCallbacks()
 
     def _init_states(self):
-        self._command_rx_queue = mp.Queue()
-        self._command_tx_queue = mp.Queue()
-        self._monitor_rx_queue = mp.Queue()
+        self._command_rx_queue = queue.Queue()
+        self._command_tx_queue = queue.Queue()
+        self._monitor_rx_queue = queue.Queue()
 
-        self._user_checkpoints = self._manager.dict()
-        self._internal_checkpoints = self._manager.dict()
+        self._user_checkpoints = dict()
+        self._internal_checkpoints = dict()
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
-
-        self._checkpoints_invalid = mp.Value('b', False, lock=False)
 
         self._robot_state = RobotState()
         self._robot_events = RobotEvents()
 
-        self._clear_motion_requests = mp.Value('i', 0, lock=False)
+        self._clear_motion_requests = 0
 
     #####################################################################################
     # Static methods.
@@ -803,8 +757,8 @@ class Robot:
             # Wait for a command to be available from the queue.
             command = tx_queue.get(block=True)
 
-            # Terminate process if requested, otherwise send the command.
-            if command == TERMINATE_PROCESS:
+            # Terminate thread if requested, otherwise send the command.
+            if command == TERMINATE:
                 return
             else:
                 robot_socket.sendall((command + '\0').encode('ascii'))
@@ -879,28 +833,28 @@ class Robot:
             # Wait for a response to be available from the queue.
             response = rx_queue.get(block=True)
 
-            # Terminate process if requested.
-            if response == TERMINATE_PROCESS:
+            # Terminate thread if requested.
+            if response == TERMINATE:
                 return
 
             with main_lock:
                 callback_queue.put('on_command_message', response)
 
                 if response.id == MX_ST_GET_JOINTS:
-                    robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
+                    robot_state.joint_positions = Robot._string_to_floats(response.data)
                     events.on_joints_updated.set()
 
                 elif response.id == MX_ST_GET_POSE:
-                    robot_state.end_effector_pose[:] = Robot._string_to_floats(response.data)
+                    robot_state.end_effector_pose = Robot._string_to_floats(response.data)
                     events.on_pose_updated.set()
 
                 if response.id == MX_ST_CLEAR_MOTION:
-                    if clear_motion_requests.value <= 1:
-                        clear_motion_requests.value = 0
+                    if clear_motion_requests <= 1:
+                        clear_motion_requests = 0
                         events.on_motion_cleared.set()
                         callback_queue.put('on_motion_cleared')
                     else:
-                        clear_motion_requests.value -= 1
+                        clear_motion_requests -= 1
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
@@ -922,11 +876,11 @@ class Robot:
                         callback_queue.put('on_p_stop_reset')
 
                 elif response.id == MX_ST_GET_CMD_PENDING_COUNT:
-                    robot_state.cmd_pending_count.value = int(response.data)
+                    robot_state.cmd_pending_count = int(response.data)
                     events.on_cmd_pending_count_updated.set()
 
                 elif response.id == MX_ST_GET_CONF:
-                    robot_state.configuration[:] = Robot._string_to_floats(response.data)
+                    robot_state.configuration = Robot._string_to_floats(response.data)
                     events.on_conf_updated.set()
 
                 elif response.id == MX_ST_BRAKES_ON:
@@ -971,7 +925,7 @@ class Robot:
             Robot status response to parse and handle.
 
         robot_state : RobotState object
-            Stores the robot state across processes.
+            Stores the robot state.
 
         events : RobotEvents object
             Stores events associated with changes in robot state.
@@ -983,7 +937,7 @@ class Robot:
         assert response.id == MX_ST_GET_STATUS_ROBOT
         status_flags = [bool(int(x)) for x in response.data.split(',')]
 
-        if robot_state.activation_state.value != status_flags[0]:
+        if robot_state.activation_state != status_flags[0]:
             if status_flags[0]:
                 events.on_deactivated.clear()
                 events.on_activated.set()
@@ -996,17 +950,17 @@ class Robot:
                 events.on_brakes_deactivated.clear()
                 events.on_brakes_activated.set()
                 callback_queue.put('on_deactivated')
-            robot_state.activation_state.value = status_flags[0]
+            robot_state.activation_state = status_flags[0]
 
-        if robot_state.homing_state.value != status_flags[1]:
+        if robot_state.homing_state != status_flags[1]:
             if status_flags[1]:
                 events.on_homed.set()
                 callback_queue.put('on_homed')
             else:
                 events.on_homed.clear()
-            robot_state.homing_state.value = status_flags[1]
+            robot_state.homing_state = status_flags[1]
 
-        if robot_state.simulation_mode.value != status_flags[2]:
+        if robot_state.simulation_mode != status_flags[2]:
             if status_flags[2]:
                 events.on_deactivate_sim.clear()
                 events.on_activate_sim.set()
@@ -1015,9 +969,9 @@ class Robot:
                 events.on_activate_sim.clear()
                 events.on_deactivate_sim.set()
                 callback_queue.put('on_deactivate_sim')
-            robot_state.simulation_mode.value = status_flags[2]
+            robot_state.simulation_mode = status_flags[2]
 
-        if robot_state.error_status.value != status_flags[3]:
+        if robot_state.error_status != status_flags[3]:
             if status_flags[3]:
                 events.on_error_reset.clear()
                 events.on_error.set()
@@ -1026,9 +980,9 @@ class Robot:
                 events.on_error.clear()
                 events.on_error_reset.set()
                 callback_queue.put('on_error_reset')
-            robot_state.error_status.value = status_flags[3]
+            robot_state.error_status = status_flags[3]
 
-        if robot_state.pause_motion_status.value != status_flags[4]:
+        if robot_state.pause_motion_status != status_flags[4]:
             if status_flags[4]:
                 events.on_motion_resumed.clear()
                 events.on_motion_paused.set()
@@ -1037,10 +991,10 @@ class Robot:
                 events.on_motion_paused.clear()
                 events.on_motion_resumed.set()
                 callback_queue.put('on_motion_resumed')
-            robot_state.pause_motion_status.value = status_flags[4]
+            robot_state.pause_motion_status = status_flags[4]
 
-        robot_state.end_of_block_status.value = status_flags[5]
-        robot_state.end_of_movement_status.value = status_flags[6]
+        robot_state.end_of_block_status = status_flags[5]
+        robot_state.end_of_movement_status = status_flags[6]
 
     @staticmethod
     def _monitor_handler(monitor_queue, robot_state, events, main_lock, callback_queue):
@@ -1064,24 +1018,24 @@ class Robot:
             # Wait for a message in the queue.
             response = monitor_queue.get(block=True)
 
-            # Terminate process if requested.
-            if response == TERMINATE_PROCESS:
+            # Terminate thread if requested.
+            if response == TERMINATE:
                 return
 
             callback_queue.put('on_monitor_message', response)
 
             queue_size = monitor_queue.qsize()
-            if queue_size > robot_state.max_queue_size.value:
-                robot_state.max_queue_size.value = queue_size
+            if queue_size > robot_state.max_queue_size:
+                robot_state.max_queue_size = queue_size
 
             with main_lock:
 
                 if response.id == MX_ST_GET_JOINTS:
-                    robot_state.joint_positions[:] = Robot._string_to_floats(response.data)
+                    robot_state.joint_positions = Robot._string_to_floats(response.data)
                     events.on_joints_updated.set()
 
                 elif response.id == MX_ST_GET_POSE:
-                    robot_state.end_effector_pose[:] = Robot._string_to_floats(response.data)
+                    robot_state.end_effector_pose = Robot._string_to_floats(response.data)
                     events.on_pose_updated.set()
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
@@ -1090,37 +1044,37 @@ class Robot:
                     callback_queue.put('on_status_updated')
 
                 elif response.id == MX_ST_RT_NC_JOINT_POS:
-                    robot_state.nc_joint_positions[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_positions = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_NC_CART_POS:
-                    robot_state.nc_end_effector_pose[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_end_effector_pose = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_NC_JOINT_VEL:
-                    robot_state.nc_joint_velocity[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_velocity = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_NC_CART_VEL:
-                    robot_state.nc_end_effector_velocity[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_end_effector_velocity = Robot._string_to_floats(response.data)
 
                 elif response.id == MX_ST_RT_NC_CONF:
-                    robot_state.nc_joint_configurations[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_configurations = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_NC_CONF_MULTITURN:
-                    robot_state.nc_multiturn[:] = Robot._string_to_floats(response.data)
+                    robot_state.nc_multiturn = Robot._string_to_floats(response.data)
 
                 elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
-                    robot_state.drive_joint_positions[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_positions = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CART_POS:
-                    robot_state.drive_end_effector_pose[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_end_effector_pose = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
-                    robot_state.drive_joint_velocity[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_velocity = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
-                    robot_state.drive_joint_torque_ratio[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_torque_ratio = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CART_VEL:
-                    robot_state.drive_end_effector_velocity[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_end_effector_velocity = Robot._string_to_floats(response.data)
 
                 elif response.id == MX_ST_RT_DRIVE_CONF:
-                    robot_state.drive_joint_configurations[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_configurations = Robot._string_to_floats(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CONF_MULTITURN:
-                    robot_state.drive_multiturn[:] = Robot._string_to_floats(response.data)
+                    robot_state.drive_multiturn = Robot._string_to_floats(response.data)
 
                 elif response.id == MX_ST_RT_ACCELEROMETER:
-                    robot_state.accelerometer[:] = Robot._string_to_floats(response.data)
+                    robot_state.accelerometer = Robot._string_to_floats(response.data)
 
     @staticmethod
     def _connect_socket(logger, address, port):
@@ -1179,7 +1133,7 @@ class Robot:
 
             callback_name, data = callback_queue.get(block=block_on_empty, timeout=timeout)
 
-            if callback_name == TERMINATE_PROCESS:
+            if callback_name == TERMINATE:
                 return
 
             callback_function = callbacks.__dict__[callback_name]
@@ -1193,32 +1147,32 @@ class Robot:
     # Private methods.
     #####################################################################################
 
-    def _check_monitor_processes(self):
-        """Check that the processes which handle robot messages are alive. Attempt to disconnect from the robot if not.
+    def _check_background_threads(self):
+        """Check that the thread which handle robot messages are alive. Attempt to disconnect from the robot if not.
 
         """
         if self._offline_mode:
             return True
 
-        if not (self._command_response_handler_process and self._command_response_handler_process.is_alive()):
+        if not (self._command_response_handler_thread and self._command_response_handler_thread.is_alive()):
             self.Disconnect()
-            raise InvalidStateError('Command response handler process has unexpectedly terminated.')
-        if not (self._monitor_handler_process and self._monitor_handler_process.is_alive()):
+            raise InvalidStateError('Command response handler thread has unexpectedly terminated.')
+        if not (self._monitor_handler_thread and self._monitor_handler_thread.is_alive()):
             self.Disconnect()
-            raise InvalidStateError('Command response handler process has unexpectedly terminated.')
+            raise InvalidStateError('Command response handler thread has unexpectedly terminated.')
 
-        if not (self._command_rx_process and self._command_rx_process.is_alive()):
+        if not (self._command_rx_thread and self._command_rx_thread.is_alive()):
             self.Disconnect()
-            raise InvalidStateError('Command rx process has unexpectedly terminated.')
-        if not (self._monitor_rx_process and self._monitor_rx_process.is_alive()):
+            raise InvalidStateError('Command rx thread has unexpectedly terminated.')
+        if not (self._monitor_rx_thread and self._monitor_rx_thread.is_alive()):
             self.Disconnect()
-            raise InvalidStateError('Monitor rx process has unexpectedly termianted.')
+            raise InvalidStateError('Monitor rx thread has unexpectedly termianted.')
 
-        # If tx process is down, attempt to directly send deactivate command to the robot.
-        if not (self._command_tx_process and self._command_tx_process.is_alive()):
+        # If tx thread is down, attempt to directly send deactivate command to the robot.
+        if not (self._command_tx_thread and self._command_tx_thread.is_alive()):
             self._command_socket.sendall(b'DeactivateRobot\0')
             self.Disconnect()
-            raise InvalidStateError('Command tx process has unexpectedly terminated.')
+            raise InvalidStateError('Command tx thread has unexpectedly terminated.')
 
         return True
 
@@ -1271,65 +1225,65 @@ class Robot:
                 raise CommunicationError('Monitor socket could not be created.')
 
         except:
-            # Clean up processes and connections on error.
+            # Clean up threads and connections on error.
             self.Disconnect()
             raise
 
         return True
 
-    def _launch_process(self, *, target, args):
-        """Establish the processes responsible for reading/sending messages using the sockets.
+    def _launch_thread(self, *, target, args):
+        """Establish the threads responsible for reading/sending messages using the sockets.
 
         Parameters
         ----------
         func : function handle
-            Function to run using new process.
+            Function to run using new thread.
         args : argument list
             Arguments to be passed to func.
 
         Return
         ------
-        process handle
-            Handle for newly-launched process.
+        thread handle
+            Handle for newly-launched thread.
 
         """
         # We use the _deactivate_on_exception function which wraps func around try...except and disconnects on error.
         # The first argument is the actual function to be executed, the second is the command socket.
-        process = mp.Process(target=self._deactivate_on_exception, args=(
+        thread = threading.Thread(target=self._deactivate_on_exception, args=(
             target,
             self._command_socket,
             *args,
         ))
-        process.start()
-        return process
+        thread.start()
+        return thread
 
-    def _establish_socket_processes(self):
-        """Establish the processes responsible for reading/sending messages using the sockets.
+    def _establish_socket_threads(self):
+        """Establish the threads responsible for reading/sending messages using the sockets.
 
         Return
         ------
         bool
-            True if both all processes are successfully launched.
+            True if both all threads are successfully launched.
 
         """
         if self._offline_mode:
             return True
 
         try:
-            # Create rx process for command socket communication.
-            self._command_rx_process = self._launch_process(target=self._handle_socket_rx,
-                                                            args=(self._command_socket, self._command_rx_queue))
+            # Create rx thread for command socket communication.
+            self._command_rx_thread = self._launch_thread(target=self._handle_socket_rx,
+                                                          args=(self._command_socket, self._command_rx_queue))
 
-            # Create tx process for command socket communication.
-            self._command_tx_process = self._launch_process(target=self._handle_socket_tx,
-                                                            args=(self._command_socket, self._command_tx_queue))
+            # Create tx thread for command socket communication.
+            self._command_tx_thread = self._launch_thread(target=self._handle_socket_tx,
+                                                          args=(self._command_socket, self._command_tx_queue))
 
-            # Create rx processes for monitor socket communication.
-            self._monitor_rx_process = self._launch_process(target=self._handle_socket_rx,
-                                                            args=(self._monitor_socket, self._monitor_rx_queue))
+            # Create rx thread for monitor socket communication.
+            self._monitor_rx_thread = self._launch_thread(target=self._handle_socket_rx,
+                                                          args=(self._monitor_socket, self._monitor_rx_queue))
 
         except:
-            # Clean up processes and connections on error.
+            # Clean up threads and connections on error.
             self.Disconnect()
             raise
 
@@ -1361,7 +1315,7 @@ class Robot:
             self.Disconnect()
             raise CommunicationError('Connection error: %s', response)
 
-        self._command_response_handler_process = self._launch_process(
+        self._command_response_handler_thread = self._launch_thread(
             target=self._command_response_handler,
             args=(self._command_rx_queue, self._robot_state, self._user_checkpoints, self._internal_checkpoints,
                   self._robot_events, self._main_lock, self.logger, self._callback_queue, self._clear_motion_requests))
@@ -1377,78 +1331,69 @@ class Robot:
 
         """
 
-        self._monitor_handler_process = self._launch_process(target=self._monitor_handler,
-                                                             args=(self._monitor_rx_queue, self._robot_state,
-                                                                   self._robot_events, self._main_lock,
-                                                                   self._callback_queue))
+        self._monitor_handler_thread = self._launch_thread(target=self._monitor_handler,
+                                                           args=(self._monitor_rx_queue, self._robot_state,
+                                                                 self._robot_events, self._main_lock,
+                                                                 self._callback_queue))
 
         return True
 
-    def _shut_down_queue_processes(self):
-        """Attempt to gracefully shut down processes which read from queues.
+    def _shut_down_queue_threads(self):
+        """Attempt to gracefully shut down threads which read from queues.
 
         """
-        # Join processes which wait on a queue by sending terminate to the queue.
-        # Don't acquire _main_lock since these processes require _main_lock to finish processing.
-        if self._command_tx_process is not None:
+        # Join threads which wait on a queue by sending terminate to the queue.
+        # Don't acquire _main_lock since these threads require _main_lock to finish processing.
+        if self._command_tx_thread is not None:
             try:
-                self._command_tx_queue.put(TERMINATE_PROCESS)
+                self._command_tx_queue.put(TERMINATE)
             except Exception as e:
-                self._command_tx_process.terminate()
-                self.logger.error('Error shutting down tx process. ' + str(e))
-            self._command_tx_process.join(timeout=self.default_timeout)
-            self._command_tx_process = None
+                self.logger.error('Error shutting down tx thread. ' + str(e))
+            self._command_tx_thread.join(timeout=self.default_timeout)
+            self._command_tx_thread = None
 
-        if self._command_response_handler_process is not None:
+        if self._command_response_handler_thread is not None:
             try:
-                self._command_rx_queue.put(TERMINATE_PROCESS)
+                self._command_rx_queue.put(TERMINATE)
             except Exception as e:
-                self._command_response_handler_process.terminate()
-                self.logger.error('Error shutting down command response handler process. ' + str(e))
-            self._command_response_handler_process.join(timeout=self.default_timeout)
-            self._command_response_handler_process = None
+                self.logger.error('Error shutting down command response handler thread. ' + str(e))
+            self._command_response_handler_thread.join(timeout=self.default_timeout)
+            self._command_response_handler_thread = None
 
-        if self._monitor_handler_process is not None:
+        if self._monitor_handler_thread is not None:
             try:
-                self._monitor_rx_queue.put(TERMINATE_PROCESS)
+                self._monitor_rx_queue.put(TERMINATE)
             except Exception as e:
-                self._monitor_handler_process.terminate()
-                self.logger.error('Error shutting down monitor handler process. ' + str(e))
-            self._monitor_handler_process.join(timeout=self.default_timeout)
-            self._monitor_handler_process = None
+                self.logger.error('Error shutting down monitor handler thread. ' + str(e))
+            self._monitor_handler_thread.join(timeout=self.default_timeout)
+            self._monitor_handler_thread = None
 
-    def _shut_down_socket_processes(self):
-        """Attempt to gracefully shut down processes which read from sockets.
+    def _shut_down_socket_threads(self):
+        """Attempt to gracefully shut down threads which read from sockets.
 
         """
         with self._main_lock:
-            # Shutdown socket to terminate the rx processes.
+            # Shutdown socket to terminate the rx threads.
             if self._command_socket is not None:
                 try:
                     self._command_socket.shutdown(socket.SHUT_RDWR)
                 except Exception as e:
                     self.logger.error('Error shutting down command socket. ' + str(e))
-                    if self._command_rx_process is not None:
-                        self._command_rx_process.terminate()
 
             if self._monitor_socket is not None:
                 try:
                     self._monitor_socket.shutdown(socket.SHUT_RDWR)
                 except Exception as e:
                     self.logger.error('Error shutting down monitor socket. ' + str(e))
-                    if self._monitor_rx_process is not None:
-                        self._monitor_rx_process.terminate()
 
-            # Join processes which wait on a socket.
-            if self._command_rx_process is not None:
-                if not self._command_rx_process.join(timeout=self.default_timeout):
-                    self._command_rx_process.terminate()
-                self._command_rx_process = None
+            # Join threads which wait on a socket.
+            if self._command_rx_thread is not None:
+                self._command_rx_thread.join(timeout=self.default_timeout)
+                self._command_rx_thread = None
 
-            if self._monitor_rx_process is not None:
-                if not self._monitor_rx_process.join(timeout=self.default_timeout):
-                    self._monitor_rx_process.terminate()
-                self._monitor_rx_process = None
+            if self._monitor_rx_thread is not None:
+                self._monitor_rx_thread.join(timeout=self.default_timeout)
+                self._monitor_rx_thread = None
 
     def _set_checkpoint_internal(self):
         """Set a checkpoint for internal use using the next available internal id.
@@ -1500,25 +1445,24 @@ class Robot:
             self.logger.debug('Setting checkpoint %s', n)
 
             if n not in checkpoints_dict:
-                checkpoints_dict[n] = self._manager.list()
-            event = self._manager.Event()
+                checkpoints_dict[n] = list()
+            event = InterruptableEvent(n)
             checkpoints_dict[n].append(event)
 
             if send_to_robot:
                 self._send_command('SetCheckpoint', [n])
 
-            return Checkpoint(n, event, self._checkpoints_invalid)
+            return event
 
     def _invalidate_checkpoints(self):
         '''Unblock all waiting checkpoints and have them throw InterruptException.
 
         '''
-        self._checkpoints_invalid.value = True
 
         for checkpoints_dict in [self._internal_checkpoints, self._user_checkpoints]:
             for key, checkpoints_list in checkpoints_dict.items():
                 for event in checkpoints_list:
-                    event.set()
+                    event.abort()
             checkpoints_dict.clear()
 
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
@@ -1535,7 +1479,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command(command, arg_list)
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
@@ -1564,7 +1508,7 @@ class Robot:
         if not isinstance(callbacks, RobotCallbacks):
             raise TypeError('Callbacks object is not the appropriate class.')
 
-        if self._monitor_handler_process or self._command_response_handler_process:
+        if self._monitor_handler_thread or self._command_response_handler_thread:
             raise InvalidStateError('Callbacks cannot be set if already connected.')
 
         self._callback_queue = CallbackQueue(callbacks)
@@ -1584,7 +1528,7 @@ class Robot:
 
         """
         if self._callback_thread:
-            self._callback_queue.put(TERMINATE_PROCESS)
+            self._callback_queue.put(TERMINATE)
             self._callback_thread.join(timeout=self.default_timeout)
 
         self._robot_callbacks = RobotCallbacks()
@@ -1615,7 +1559,7 @@ class Robot:
         """
         with self._main_lock:
             self._establish_socket_connections()
-            self._establish_socket_processes()
+            self._establish_socket_threads()
             self._initialize_command_connection()
             self._initialize_monitoring_connection()
 
@@ -1645,10 +1589,10 @@ class Robot:
         self.logger.debug('Disconnecting from the robot.')
 
         # Don't acquire _main_lock while shutting down queues to avoid deadlock.
-        self._shut_down_queue_processes()
+        self._shut_down_queue_threads()
 
         with self._main_lock:
-            self._shut_down_socket_processes()
+            self._shut_down_socket_threads()
 
             # Invalidate checkpoints.
             self._invalidate_checkpoints()
@@ -1682,7 +1626,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('ActivateRobot')
 
         if self._enable_synchronous_mode:
@@ -1694,7 +1638,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('Home')
 
         if self._enable_synchronous_mode:
@@ -1714,7 +1658,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('PauseMotion')
 
         if self._enable_synchronous_mode:
@@ -1726,7 +1670,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('ResumeMotion')
 
         if self._enable_synchronous_mode:
@@ -1738,7 +1682,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('DeactivateRobot')
 
         if self._enable_synchronous_mode:
@@ -1750,10 +1694,10 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
 
             # Increment the number of pending ClearMotion requests.
-            self._clear_motion_requests.value += 1
+            self._clear_motion_requests += 1
             self._robot_events.on_motion_cleared.clear()
 
             self._send_command('ClearMotion')
@@ -2104,7 +2048,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n)
 
@@ -2124,7 +2068,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n, send_to_robot=False)
 
@@ -2144,10 +2088,10 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             if '*' not in self._internal_checkpoints:
-                self._internal_checkpoints['*'] = self._manager.list()
-            event = self._manager.Event()
+                self._internal_checkpoints['*'] = list()
+            event = InterruptableEvent()
             self._internal_checkpoints['*'].append(event)
 
         return event.wait(timeout=timeout)
@@ -2278,7 +2222,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('ResetError')
 
         if self._enable_synchronous_mode:
@@ -2290,7 +2234,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('ResetPStop')
 
         if self._enable_synchronous_mode:
@@ -2307,7 +2251,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             if not self._robot_events.on_homed.is_set():
                 raise InvalidStateError('This command requires robot to be homed.')
             self._send_command('Delay', [t])
@@ -2369,7 +2313,7 @@ class Robot:
         """
         if updated:
             with self._main_lock:
-                self._check_monitor_processes()
+                self._check_background_threads()
                 if self._robot_events.on_joints_updated.is_set():
                     self._robot_events.on_joints_updated.clear()
                     self._send_command('GetJoints')
@@ -2377,7 +2321,7 @@ class Robot:
             if not self._robot_events.on_joints_updated.wait(timeout=timeout):
                 raise TimeoutError
 
-        return self._robot_state.joint_positions[:]
+        return self._robot_state.joint_positions
 
     @disconnect_on_exception
     def GetPose(self, updated=True, timeout=None):
@@ -2391,7 +2335,7 @@ class Robot:
         """
         if updated:
             with self._main_lock:
-                self._check_monitor_processes()
+                self._check_background_threads()
                 if self._robot_events.on_pose_updated.is_set():
                     self._robot_events.on_pose_updated.clear()
                     self._send_command('GetPose')
@@ -2412,7 +2356,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('SetMonitoringInterval', [t])
 
     @disconnect_on_exception
@@ -2426,7 +2370,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('SetRTC', [t])
 
     @disconnect_on_exception
@@ -2435,7 +2379,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('ActivateSim')
 
     @disconnect_on_exception
@@ -2444,7 +2388,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             self._send_command('DeactivateSim')
 
     @disconnect_on_exception
@@ -2459,7 +2403,7 @@ class Robot:
         """
         if updated:
             with self._main_lock:
-                self._check_monitor_processes()
+                self._check_background_threads()
                 if self._robot_events.on_cmd_pending_count_updated.is_set():
                     self._robot_events.on_cmd_pending_count_updated.clear()
                     self._send_command('GetCmdPendingCount')
@@ -2467,7 +2411,7 @@ class Robot:
             if not self._robot_events.on_cmd_pending_count_updated.wait(timeout=timeout):
                 raise TimeoutError
 
-        return self._robot_state.cmd_pending_count.value
+        return self._robot_state.cmd_pending_count
 
     @disconnect_on_exception
     def GetConf(self, updated=True, timeout=None):
@@ -2481,7 +2425,7 @@ class Robot:
         """
         if updated:
             with self._main_lock:
-                self._check_monitor_processes()
+                self._check_background_threads()
                 if self._robot_events.on_conf_updated.is_set():
                     self._robot_events.on_conf_updated.clear()
                     self._send_command('GetConf')
@@ -2489,7 +2433,7 @@ class Robot:
             if not self._robot_events.on_conf_updated.wait(timeout=timeout):
                 raise TimeoutError
 
-        return self._robot_state.configuration[:]
+        return self._robot_state.configuration
 
     @disconnect_on_exception
     def ActivateBrakes(self, activated=True):
@@ -2500,7 +2444,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_monitor_processes()
+            self._check_background_threads()
             if activated:
                 self._send_command('BrakesOn')
             else:
