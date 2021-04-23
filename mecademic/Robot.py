@@ -806,7 +806,11 @@ class Robot:
         self._callback_queue = CallbackQueue(self._robot_callbacks)
         self._callback_thread = None
 
-        self._init_states()
+        self._robot_info = None
+        self._robot_state = None
+        self._robot_events = RobotEvents()
+
+        self._reset_disconnect_attributes()
 
         self._enable_synchronous_mode = enable_synchronous_mode
         self._disconnect_on_exception = disconnect_on_exception
@@ -823,19 +827,14 @@ class Robot:
             self.Disconnect()
             self.UnregisterCallbacks()
 
-    def _init_states(self):
+    def _reset_disconnect_attributes(self):
         self._command_rx_queue = queue.Queue()
         self._command_tx_queue = queue.Queue()
         self._monitor_rx_queue = queue.Queue()
 
-        self._robot_info = RobotInfo()
-
         self._user_checkpoints = dict()
         self._internal_checkpoints = dict()
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
-
-        self._robot_state = RobotState(6)
-        self._robot_events = RobotEvents()
 
         self._clear_motion_requests = 0
 
@@ -1767,8 +1766,8 @@ class Robot:
             # Invalidate checkpoints.
             self._invalidate_checkpoints()
 
-            # Reset robot state.
-            self._init_states()
+            # Reset attributes which should not persist after disconnect.
+            self._reset_disconnect_attributes()
 
             # Finally, close sockets.
             if self._command_socket is not None:
