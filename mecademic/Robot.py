@@ -250,6 +250,8 @@ class RobotInfo:
         Minor firmware revision number.
     fw_patch_num : int
         Firmware patch number.
+    num_joints : int
+        Number of joints on the robot.
 
     """
     def __init__(self,
@@ -265,6 +267,39 @@ class RobotInfo:
         self.fw_major_rev = fw_major_rev
         self.fw_minor_rev = fw_minor_rev
         self.fw_patch_num = fw_patch_num
+
+        if self.model == 'Meca500':
+            self.num_joints = 6
+        elif self.model == 'Scara':
+            self.num_joints = 4
+        elif self.model == None:
+            self.num_joints = 1
+        else:
+            raise ValueError('Invalid robot model: {}'.format(self.model))
+
+    @classmethod
+    def from_command_response_string(cls, input_string):
+        """Generate robot state from standard robot response string.
+
+        String format should be "Connected to {model} R{revision}{-virtual} v{fw_major_num}.{fw_minor_num}.{patch_num}"
+
+        Parameters
+        ----------
+        input_string : string
+            Input string to be parsed.
+
+        """
+        robot_info_regex = re.compile(r'Connected to (\b.*\b) R(\d)(-virtual)? v(\d+)\.(\d+)\.(\d+)')
+        try:
+            matches = robot_info_regex.match(input_string).groups()
+            return cls(model=matches[0],
+                       revision=int(matches[1]),
+                       is_virtual=(matches[2] != None),
+                       fw_major_rev=int(matches[3]),
+                       fw_minor_rev=int(matches[4]),
+                       fw_patch_num=int(matches[5]))
+        except:
+            raise ValueError('Could not parse robot info string {}'.format(input_string))
 
 
 class RobotState:
@@ -1439,18 +1474,9 @@ class Robot:
             raise CommunicationError('Connection error: {}'.format(response))
 
         # Attempt to parse robot return data.
-        robot_info_regex = re.compile(r'Connected to (\b.*\b) R(\d)(-virtual)? v(\d+)\.(\d+)\.(\d+)')
+        self._robot_info = RobotInfo.from_command_response_string(response.data)
 
-        try:
-            matches = robot_info_regex.match(response.data).groups()
-            self._robot_info = RobotInfo(model=matches[0],
-                                         revision=int(matches[1]),
-                                         is_virtual=(matches[2] != None),
-                                         fw_major_rev=int(matches[3]),
-                                         fw_minor_rev=int(matches[4]),
-                                         fw_patch_num=int(matches[5]))
-        except:
-            raise InvalidStateError('Unable to parse robot information: {}'.format(response))
+        self._robot_state = RobotState(self._robot_info.num_joints)
 
         self._command_response_handler_thread = self._launch_thread(
             target=self._command_response_handler,
