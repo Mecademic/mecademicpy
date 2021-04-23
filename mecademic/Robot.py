@@ -132,6 +132,87 @@ class InterruptableEvent:
                 return self._event.is_set()
 
 
+class TimestampedData:
+    """ Class for storing timestamped data.
+
+    Attributes
+    ----------
+    timestamp : number-like
+        Timestamp associated with data.
+    data : object
+        Data to be stored.
+
+    """
+    def __init__(self, timestamp, data):
+        self.timestamp = timestamp
+        self.data = data
+
+    @classmethod
+    def from_csv(cls, input_string):
+        """ Construct from comma-separated string.
+
+        Parameters
+        ----------
+        input_string : string
+            Comma-separated string. First value is timestamp, rest is data.
+
+        Return
+        ------
+        TimestampedData object
+
+        """
+        floats = string_to_floats(input_string)
+        return cls(floats[0], floats[1:])
+
+    @classmethod
+    def zeros(cls, length):
+        """ Construct empty TimestampedData object of specified length.
+
+        Parameters
+        ----------
+        length : int
+            Length of data to construct.
+
+        Return
+        ------
+        TimestampedData object
+
+        """
+        return cls(0, [0] * length)
+
+    def __eq__(self, other):
+        """ Return true if other object has identical timestamp and data.
+
+        Parameters
+        ----------
+        other : object
+            Object to compare against.
+
+        Return
+        ------
+        bool
+            True if objects have same timestamp and data.
+
+        """
+        return other.timestamp == self.timestamp and other.data == self.data
+
+    def __ne__(self, other):
+        """ Return true if other object has different timestamp or data.
+
+        Parameters
+        ----------
+        other : object
+            Object to compare against.
+
+        Return
+        ------
+        bool
+            True if objects have different timestamp or data.
+
+        """
+        return not self == other
+
+
 class Message:
     """Class for storing the internal state of a generic Mecademic robot.
 
@@ -161,39 +242,39 @@ class RobotState:
     end_effector_pose : vector
         The end effector pose in [x, y, z, alpha, beta, gamma] (mm and degrees).
 
-    nc_joint_positions : vector
-        Controller desired joint positions in degrees [timestamp, theta_1...6].
-    nc_end_effector_pose : vector
-        Controller desired end effector pose [timestamp, x, y, z, alpha, beta, gamma].
+    nc_joint_positions : TimestampedData
+        Controller desired joint positions in degrees [theta_1...6], includes timestamp.
+    nc_end_effector_pose : TimestampedData
+        Controller desired end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
 
-    nc_joint_velocity : vector
-        Controller desired joint velocity in degrees/second [timestamp, theta_dot_1...6].
-    nc_end_effector_velocity : vector
+    nc_joint_velocity : TimestampedData
+        Controller desired joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
+    nc_end_effector_velocity : TimestampedData
         Controller desired end effector velocity in mm/s and degrees/s, includes timestamp.
-    nc_joint_configurations : vector
+    nc_joint_configurations : TimestampedData
         Controller desired joint configurations.
-    nc_multiturn : vector
+    nc_multiturn : TimestampedData
         Controller desired joint 6 multiturn configuration.
 
-    drive_joint_positions : vector
-        Drive-measured joint positions in degrees [timestamp, theta_1...6].
-    drive_end_effector_pose : vector
-        Drive-measured end effector pose [timestamp, x, y, z, alpha, beta, gamma].
+    drive_joint_positions : TimestampedData
+        Drive-measured joint positions in degrees [theta_1...6], includes timestamp.
+    drive_end_effector_pose : TimestampedData
+        Drive-measured end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
 
-    drive_joint_velocity : vector
-        Drive-measured joint velocity in degrees/second [timestamp, theta_dot_1...6].
-    drive_joint_torque_ratio : vector
-        Drive-measured torque ratio as a percent of maximum [timestamp, torque_1...6]
-    drive_end_effector_velocity : vector
+    drive_joint_velocity : TimestampedData
+        Drive-measured joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
+    drive_joint_torque_ratio : TimestampedData
+        Drive-measured torque ratio as a percent of maximum [torque_1...6], includes timestamp.
+    drive_end_effector_velocity : TimestampedData
         Drive-measured end effector velocity in mm/s and degrees/s, includes timestamp.
 
-    drive_joint_configurations : vector
+    drive_joint_configurations : TimestampedData
         Drive-measured joint configurations.
-    drive_multiturn : vector
+    drive_multiturn : TimestampedData
         Drive-measured joint 6 multiturn configuration.
 
-    accelerometer : vector
-        Raw accelerometer measurements [timestamp, accelerometer_id, x, y, z]. 16000 = 1g.
+    accelerometer : TimestampedData
+        Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
 
     activation_state : boolean
         True if the robot is activated.
@@ -215,30 +296,30 @@ class RobotState:
         Current configuration of the robot.
 
     """
-    def __init__(self):
-        self.joint_positions = [0, 0, 0, 0, 0, 0]  # degrees
-        self.end_effector_pose = [0, 0, 0, 0, 0, 0]  # mm and degrees
+    def __init__(self, num_joints):
+        self.joint_positions = [0] * num_joints  # degrees
+        self.end_effector_pose = [0] * num_joints  # mm and degrees
 
-        self.nc_joint_positions = [0, 0, 0, 0, 0, 0, 0]  # degrees
-        self.nc_end_effector_pose = [0, 0, 0, 0, 0, 0, 0]  # mm and degrees
+        self.nc_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+        self.nc_end_effector_pose = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm and degrees
 
-        self.nc_joint_velocity = [0, 0, 0, 0, 0, 0, 0]  # degrees/second
-        self.nc_end_effector_velocity = [0, 0, 0, 0, 0, 0, 0]  # mm/s and degrees/s
+        self.nc_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
+        self.nc_end_effector_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm/s and deg/s
 
-        self.nc_joint_configurations = [0, 0, 0, 0]
-        self.nc_multiturn = [0, 0]
+        self.nc_joint_configurations = TimestampedData.zeros(3)
+        self.nc_multiturn = TimestampedData.zeros(1)
 
-        self.drive_joint_positions = [0, 0, 0, 0, 0, 0, 0]  # degrees
-        self.drive_end_effector_pose = [0, 0, 0, 0, 0, 0, 0]  # mm and degrees
+        self.drive_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+        self.drive_end_effector_pose = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm and degrees
 
-        self.drive_joint_velocity = [0, 0, 0, 0, 0, 0, 0]  # degrees/second
-        self.drive_joint_torque_ratio = [0, 0, 0, 0, 0, 0, 0]  # percent of maximum
-        self.drive_end_effector_velocity = [0, 0, 0, 0, 0, 0, 0]  # mm/s and degrees/s
+        self.drive_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
+        self.drive_joint_torque_ratio = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
+        self.drive_end_effector_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm/s and deg/s
 
-        self.drive_joint_configurations = [0, 0, 0, 0]
-        self.drive_multiturn = [0, 0]
+        self.drive_joint_configurations = TimestampedData.zeros(3)
+        self.drive_multiturn = TimestampedData.zeros(1)
 
-        self.accelerometer = [0, 0, 0, 0, 0]  # 16000 = 1g
+        self.accelerometer = TimestampedData.zeros(4)  # 16000 = 1g
 
         self.max_queue_size = 0
 
@@ -252,7 +333,7 @@ class RobotState:
         self.end_of_movement_status = False
 
         self.cmd_pending_count = 0
-        self.configuration = [0, 0, 0]
+        self.configuration = [0] * 3
 
 
 class RobotEvents:
@@ -525,6 +606,23 @@ def disconnect_on_exception(func):
     return wrap
 
 
+def string_to_floats(input_string):
+    """Convert comma-separated floats in string form to list of floats.
+
+    Parameters
+    ----------
+    input_string : string
+        Comma-separated floats values encoded as a string.
+
+    Returns
+    -------
+    list of floats
+        Returns converted list of floats.
+
+    """
+    return [float(x) for x in input_string.split(',')]
+
+
 class Robot:
     """Class for controlling a generic Mecademic robot.
 
@@ -661,7 +759,7 @@ class Robot:
         self._internal_checkpoints = dict()
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
-        self._robot_state = RobotState()
+        self._robot_state = RobotState(6)
         self._robot_events = RobotEvents()
 
         self._clear_motion_requests = 0
@@ -841,11 +939,11 @@ class Robot:
                 callback_queue.put('on_command_message', response)
 
                 if response.id == MX_ST_GET_JOINTS:
-                    robot_state.joint_positions = Robot._string_to_floats(response.data)
+                    robot_state.joint_positions = string_to_floats(response.data)
                     events.on_joints_updated.set()
 
                 elif response.id == MX_ST_GET_POSE:
-                    robot_state.end_effector_pose = Robot._string_to_floats(response.data)
+                    robot_state.end_effector_pose = string_to_floats(response.data)
                     events.on_pose_updated.set()
 
                 if response.id == MX_ST_CLEAR_MOTION:
@@ -880,7 +978,7 @@ class Robot:
                     events.on_cmd_pending_count_updated.set()
 
                 elif response.id == MX_ST_GET_CONF:
-                    robot_state.configuration = Robot._string_to_floats(response.data)
+                    robot_state.configuration = string_to_floats(response.data)
                     events.on_conf_updated.set()
 
                 elif response.id == MX_ST_BRAKES_ON:
@@ -897,23 +995,6 @@ class Robot:
 
                 elif response.id == MX_ST_NO_OFFLINE_SAVED:
                     events.on_offline_program_started.abort()
-
-    @staticmethod
-    def _string_to_floats(input_string):
-        """Convert comma-separated floats in string form to list of floats.
-
-        Parameters
-        ----------
-        input_string : string
-            Comma-separated floats values encoded as a string.
-
-        Returns
-        -------
-        list of floats
-            Returns converted list of floats.
-
-        """
-        return [float(x) for x in input_string.split(',')]
 
     @staticmethod
     def _handle_robot_status_response(response, robot_state, events, callback_queue):
@@ -1031,11 +1112,11 @@ class Robot:
             with main_lock:
 
                 if response.id == MX_ST_GET_JOINTS:
-                    robot_state.joint_positions = Robot._string_to_floats(response.data)
+                    robot_state.joint_positions = string_to_floats(response.data)
                     events.on_joints_updated.set()
 
                 elif response.id == MX_ST_GET_POSE:
-                    robot_state.end_effector_pose = Robot._string_to_floats(response.data)
+                    robot_state.end_effector_pose = string_to_floats(response.data)
                     events.on_pose_updated.set()
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
@@ -1044,37 +1125,37 @@ class Robot:
                     callback_queue.put('on_status_updated')
 
                 elif response.id == MX_ST_RT_NC_JOINT_POS:
-                    robot_state.nc_joint_positions = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_positions = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CART_POS:
-                    robot_state.nc_end_effector_pose = Robot._string_to_floats(response.data)
+                    robot_state.nc_end_effector_pose = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_JOINT_VEL:
-                    robot_state.nc_joint_velocity = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_velocity = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CART_VEL:
-                    robot_state.nc_end_effector_velocity = Robot._string_to_floats(response.data)
+                    robot_state.nc_end_effector_velocity = TimestampedData.from_csv(response.data)
 
                 elif response.id == MX_ST_RT_NC_CONF:
-                    robot_state.nc_joint_configurations = Robot._string_to_floats(response.data)
+                    robot_state.nc_joint_configurations = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CONF_MULTITURN:
-                    robot_state.nc_multiturn = Robot._string_to_floats(response.data)
+                    robot_state.nc_multiturn = TimestampedData.from_csv(response.data)
 
                 elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
-                    robot_state.drive_joint_positions = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_positions = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CART_POS:
-                    robot_state.drive_end_effector_pose = Robot._string_to_floats(response.data)
+                    robot_state.drive_end_effector_pose = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
-                    robot_state.drive_joint_velocity = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_velocity = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
-                    robot_state.drive_joint_torque_ratio = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_torque_ratio = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CART_VEL:
-                    robot_state.drive_end_effector_velocity = Robot._string_to_floats(response.data)
+                    robot_state.drive_end_effector_velocity = TimestampedData.from_csv(response.data)
 
                 elif response.id == MX_ST_RT_DRIVE_CONF:
-                    robot_state.drive_joint_configurations = Robot._string_to_floats(response.data)
+                    robot_state.drive_joint_configurations = TimestampedData.from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CONF_MULTITURN:
-                    robot_state.drive_multiturn = Robot._string_to_floats(response.data)
+                    robot_state.drive_multiturn = TimestampedData.from_csv(response.data)
 
                 elif response.id == MX_ST_RT_ACCELEROMETER:
-                    robot_state.accelerometer = Robot._string_to_floats(response.data)
+                    robot_state.accelerometer = TimestampedData.from_csv(response.data)
 
     @staticmethod
     def _connect_socket(logger, address, port):

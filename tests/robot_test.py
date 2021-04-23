@@ -120,6 +120,10 @@ def test_monitoring_connection():
     def make_test_array(code, data):
         return [x + code for x in data]
 
+    def make_test_data(code, data):
+        test_array = make_test_array(code, data)
+        return mdr.TimestampedData(test_array[0], test_array[1:])
+
     def make_test_message(code, data):
         test_array = make_test_array(code, data)
         return mdr.Message(code, ','.join([str(x) for x in test_array]))
@@ -166,24 +170,24 @@ def test_monitoring_connection():
     assert robot.GetPose(updated=False) == make_test_array(mdr.MX_ST_GET_POSE, fake_array[:-1])
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
-    assert robot._robot_state.nc_joint_positions[:] == make_test_array(mdr.MX_ST_RT_NC_JOINT_POS, fake_array)
-    assert robot._robot_state.nc_end_effector_pose[:] == make_test_array(mdr.MX_ST_RT_NC_CART_POS, fake_array)
-    assert robot._robot_state.nc_joint_velocity[:] == make_test_array(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array)
-    assert robot._robot_state.nc_end_effector_velocity[:] == make_test_array(mdr.MX_ST_RT_NC_CART_VEL, fake_array)
+    assert robot._robot_state.nc_joint_positions == make_test_data(mdr.MX_ST_RT_NC_JOINT_POS, fake_array)
+    assert robot._robot_state.nc_end_effector_pose == make_test_data(mdr.MX_ST_RT_NC_CART_POS, fake_array)
+    assert robot._robot_state.nc_joint_velocity == make_test_data(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array)
+    assert robot._robot_state.nc_end_effector_velocity == make_test_data(mdr.MX_ST_RT_NC_CART_VEL, fake_array)
 
-    assert robot._robot_state.nc_joint_configurations[:] == make_test_array(mdr.MX_ST_RT_NC_CONF, fake_array[:4])
-    assert robot._robot_state.nc_multiturn[:] == make_test_array(mdr.MX_ST_RT_NC_CONF_MULTITURN, fake_array[:2])
+    assert robot._robot_state.nc_joint_configurations == make_test_data(mdr.MX_ST_RT_NC_CONF, fake_array[:4])
+    assert robot._robot_state.nc_multiturn == make_test_data(mdr.MX_ST_RT_NC_CONF_MULTITURN, fake_array[:2])
 
-    assert robot._robot_state.drive_joint_positions[:] == make_test_array(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array)
-    assert robot._robot_state.drive_end_effector_pose[:] == make_test_array(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array)
-    assert robot._robot_state.drive_joint_velocity[:] == make_test_array(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_array)
-    assert robot._robot_state.drive_joint_torque_ratio[:] == make_test_array(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_array)
-    assert robot._robot_state.drive_end_effector_velocity[:] == make_test_array(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_array)
+    assert robot._robot_state.drive_joint_positions == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array)
+    assert robot._robot_state.drive_end_effector_pose == make_test_data(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array)
+    assert robot._robot_state.drive_joint_velocity == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_array)
+    assert robot._robot_state.drive_joint_torque_ratio == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_array)
+    assert robot._robot_state.drive_end_effector_velocity == make_test_data(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_array)
 
-    assert robot._robot_state.drive_joint_configurations[:] == make_test_array(mdr.MX_ST_RT_DRIVE_CONF, fake_array[:4])
-    assert robot._robot_state.drive_multiturn[:] == make_test_array(mdr.MX_ST_RT_DRIVE_CONF_MULTITURN, fake_array[:2])
+    assert robot._robot_state.drive_joint_configurations == make_test_data(mdr.MX_ST_RT_DRIVE_CONF, fake_array[:4])
+    assert robot._robot_state.drive_multiturn == make_test_data(mdr.MX_ST_RT_DRIVE_CONF_MULTITURN, fake_array[:2])
 
-    assert robot._robot_state.accelerometer[:] == make_test_array(mdr.MX_ST_RT_ACCELEROMETER, fake_array[:5])
+    assert robot._robot_state.accelerometer == make_test_data(mdr.MX_ST_RT_ACCELEROMETER, fake_array[:5])
 
     robot.Disconnect()
 
