@@ -187,7 +187,8 @@ def test_monitoring_connection():
     assert robot._robot_state.drive_joint_configurations == make_test_data(mdr.MX_ST_RT_DRIVE_CONF, fake_array[:4])
     assert robot._robot_state.drive_multiturn == make_test_data(mdr.MX_ST_RT_DRIVE_CONF_MULTITURN, fake_array[:2])
 
-    assert robot._robot_state.accelerometer == make_test_data(mdr.MX_ST_RT_ACCELEROMETER, fake_array[:5])
+    accel_array = make_test_array(mdr.MX_ST_RT_ACCELEROMETER, fake_array[:5])
+    assert robot._robot_state.accelerometer == {accel_array[1]: mdr.TimestampedData(accel_array[0], accel_array[2:])}
 
     robot.Disconnect()
 

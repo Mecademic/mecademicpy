@@ -319,7 +319,8 @@ class RobotState:
         self.drive_joint_configurations = TimestampedData.zeros(3)
         self.drive_multiturn = TimestampedData.zeros(1)
 
-        self.accelerometer = TimestampedData.zeros(4)  # 16000 = 1g
+        # Contains dictionary of accelerometers stored in the robot.
+        self.accelerometer = dict()  # 16000 = 1g
 
         self.max_queue_size = 0
 
@@ -1155,7 +1156,9 @@ class Robot:
                     robot_state.drive_multiturn = TimestampedData.from_csv(response.data)
 
                 elif response.id == MX_ST_RT_ACCELEROMETER:
-                    robot_state.accelerometer = TimestampedData.from_csv(response.data)
+                    # The data is stored as [timestamp, accelerometer_id, {measurements...}]
+                    raw_data = string_to_floats(response.data)
+                    robot_state.accelerometer[raw_data[1]] = TimestampedData(raw_data[0], raw_data[2:])
 
     @staticmethod
     def _connect_socket(logger, address, port):
@@ -1797,28 +1800,28 @@ class Robot:
             self.WaitMotionCleared(timeout=self.default_timeout)
 
     @disconnect_on_exception
-    def MoveJoints(self, joint1, joint2, joint3, joint4, joint5, joint6):
+    def MoveJoints(self, *args):
         """Move the robot by specifying each joint's target angular position.
 
         Parameters
         ----------
-        joint1...joint6 : float
+        joint_1...joint_n : float
             Desired joint angles in degrees.
 
         """
-        self._send_motion_command('MoveJoints', [joint1, joint2, joint3, joint4, joint5, joint6])
+        self._send_motion_command('MoveJoints', args)
 
     @disconnect_on_exception
-    def MoveJointsVel(self, joint1, joint2, joint3, joint4, joint5, joint6):
+    def MoveJointsVel(self, *args):
         """Moves joints to at desired velocities.
 
         Parameters
         ----------
-        joint1...joint6 : float
+        joint_1...joint_n : float
             Desired joint velocities in degrees per second.
 
         """
-        self._send_motion_command('MoveJointsVel', [joint1, joint2, joint3, joint4, joint5, joint6])
+        self._send_motion_command('MoveJointsVel', args)
 
     @disconnect_on_exception
     def MovePose(self, x, y, z, alpha, beta, gamma):
