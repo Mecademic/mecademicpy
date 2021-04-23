@@ -6,6 +6,7 @@ import socket
 import threading
 import queue
 import functools
+import re
 
 from .mx_robot_def import *
 
@@ -232,6 +233,40 @@ class Message:
         return "Message with id={}, data={}".format(self.id, self.data)
 
 
+class RobotInfo:
+    """Class for storing metadata about a robot.
+
+    Attributes
+    ----------
+    model : string
+        Model of robot.
+    revision : int
+        Robot revision.
+    is_virtual : bool
+        True if is a virtual robot.
+    fw_major_rev : int
+        Major firmware revision number.
+    fw_minor_rev : int
+        Minor firmware revision number.
+    fw_patch_num : int
+        Firmware patch number.
+
+    """
+    def __init__(self,
+                 model=None,
+                 revision=None,
+                 is_virtual=None,
+                 fw_major_rev=None,
+                 fw_minor_rev=None,
+                 fw_patch_num=None):
+        self.model = model
+        self.revision = revision
+        self.is_virtual = is_virtual
+        self.fw_major_rev = fw_major_rev
+        self.fw_minor_rev = fw_minor_rev
+        self.fw_patch_num = fw_patch_num
+
+
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
 
@@ -319,7 +354,8 @@ class RobotState:
         self.drive_joint_configurations = TimestampedData.zeros(3)
         self.drive_multiturn = TimestampedData.zeros(1)
 
-        # Contains dictionary of accelerometers stored in the robot.
+        # Contains dictionary of accelerometers stored in the robot indexed by joint number.
+        # For example, Meca500 currently only reports the accelerometer in joint 5.
         self.accelerometer = dict()  # 16000 = 1g
 
         self.max_queue_size = 0
@@ -740,6 +776,7 @@ class Robot:
         self._enable_synchronous_mode = enable_synchronous_mode
         self._disconnect_on_exception = disconnect_on_exception
         self._offline_mode = offline_mode
+
         self.logger = logging.getLogger(__name__)
         self.default_timeout = 10
 
@@ -755,6 +792,8 @@ class Robot:
         self._command_rx_queue = queue.Queue()
         self._command_tx_queue = queue.Queue()
         self._monitor_rx_queue = queue.Queue()
+
+        self._robot_info = RobotInfo()
 
         self._user_checkpoints = dict()
         self._internal_checkpoints = dict()
@@ -1395,9 +1434,23 @@ class Robot:
 
         # Check that response is appropriate.
         if response.id != MX_ST_CONNECTED:
-            self.logger.error('Connection error: %s', response)
+            self.logger.error('Connection error: {}'.format(response))
             self.Disconnect()
-            raise CommunicationError('Connection error: %s', response)
+            raise CommunicationError('Connection error: {}'.format(response))
+
+        # Attempt to parse robot return data.
+        robot_info_regex = re.compile(r'Connected to (\b.*\b) R(\d)(-virtual)? v(\d+)\.(\d+)\.(\d+)')
+
+        try:
+            matches = robot_info_regex.match(response.data).groups()
+            self._robot_info = RobotInfo(model=matches[0],
+                                         revision=int(matches[1]),
+                                         is_virtual=(matches[2] != None),
+                                         fw_major_rev=int(matches[3]),
+                                         fw_minor_rev=int(matches[4]),
+                                         fw_patch_num=int(matches[5]))
+        except:
+            raise InvalidStateError('Unable to parse robot information: {}'.format(response))
 
         self._command_response_handler_thread = self._launch_thread(
             target=self._command_response_handler,
