@@ -1887,6 +1887,9 @@ class Robot:
             Desired joint angles in degrees.
 
         """
+        if len(args) != self._robot_info.num_joints:
+            raise ValueError('Incorrect number of joints sent to command.')
+
         self._send_motion_command('MoveJoints', args)
 
     @disconnect_on_exception
@@ -1899,6 +1902,9 @@ class Robot:
             Desired joint velocities in degrees per second.
 
         """
+        if len(args) != self._robot_info.num_joints:
+            raise ValueError('Incorrect number of joints sent to command.')
+
         self._send_motion_command('MoveJointsVel', args)
 
     @disconnect_on_exception
