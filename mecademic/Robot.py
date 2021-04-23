@@ -745,7 +745,7 @@ class Robot:
         self._is_initialized = True
 
     def __del__(self):
-        # Only attempt to disconnect if logger is present, meaning the object was initialized.
+        # Only attempt to disconnect if the object was initialized.
         if self._is_initialized:
             self.Disconnect()
             self.UnregisterCallbacks()
@@ -946,7 +946,7 @@ class Robot:
                     robot_state.end_effector_pose = string_to_floats(response.data)
                     events.on_pose_updated.set()
 
-                if response.id == MX_ST_CLEAR_MOTION:
+                elif response.id == MX_ST_CLEAR_MOTION:
                     if clear_motion_requests <= 1:
                         clear_motion_requests = 0
                         events.on_motion_cleared.set()
@@ -1497,6 +1497,13 @@ class Robot:
 
     def _set_checkpoint_impl(self, n, send_to_robot=True):
         """Create a checkpoint object which can be used to wait for the checkpoint id to be received from the robot.
+
+        Checkpoints are implemented as a dictionary of lists, to support repeated checkpoints (which are discouraged),
+        and also to support expecting external checkpoints. Particularly so that ExpectExternalCheckpoints could be
+        called in any arbitrary order.
+
+        Returning an event object for the user to wait on also prevents activated checkpoints from being 'missed' by the
+        API, and prevents issues around waiting for checkpoints which may never arrive.
 
         Parameters
         ----------
