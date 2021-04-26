@@ -270,8 +270,6 @@ class RobotInfo:
 
         if self.model == 'Meca500':
             self.num_joints = 6
-        elif self.model == 'Scara':
-            self.num_joints = 4
         elif self.model == None:
             self.num_joints = 1
         else:
