@@ -4,13 +4,13 @@ import sys
 import os
 import socket
 import threading
-import time
 import queue
 from functools import partial
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import mecademic.Robot as mdr
 
 TEST_IP = '127.0.0.1'
