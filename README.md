@@ -38,7 +38,8 @@ robot = mdr.Robot(address='192.168.0.100')
 assert robot.connect()
 ```
 
-The connect function returns true if connection is successful, and is the only function to block execution even in [asynchronous mode](#synchronous-vs.-asynchronous-mode). 
+The connect function returns true if connection is successful.
+This function is synchronous (awaits for success or timeout) even when using the `Robot` class in [asynchronous mode](#synchronous-vs.-asynchronous-mode). 
 
 Before using the robot, it must be activated and homed. To do so, run the following functions:
 
@@ -81,6 +82,7 @@ For complete and working examples, please refer to the `examples` folder.
 By default the API operates in 'asynchronous mode', which means sending a command to the robot does not block program execution. To illustrate, the following code will be able to successfully print out the changing joint values resulting from the `MoveJoints` command:
 
 ```python
+import mecademic.Robot as mdr
 robot = mdr.Robot(address='192.168.0.100', enable_synchronous_mode=False)
 assert robot.Connect()
 robot.ActivateAndHome()
@@ -101,6 +103,7 @@ However, sometimes it is desired for programs to wait until the previous command
 The code block below will only print out the final joint position, since `robot.GetJoints()` doesn't execute until the motion is complete.
 
 ```python
+import mecademic.Robot as mdr
 robot = mdr.Robot(address='192.168.0.100', enable_synchronous_mode=True)
 assert robot.Connect()
 robot.ActivateAndHome()
@@ -118,7 +121,7 @@ One disadvantage of using synchronous mode is that blending between motions is n
 
 ### Disconnect on Exception
 
-By default, if any unrecoverable error occurs during usage of the Robot class, the class will automatically disconnect from the robot to avoid possible issues.
+By default, if any unrecoverable error occurs during usage of the Robot class, the class will automatically disconnect from the robot to avoid possible issues. Disconnection also causes the robot to pause its motion.
 
 However, disconnecting on exeptions may be undesired when using an interactive terminal or Jupyter notebook, as an accidental mal-formed function call may cause disconnection. As such, this feature can be disabled by setting `disconnect_on_exception=False` when instantiating the `Robot` class:
 
@@ -189,7 +192,7 @@ robot.Connect() # Will print 'Connected!' if successful.
 
 If the user does not want to automatically run callbacks in a separate thread, set `run_callbacks_in_separate_thread=False` and call `RunCallbacks()` when ready to run all triggered callbacks.
 
-Running any callback in a separate thread (either through the `Robot` class or otherwise) requires that the callback function is thread-safe and uses the proper locks when accessing shared state.
+Running any callback in a separate thread (either through the `Robot` class or otherwise) requires that the callback function is thread-safe and uses the proper locks when accessing shared state. Calling any public method of the `Robot` class is thread-safe.
 
 Note that user-provided callback functions will be run in the **same process** as the rest of the `Robot` class. As such, callbacks which require non-trivial computation may interfere with the function of the API, especially when processing many monitoring messages at high frequency.
 
