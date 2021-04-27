@@ -329,7 +329,7 @@ def test_unaccounted_checkpoints():
     # Send unexpected checkpoint.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
 
-    assert robot._check_background_threads()
+    robot._check_background_threads()
 
     robot.Disconnect()
 
@@ -747,5 +747,17 @@ def test_start_offline_program():
         robot.StartOfflineProgram(1, timeout=1)
 
     fake_robot.join(timeout=1)
+
+    robot.Disconnect()
+
+
+def test_monitor_mode():
+    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=True)
+    assert robot is not None
+
+    with pytest.raises(ValueError):
+        robot.Connect(monitor_mode=True)
+
+    assert robot.Connect(monitor_mode=True, num_joints=6)
 
     robot.Disconnect()

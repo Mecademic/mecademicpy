@@ -776,7 +776,7 @@ class Robot:
         disconnect_on_exception : bool
             If true, will attempt to disconnect from the robot on exception from api call.
         offline_mode : bool
-            If true, will not check child threads before executing api calls.
+            If true, socket connections are not created, only used for testing.
 
         """
         self._is_initialized = False
@@ -814,7 +814,9 @@ class Robot:
 
         self._enable_synchronous_mode = enable_synchronous_mode
         self._disconnect_on_exception = disconnect_on_exception
+
         self._offline_mode = offline_mode
+        self._monitor_mode = None
 
         self.logger = logging.getLogger(__name__)
         self.default_timeout = 10
@@ -1304,34 +1306,56 @@ class Robot:
     # Private methods.
     #####################################################################################
 
-    def _check_background_threads(self):
-        """Check that the thread which handle robot messages are alive. Attempt to disconnect from the robot if not.
+    def _check_monitor_threads(self):
+        """Check that the threads which handle robot monitor messages are alive.
+
+        Attempt to disconnect from the robot if not.
 
         """
-        if self._offline_mode:
-            return True
+
+        if not (self._monitor_handler_thread and self._monitor_handler_thread.is_alive()):
+            self.Disconnect()
+            raise InvalidStateError('Monitor response handler thread has unexpectedly terminated.')
+
+        if self._offline_mode:  # Do not check rx threads in offline mode.
+            return
+
+        if not (self._monitor_rx_thread and self._monitor_rx_thread.is_alive()):
+            self.Disconnect()
+            raise InvalidStateError('Monitor rx thread has unexpectedly terminated.')
+
+    def _check_command_threads(self):
+        """Check that the threads which handle robot command messages are alive.
+
+        Attempt to disconnect from the robot if not.
+
+        """
 
         if not (self._command_response_handler_thread and self._command_response_handler_thread.is_alive()):
             self.Disconnect()
-            raise InvalidStateError('Command response handler thread has unexpectedly terminated.')
-        if not (self._monitor_handler_thread and self._monitor_handler_thread.is_alive()):
-            self.Disconnect()
-            raise InvalidStateError('Command response handler thread has unexpectedly terminated.')
+            raise InvalidStateError('No command response handler thread, are you in monitor mode?')
+
+        if self._offline_mode:  # Do not check rx threads in offline mode.
+            return
 
         if not (self._command_rx_thread and self._command_rx_thread.is_alive()):
             self.Disconnect()
-            raise InvalidStateError('Command rx thread has unexpectedly terminated.')
-        if not (self._monitor_rx_thread and self._monitor_rx_thread.is_alive()):
-            self.Disconnect()
-            raise InvalidStateError('Monitor rx thread has unexpectedly termianted.')
+            raise InvalidStateError('No command rx thread, are you in monitor mode?')
 
         # If tx thread is down, attempt to directly send deactivate command to the robot.
         if not (self._command_tx_thread and self._command_tx_thread.is_alive()):
             self._command_socket.sendall(b'DeactivateRobot\0')
             self.Disconnect()
-            raise InvalidStateError('Command tx thread has unexpectedly terminated.')
+            raise InvalidStateError('No command tx thread, are you in monitor mode?')
 
-        return True
+    def _check_background_threads(self):
+        """Check that the threads which handle robot messages are alive.
+
+        Attempt to disconnect from the robot if not.
+
+        """
+        self._check_command_threads()
+        self._check_monitor_threads()
 
     def _send_command(self, command, arg_list=None):
         """Assembles and sends the command string to the Mecademic robot.
@@ -1715,8 +1739,15 @@ class Robot:
 
     ### Robot control functions.
 
-    def Connect(self):
+    def Connect(self, monitor_mode=False, num_joints=None):
         """Attempt to connect to a physical Mecademic Robot.
+
+        Parameters
+        ----------
+        monitor_mode : bool
+            If true, command connection will not be established.
+        num_joints : int
+            Number of joints in robot, required for monitor mode.
 
         Returns
         -------
@@ -1725,8 +1756,14 @@ class Robot:
 
         """
         with self._main_lock:
-            self._initialize_command_socket()
-            self._initialize_command_connection()
+            self._monitor_mode = monitor_mode
+            if self._monitor_mode:
+                if num_joints == None:
+                    raise ValueError('The num_joints argument must be provided in monitor mode.')
+                self._robot_state = RobotState(num_joints)
+            else:
+                self._initialize_command_socket()
+                self._initialize_command_connection()
 
             self._initialize_monitoring_socket()
             self._initialize_monitoring_connection()
@@ -2461,6 +2498,7 @@ class Robot:
 
         """
         with self._main_lock:
+            self._check_background_threads()
             self._send_command(command)
 
     @disconnect_on_exception
@@ -2478,6 +2516,7 @@ class Robot:
 
         """
         with self._main_lock:
+            self._check_background_threads()
             self._robot_events.on_offline_program_started.clear()
 
             self._send_command('StartProgram', [n])
@@ -2500,7 +2539,8 @@ class Robot:
             Returns list of joint positions in degrees.
 
         """
-        if updated:
+        # Updating the joints is not possible in monitor mode.
+        if updated and not self._monitor_mode:
             with self._main_lock:
                 self._check_background_threads()
                 if self._robot_events.on_joints_updated.is_set():
@@ -2522,7 +2562,8 @@ class Robot:
             Returns end-effector pose [x, y, z, alpha, beta, gamma].
 
         """
-        if updated:
+        # Updating the joints is not possible in monitor mode.
+        if updated and not self._monitor_mode:
             with self._main_lock:
                 self._check_background_threads()
                 if self._robot_events.on_pose_updated.is_set():
