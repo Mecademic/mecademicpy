@@ -1352,42 +1352,6 @@ class Robot:
         # Put command into tx queue.
         self._command_tx_queue.put(command)
 
-    def _establish_socket_connections(self):
-        """Establish the socket connections to the robot.
-
-        Return
-        ------
-        bool
-            True if both all connections are successful.
-
-        """
-        if self._offline_mode:
-            return True
-
-        if self._command_socket is not None:
-            raise InvalidStateError('Cannot connect since existing command socket exists.')
-
-        if self._monitor_socket is not None:
-            raise InvalidStateError('Cannot connect since existing monitor socket exists.')
-
-        try:
-            self._command_socket = self._connect_socket(self.logger, self._address, MX_ROBOT_TCP_PORT_CONTROL)
-
-            if self._command_socket is None:
-                raise CommunicationError('Command socket could not be created.')
-
-            self._monitor_socket = self._connect_socket(self.logger, self._address, MX_ROBOT_TCP_PORT_FEED)
-
-            if self._monitor_socket is None:
-                raise CommunicationError('Monitor socket could not be created.')
-
-        except:
-            # Clean up threads and connections on error.
-            self.Disconnect()
-            raise
-
-        return True
-
     def _launch_thread(self, *, target, args):
         """Establish the threads responsible for reading/sending messages using the sockets.
 
@@ -1414,19 +1378,27 @@ class Robot:
         thread.start()
         return thread
 
-    def _establish_socket_threads(self):
-        """Establish the threads responsible for reading/sending messages using the sockets.
+    def _initialize_command_socket(self):
+        """Establish the command socket and the associated thread.
 
         Return
         ------
         bool
-            True if both all threads are successfully launched.
+            True if socket and thread are established successfully.
 
         """
         if self._offline_mode:
             return True
 
+        if self._command_socket is not None:
+            raise InvalidStateError('Cannot connect since existing command socket exists.')
+
         try:
+            self._command_socket = self._connect_socket(self.logger, self._address, MX_ROBOT_TCP_PORT_CONTROL)
+
+            if self._command_socket is None:
+                raise CommunicationError('Command socket could not be created.')
+
             # Create rx thread for command socket communication.
             self._command_rx_thread = self._launch_thread(target=self._handle_socket_rx,
                                                           args=(self._command_socket, self._command_rx_queue))
@@ -1434,6 +1406,34 @@ class Robot:
             # Create tx thread for command socket communication.
             self._command_tx_thread = self._launch_thread(target=self._handle_socket_tx,
                                                           args=(self._command_socket, self._command_tx_queue))
+
+        except:
+            # Clean up threads and connections on error.
+            self.Disconnect()
+            raise
+
+        return True
+
+    def _initialize_monitoring_socket(self):
+        """Establish the monitoring socket and the associated thread.
+
+        Return
+        ------
+        bool
+            True if socket and thread are established successfully.
+
+        """
+        if self._offline_mode:
+            return True
+
+        if self._monitor_socket is not None:
+            raise InvalidStateError('Cannot connect since existing monitor socket exists.')
+
+        try:
+            self._monitor_socket = self._connect_socket(self.logger, self._address, MX_ROBOT_TCP_PORT_FEED)
+
+            if self._monitor_socket is None:
+                raise CommunicationError('Monitor socket could not be created.')
 
             # Create rx thread for monitor socket communication.
             self._monitor_rx_thread = self._launch_thread(target=self._handle_socket_rx,
@@ -1443,8 +1443,6 @@ class Robot:
             # Clean up threads and connections on error.
             self.Disconnect()
             raise
-
-        return True
 
     def _initialize_command_connection(self):
         """Attempt to connect to the command port of the Mecademic Robot.
@@ -1727,9 +1725,10 @@ class Robot:
 
         """
         with self._main_lock:
-            self._establish_socket_connections()
-            self._establish_socket_threads()
+            self._initialize_command_socket()
             self._initialize_command_connection()
+
+            self._initialize_monitoring_socket()
             self._initialize_monitoring_connection()
 
             self._robot_events.clear_all()
