@@ -571,7 +571,7 @@ def test_motion_commands():
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
     assert robot.Connect()
 
-    skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel']
+    skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel']
 
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
@@ -617,6 +617,14 @@ def test_joint_moves():
 
     with pytest.raises(ValueError):
         robot.MoveJoints(1, 2, 3)
+
+    robot.MoveJointsRel(*test_args)
+    text_command = robot._command_tx_queue.get(block=True, timeout=1)
+    assert text_command.find('MoveJointsRel') == 0
+    assert text_command.find(test_args_text) != -1
+
+    with pytest.raises(ValueError):
+        robot.MoveJointsRel(1, 2, 3)
 
     robot.MoveJointsVel(*test_args)
     text_command = robot._command_tx_queue.get(block=True, timeout=1)
