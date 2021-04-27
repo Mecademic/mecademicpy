@@ -10,6 +10,8 @@ A python module designed for Robot products from Mecademic. The module offers to
 
 ## Prerequisites
 
+Please read the [user programming manual](https://mecademic.com/resources/documentation) to understand concepts necessary for proper usage of the API.
+
 To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is recommended to use python version 3.7 or higher. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
 
 The user can validate their python installation by running `python --version` in a terminal.
@@ -24,11 +26,9 @@ To install the package through pip, Mecadmic Github repository url must be given
 pip install git+https://github.com/Mecademic/mecademic
 ``` 
 
-
 ## Quick Start
 
 **Ensure the robot is properly connected to the computer, powered on, and in a nominal state.**
-
 
 In a python shell or script, import the library. Then initialize an instance of the Robot class by passing the IP Address of the Robot as an argument. Finally, use connect() to establish a connection:
 
@@ -38,14 +38,18 @@ robot = mdr.Robot(address='192.168.0.100')
 assert robot.connect()
 ```
 
-The connect function returns true if connection is successful. Before using the robot, it must be activated and homed. To do so, run the following functions:
+The connect function returns true if connection is successful, and is the only function to block execution even in [asynchronous mode](#synchronous-vs.-asynchronous-mode). 
+
+Before using the robot, it must be activated and homed. To do so, run the following functions:
 
 ```python
 robot.ActivateRobot()
 robot.Home()
 ```
 
-The robot should move slightly to perform its homing routine. Once complete, the robot is now ready to perform operations. [The user programming manual](https://mecademic.com/resources/documentation) or the documentation in the module is sufficiant to be able to make the Robot perform actions and control the robot. 
+The robot should move slightly to perform its homing routine. We can also use `robot.WaitHomed()` or [synchronous mode](#synchronous-vs.-asynchronous-mode) to block execution until homing is done. 
+
+Once homing is complete, the robot is now ready to perform operations. [The user programming manual](https://mecademic.com/resources/documentation) or the documentation in the module is sufficient to be able to make the Robot perform actions and control the robot. 
 
 Here is an example of a simple motion to perform:
 
@@ -54,7 +58,9 @@ robot.MoveJoints(0, 0, 0, 0, 0, 0)
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
 ```
 
-When done with the robot, the user should always deactivate and disconnect. This can be done with the following commands:
+When done with the robot, the user should always deactivate and disconnect. Note that deactivating before the motion is complete will cause the motion to immediately stop. The user can wait for motions to complete using the [checkpoint system](#checkpoints).
+
+Deactivating and disconnecting can be done with the following commands:
 
 ```python
 robot.DeactivateRobot()
@@ -66,6 +72,8 @@ If the robot encounters an error during operation, the robot will go into an err
 ```python
 robot.ResetError()
 ```
+
+For complete and working examples, please refer to the `examples` folder.
 
 ## Features and Additional Information
 ### Synchronous vs. Asynchronous Mode
@@ -80,8 +88,9 @@ robot.ActivateAndHome()
 robot.MoveJoints(0, 0, 0, 0, 0, 0)
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
 
-for _ in range(1000):
+for _ in range(100):
     print(robot.GetJoints())
+    time.sleep(0.05)
 
 robot.DeactivateRobot()
 robot.Disconnect()
@@ -104,9 +113,12 @@ print(robot.GetJoints())
 robot.DeactivateRobot()
 robot.Disconnect()
 ```
+
+One disadvantage of using synchronous mode is that blending between motions is not possible, since the next motion is not sent to the robot until the previous motion is complete.
+
 ### Disconnect on Exception
 
-By default, if any unrecoverable error occurs during usage of the Robot class, the class will automatically attempt to deactivate and disconnect from the robot to avoid possible issues.
+By default, if any unrecoverable error occurs during usage of the Robot class, the class will automatically disconnect from the robot to avoid possible issues.
 
 However, disconnecting on exeptions may be undesired when using an interactive terminal or Jupyter notebook, as an accidental mal-formed function call may cause disconnection. As such, this feature can be disabled by setting `disconnect_on_exception=False` when instantiating the `Robot` class:
 
@@ -132,9 +144,10 @@ Note that creating multiple checkpoints with the same ID is possible but not rec
 Checkpoints may also be set in an offline program, saved to robot memory. Use `ExpectExternalCheckpoint(n)` to receive these checkpoints while the robot is running the offline program. The call to `ExpectExternalCheckpoint(n)` should be made before the offline program is started, or otherwise must be guaranteed to occur before the robot can possibly send the checkpoint.
 
 If the robot motion command queue is cleared (using `ClearMotion()` for example), or the robot is disconnected, all pending checkpoints will be aborted, and all active `wait()` calls will raise an `InterruptException`.
+
 ### Callbacks
 
-The `Robot` class supports user-provided callback functions on a variety of events. The available events are listed in the `RobotCallbacks` class. Currently, they are:
+The `Robot` class supports user-provided callback functions on a variety of events. These callbacks are entirely optional and are not required. The available events are listed in the `RobotCallbacks` class. Currently, they are:
 
 - on_connected
 - on_disconnected
@@ -176,12 +189,14 @@ robot.Connect() # Will print 'Connected!' if successful.
 
 If the user does not want to automatically run callbacks in a separate thread, set `run_callbacks_in_separate_thread=False` and call `RunCallbacks()` when ready to run all triggered callbacks.
 
+Running any callback in a separate thread (either through the `Robot` class or otherwise) requires that the callback function is thread-safe and uses the proper locks when accessing shared state.
+
 Note that user-provided callback functions will be run in the **same process** as the rest of the `Robot` class. As such, callbacks which require non-trivial computation may interfere with the function of the API, especially when processing many monitoring messages at high frequency.
+
+If non-trivial computation and high-frequency monitoring are both necessary, the user may offload computation into a separate python process using the built-in [multiprocessing](https://docs.python.org/3/library/multiprocessing.html) library.
 ### Preserved State on Disconnection
 
 Once the robot is disconnected, not all state is immediately cleared. Therefore, it is possible to still get the last-known state of the robot. 
-
-The `Robot` class does support reconnecting once disconnected. But this usage is generally discouraged and users should instead instantiate an new `Robot` object to reconnect.
 
 ## Getting Help
 

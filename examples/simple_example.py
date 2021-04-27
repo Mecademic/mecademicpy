@@ -2,12 +2,10 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import mecademic.Robot as mdr
 
 # CHECK THAT IP ADDRESS IS CORRECT! #
-robot = mdr.Robot(address='127.0.0.1')
+robot = mdr.Robot(address='192.168.0.100')
 
 # Send the commands to get the robot ready for operation.
 assert robot.Connect()
@@ -16,7 +14,7 @@ robot.Home()
 
 # Pause execution until robot is homed.
 print('Waiting for robot to be homed.', flush=True)
-robot.WaitHomed(timeout=60)  # Add a timeout of 30 seconds in case something fails.
+robot.WaitHomed(timeout=60)  # Add a timeout of 60 seconds in case something fails.
 print('Robot is homed and ready.', flush=True)
 
 robot.Delay(1)
