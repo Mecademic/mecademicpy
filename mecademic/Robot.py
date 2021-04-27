@@ -322,9 +322,9 @@ class RobotState:
     nc_end_effector_velocity : TimestampedData
         Controller desired end effector velocity in mm/s and degrees/s, includes timestamp.
     nc_joint_configurations : TimestampedData
-        Controller desired joint configurations.
-    nc_multiturn : TimestampedData
-        Controller desired joint 6 multiturn configuration.
+        Controller joint configuration that corresponds to desired joint positions.
+    nc_last_joint_turn : TimestampedData
+        Controller last joint turn number that corresponds to desired joint positions.
 
     drive_joint_positions : TimestampedData
         Drive-measured joint positions in degrees [theta_1...6], includes timestamp.
@@ -339,9 +339,9 @@ class RobotState:
         Drive-measured end effector velocity in mm/s and degrees/s, includes timestamp.
 
     drive_joint_configurations : TimestampedData
-        Drive-measured joint configurations.
-    drive_multiturn : TimestampedData
-        Drive-measured joint 6 multiturn configuration.
+        Controller joint configuration that corresponds to drives-measured joint positions.
+    drive_last_joint_turn : TimestampedData
+        Controller last joint turn number that corresponds to drives-measured joint positions.
 
     accelerometer : TimestampedData
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
@@ -377,7 +377,7 @@ class RobotState:
         self.nc_end_effector_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm/s and deg/s
 
         self.nc_joint_configurations = TimestampedData.zeros(3)
-        self.nc_multiturn = TimestampedData.zeros(1)
+        self.nc_last_joint_turn = TimestampedData.zeros(1)
 
         self.drive_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
         self.drive_end_effector_pose = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm and degrees
@@ -387,7 +387,7 @@ class RobotState:
         self.drive_end_effector_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm/s and deg/s
 
         self.drive_joint_configurations = TimestampedData.zeros(3)
-        self.drive_multiturn = TimestampedData.zeros(1)
+        self.drive_last_joint_turn = TimestampedData.zeros(1)
 
         # Contains dictionary of accelerometers stored in the robot indexed by joint number.
         # For example, Meca500 currently only reports the accelerometer in joint 5.
@@ -1209,8 +1209,8 @@ class Robot:
 
                 elif response.id == MX_ST_RT_NC_CONF:
                     robot_state.nc_joint_configurations = TimestampedData.from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_CONF_MULTITURN:
-                    robot_state.nc_multiturn = TimestampedData.from_csv(response.data)
+                elif response.id == MX_ST_RT_NC_CONF_TURN:
+                    robot_state.nc_last_joint_turn = TimestampedData.from_csv(response.data)
 
                 elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
                     robot_state.drive_joint_positions = TimestampedData.from_csv(response.data)
@@ -1225,8 +1225,8 @@ class Robot:
 
                 elif response.id == MX_ST_RT_DRIVE_CONF:
                     robot_state.drive_joint_configurations = TimestampedData.from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_CONF_MULTITURN:
-                    robot_state.drive_multiturn = TimestampedData.from_csv(response.data)
+                elif response.id == MX_ST_RT_DRIVE_CONF_TURN:
+                    robot_state.drive_last_joint_turn = TimestampedData.from_csv(response.data)
 
                 elif response.id == MX_ST_RT_ACCELEROMETER:
                     # The data is stored as [timestamp, accelerometer_id, {measurements...}]
@@ -2039,8 +2039,8 @@ class Robot:
         self._send_motion_command('SetAutoConf', [int(e)])
 
     @disconnect_on_exception
-    def SetConfMultiTurn(self, n):
-        """Manually set the multi-turn configuration parameter.
+    def SetConfTurn(self, n):
+        """Manually set the last joint turn configuration parameter.
 
         Parameters
         ----------
@@ -2048,10 +2048,10 @@ class Robot:
             The turn number for joint 6.
 
         """
-        self._send_motion_command('SetConfMultiTurn', [n])
+        self._send_motion_command('SetConfTurn', [n])
 
     @disconnect_on_exception
-    def SetAutoConfMultiTurn(self, e):
+    def SetAutoConfTurn(self, e):
         """Enable or disable auto-conf (automatic selection of inverse kinematics options) for joint 6..
 
         Parameters
@@ -2060,7 +2060,7 @@ class Robot:
             If true, robot will automatically choose the best configuation for the desired pose.
 
         """
-        self._send_motion_command('SetAutoConfMultiTurn', [int(e)])
+        self._send_motion_command('SetAutoConfTurn', [int(e)])
 
     @disconnect_on_exception
     def SetBlending(self, p):
