@@ -1951,7 +1951,7 @@ class Robot:
         self._send_motion_command('MoveLin', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinRelTrf(self, x, y, z, alpha, beta, gamma):
+    def MoveLinRelTRF(self, x, y, z, alpha, beta, gamma):
         """Linearly move robot's tool to a Cartesian position relative to current TRF position.
 
         Parameters
@@ -1965,7 +1965,7 @@ class Robot:
         self._send_motion_command('MoveLinRelTRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinRelWrf(self, x, y, z, alpha, beta, gamma):
+    def MoveLinRelWRF(self, x, y, z, alpha, beta, gamma):
         """Linearly move robot's tool to a Cartesian position relative to a reference frame that has the same
         orientation.
 
@@ -1980,7 +1980,7 @@ class Robot:
         self._send_motion_command('MoveLinRelWRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinVelTrf(self, x, y, z, alpha, beta, gamma):
+    def MoveLinVelTRF(self, x, y, z, alpha, beta, gamma):
         """Move robot's by Cartesian velocity relative to the TRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).
@@ -1996,7 +1996,7 @@ class Robot:
         self._send_motion_command('MoveLinVelTRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinVelWrf(self, x, y, z, alpha, beta, gamma):
+    def MoveLinVelWRF(self, x, y, z, alpha, beta, gamma):
         """Move robot's by Cartesian velocity relative to the WRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).

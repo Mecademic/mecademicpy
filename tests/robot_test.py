@@ -588,11 +588,10 @@ def test_motion_commands():
             # Call method.
             method(*test_args)
 
-            # We convert the command to lowercase since capitialization differs slightly to match C++ api.
-            text_command = robot._command_tx_queue.get(block=True, timeout=1).lower()
+            text_command = robot._command_tx_queue.get(block=True, timeout=1)
 
             # Check that the text commands begins with the appropriate name.
-            assert text_command.find(name.lower()) == 0, 'Method {} does not match text command'.format(name)
+            assert text_command.find(name) == 0, 'Method {} does not match text command'.format(name)
 
             # Check that the test arguments.
             assert text_command.find(test_args_text) != -1, 'Method {} args do not match text command'.format(name)
