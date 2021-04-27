@@ -1893,6 +1893,21 @@ class Robot:
         self._send_motion_command('MoveJoints', args)
 
     @disconnect_on_exception
+    def MoveJointsRel(self, *args):
+        """Move the robot relative to current position by specifying each joint's offset angular position.
+
+        Parameters
+        ----------
+        joint_1...joint_n : float
+            Desired joint angles offsets in degrees.
+
+        """
+        if len(args) != self._robot_info.num_joints:
+            raise ValueError('Incorrect number of joints sent to command.')
+
+        self._send_motion_command('MoveJointsRel', args)
+
+    @disconnect_on_exception
     def MoveJointsVel(self, *args):
         """Moves joints to at desired velocities.
 
