@@ -270,8 +270,6 @@ class RobotInfo:
 
         if self.model == 'Meca500':
             self.num_joints = 6
-        elif self.model == 'Scara':
-            self.num_joints = 4
         elif self.model == None:
             self.num_joints = 1
         else:
@@ -457,6 +455,8 @@ class RobotEvents:
         Set if brakes are deactivated.
     on_offline_program_started : event
         Set if there has been a change in the offline program state.
+    on_end_of_block : event
+        Set if end of block has been reached.
 
     """
     def __init__(self):
@@ -491,6 +491,8 @@ class RobotEvents:
         self.on_brakes_deactivated = InterruptableEvent()
 
         self.on_offline_program_started = InterruptableEvent()
+
+        self.on_end_of_block = InterruptableEvent()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -1148,7 +1150,13 @@ class Robot:
                 callback_queue.put('on_motion_resumed')
             robot_state.pause_motion_status = status_flags[4]
 
-        robot_state.end_of_block_status = status_flags[5]
+        if robot_state.end_of_block_status != status_flags[5]:
+            if status_flags[5]:
+                events.on_end_of_block.set()
+            else:
+                events.on_end_of_block.clear()
+            robot_state.end_of_block_status = status_flags[5]
+
         robot_state.end_of_movement_status = status_flags[6]
 
     @staticmethod
@@ -2405,6 +2413,31 @@ class Robot:
         """
 
         return self._robot_events.on_motion_cleared.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitIdle(self, timeout=None):
+        """Pause program execution until robot is idle.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
+        checkpoint = self._set_checkpoint_internal()
+
+        start_time = time.time()
+        if not checkpoint.wait(timeout=timeout):
+            return False
+        end_time = time.time()
+
+        remaining_timeout = timeout - (end_time - start_time)
+        return self._robot_events.on_end_of_block.wait(timeout=remaining_timeout)
 
     @disconnect_on_exception
     def ResetError(self):
