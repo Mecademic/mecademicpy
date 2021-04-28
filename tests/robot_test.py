@@ -78,7 +78,7 @@ def test_successful_connection_full_socket():
 
     assert not robot.WaitConnected(timeout=0)
 
-    assert robot.Connect()
+    robot.Connect()
     assert robot.WaitConnected()
 
     assert robot._robot_info.model == 'Meca500'
@@ -121,7 +121,7 @@ def test_sequential_connections():
         robot.Connect()
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
     robot.Disconnect()
 
 
@@ -145,7 +145,7 @@ def test_monitoring_connection():
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
 
-    assert robot.Connect()
+    robot.Connect()
 
     # Send monitor messages.
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_GET_JOINTS, fake_array[:-1]))
@@ -209,7 +209,7 @@ def test_internal_checkpoints():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     # Validate internal checkpoint waiting.
     checkpoint_1 = robot.SetCheckpoint(1)
@@ -231,7 +231,7 @@ def test_external_checkpoints():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     # Validate external checkpoint waiting.
     checkpoint_1 = robot.ExpectExternalCheckpoint(1)
@@ -253,7 +253,7 @@ def test_multiple_checkpoints():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     # Validate multiple checkpoints, internal and external.
     checkpoint_1 = robot.SetCheckpoint(1)
@@ -282,7 +282,7 @@ def test_repeated_checkpoints():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     # Repeated checkpoints are discouraged, but supported.
     checkpoint_1_a = robot.SetCheckpoint(1)
@@ -306,7 +306,7 @@ def test_special_checkpoints():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     checkpoint_1 = robot.SetCheckpoint(1)
     checkpoint_2 = robot.SetCheckpoint(2)
@@ -324,7 +324,7 @@ def test_unaccounted_checkpoints():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     # Send unexpected checkpoint.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
@@ -339,7 +339,7 @@ def test_stranded_checkpoints():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     checkpoint_1 = robot.SetCheckpoint(1)
 
@@ -360,7 +360,7 @@ def test_events():
     assert robot.WaitDisconnected()
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     assert robot.WaitConnected()
     assert not robot.WaitDisconnected(timeout=0)
@@ -425,7 +425,7 @@ def test_disconnect_on_exception():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     with pytest.raises(mdr.DisconnectError):
         robot.SetCheckpoint(0)
@@ -435,7 +435,7 @@ def test_disconnect_on_exception():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     with pytest.raises(AssertionError):
         robot.SetCheckpoint(0)
@@ -488,7 +488,7 @@ def test_callbacks():
         robot.RegisterCallbacks(callbacks, run_callbacks_in_separate_thread=run_in_thread)
 
         robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-        assert robot.Connect()
+        robot.Connect()
 
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,0,0,0,0,0,0'))
         robot.ActivateRobot()
@@ -569,7 +569,7 @@ def test_motion_commands():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel']
 
@@ -604,7 +604,7 @@ def test_joint_moves():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     test_args = [1, 2, 3, 4, 5, 6]
     test_args_text = ','.join([str(x) for x in test_args])
@@ -646,7 +646,7 @@ def test_simple_gets():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     test_data = [1, 2, 3, 4, 5, 6]
     test_data_string = ','.join([str(x) for x in test_data])
@@ -721,7 +721,7 @@ def test_start_offline_program():
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect()
+    robot.Connect()
 
     expected_command = 'StartProgram(1)'
 
@@ -756,15 +756,23 @@ def test_monitor_mode():
     assert robot is not None
 
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    assert robot.Connect(monitor_mode=True)
+    robot.Connect(monitor_mode=True)
 
     assert robot.WaitConnected(timeout=0)
 
     # Check that the Meca500 response was correctly parsed to have 6 joints.
     assert robot._robot_info.num_joints == 6
 
+    # Send test events.
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, '1, 2, 3, 4, 5, 6'))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, '7, 8, 9, 10, 11, 12'))
+
+    #
+    robot._monitor_rx_queue.put(mdr.TERMINATE)
+    robot._monitor_handler_thread.join(timeout=5)
+
     # Check that these gets do not raise an exception.
-    robot.GetJoints()
-    robot.GetPose()
+    assert robot.GetJoints() == [1, 2, 3, 4, 5, 6]
+    robot.GetPose() == [7, 8, 9, 10, 11, 12]
 
     robot.Disconnect()

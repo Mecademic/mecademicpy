@@ -1405,14 +1405,9 @@ class Robot:
     def _initialize_command_socket(self):
         """Establish the command socket and the associated thread.
 
-        Return
-        ------
-        bool
-            True if socket and thread are established successfully.
-
         """
         if self._offline_mode:
-            return True
+            return
 
         if self._command_socket is not None:
             raise InvalidStateError('Cannot connect since existing command socket exists.')
@@ -1436,19 +1431,12 @@ class Robot:
             self.Disconnect()
             raise
 
-        return True
-
     def _initialize_monitoring_socket(self):
         """Establish the monitoring socket and the associated thread.
 
-        Return
-        ------
-        bool
-            True if socket and thread are established successfully.
-
         """
         if self._offline_mode:
-            return True
+            return
 
         if self._monitor_socket is not None:
             raise InvalidStateError('Cannot connect since existing monitor socket exists.')
@@ -1502,11 +1490,6 @@ class Robot:
     def _initialize_command_connection(self):
         """Attempt to connect to the command port of the Mecademic Robot.
 
-        Returns
-        -------
-        status : boolean
-            Returns the status of the connection, true for success, false for failure.
-
         """
         self._receive_welcome_message(self._command_rx_queue)
 
@@ -1514,7 +1497,6 @@ class Robot:
             target=self._command_response_handler,
             args=(self._command_rx_queue, self._robot_state, self._user_checkpoints, self._internal_checkpoints,
                   self._robot_events, self._main_lock, self.logger, self._callback_queue, self._clear_motion_requests))
-        return True
 
     def _initialize_monitoring_connection(self):
         """Attempt to connect to the monitor port of the Mecademic Robot.
@@ -1534,7 +1516,7 @@ class Robot:
                                                                  self._robot_events, self._main_lock,
                                                                  self._callback_queue))
 
-        return True
+        return
 
     def _shut_down_queue_threads(self):
         """Attempt to gracefully shut down threads which read from queues.
@@ -1794,8 +1776,6 @@ class Robot:
 
             self._robot_events.on_connected.set()
             self._callback_queue.put('on_connected')
-
-            return True
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
