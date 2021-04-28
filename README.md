@@ -99,7 +99,7 @@ robot.DeactivateRobot()
 robot.Disconnect()
 ```
 
-However, sometimes it is desired for programs to wait until the previous command is completed before sending the next command. This is possible by setting `enable_synchronous_mode=True` when initializing the `Robot` class. 
+However, sometimes it is desired for programs to wait until the previous command is completed before sending the next command. It is generally encouraged to use the [checkpoints](#checkpoints) system or the various `Wait()` functions, but for smaller or simpler programs, the user can set `enable_synchronous_mode=True` to have each command block until the robot has completed the command.
 
 The code block below will only print out the final joint position, since `robot.GetJoints()` doesn't execute until the motion is complete.
 
@@ -112,6 +112,7 @@ robot.ActivateAndHome()
 robot.MoveJoints(0, 0, 0, 0, 0, 0)
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
 
+# The returned robot position will be (0, -60, 60, 0, 0, 0), because this line will only be executed once MoveJoints(0, -60, 60, 0, 0, 0) has completed.
 print(robot.GetJoints())
 
 robot.DeactivateRobot()
