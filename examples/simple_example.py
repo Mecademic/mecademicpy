@@ -5,10 +5,10 @@ import sys
 import mecademic.Robot as mdr
 
 # CHECK THAT IP ADDRESS IS CORRECT! #
-robot = mdr.Robot(address='192.168.0.100')
+robot = mdr.Robot()
 
 # Send the commands to get the robot ready for operation.
-assert robot.Connect()
+robot.Connect(address='192.168.0.100')
 robot.ActivateRobot()
 robot.Home()
 

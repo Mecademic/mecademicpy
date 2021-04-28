@@ -34,8 +34,8 @@ In a python shell or script, import the library. Then initialize an instance of 
 
 ```python
 import mecademic.Robot as mdr
-robot = mdr.Robot(address='192.168.0.100')
-assert robot.connect()
+robot = mdr.Robot()
+assert robot.connect(address='192.168.0.100')
 ```
 
 The connect function returns true if connection is successful.
@@ -84,8 +84,8 @@ By default the API operates in 'asynchronous mode', which means sending a comman
 
 ```python
 import mecademic.Robot as mdr
-robot = mdr.Robot(address='192.168.0.100', enable_synchronous_mode=False)
-assert robot.Connect()
+robot = mdr.Robot()
+assert robot.Connect(address='192.168.0.100', enable_synchronous_mode=False)
 robot.ActivateAndHome()
 
 robot.MoveJoints(0, 0, 0, 0, 0, 0)
@@ -105,8 +105,8 @@ The code block below will only print out the final joint position, since `robot.
 
 ```python
 import mecademic.Robot as mdr
-robot = mdr.Robot(address='192.168.0.100', enable_synchronous_mode=True)
-assert robot.Connect()
+robot = mdr.Robot()
+assert robot.Connect(address='192.168.0.100', enable_synchronous_mode=True)
 robot.ActivateAndHome()
 
 robot.MoveJoints(0, 0, 0, 0, 0, 0)
@@ -124,10 +124,10 @@ One disadvantage of using synchronous mode is that blending between motions is n
 
 By default, if any unrecoverable error occurs during usage of the Robot class, the class will automatically disconnect from the robot to avoid possible issues. Disconnection also causes the robot to pause its motion.
 
-However, disconnecting on exeptions may be undesired when using an interactive terminal or Jupyter notebook, as an accidental mal-formed function call may cause disconnection. As such, this feature can be disabled by setting `disconnect_on_exception=False` when instantiating the `Robot` class:
+However, disconnecting on exeptions may be undesired when using an interactive terminal or Jupyter notebook, as an accidental mal-formed function call may cause disconnection. As such, this feature can be disabled by setting `disconnect_on_exception=False` when attempting the connection:
 
 ```python
-robot = mdr.Robot(address='192.168.0.100', disconnect_on_exception=False)
+robot.Connect(address='192.168.0.100', disconnect_on_exception=False)
 ```
 
 ### Checkpoints
@@ -179,7 +179,7 @@ A simple usage example:
 
 ```python
 import mecademic.Robot as mdr
-robot = mdr.Robot(address='192.168.0.100')
+robot = mdr.Robot()
 
 def print_connected():
     print('Connected!')
@@ -188,7 +188,7 @@ callbacks = mdr.RobotCallbacks()
 callbacks.on_connected = print_connected
 
 robot.RegisterCallbacks(callbacks=callbacks, run_callbacks_in_separate_thread=True)
-robot.Connect() # Will print 'Connected!' if successful.
+robot.Connect(address='192.168.0.100') # Will print 'Connected!' if successful.
 ```
 
 If the user does not want to automatically run callbacks in a separate thread, set `run_callbacks_in_separate_thread=False` and call `RunCallbacks()` when ready to run all triggered callbacks.
