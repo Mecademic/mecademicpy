@@ -270,6 +270,8 @@ class RobotInfo:
 
         if self.model == 'Meca500':
             self.num_joints = 6
+        elif self.mode == 'scara':
+            self.num_joints = 4
         elif self.model == None:
             self.num_joints = 1
         else:
@@ -762,35 +764,13 @@ class Robot:
         Default timeout to use for blocking operations.
 
     """
-    def __init__(self,
-                 address=MX_DEFAULT_ROBOT_IP,
-                 enable_synchronous_mode=False,
-                 disconnect_on_exception=True,
-                 offline_mode=False):
+    def __init__(self):
         """Constructor for an instance of the Controller class.
-
-        Parameters
-        ----------
-        address : string
-            The IP address associated to the Mecademic Robot.
-        enable_synchronous_mode : bool
-            If true, each command will wait until previous is done executing.
-        disconnect_on_exception : bool
-            If true, will attempt to disconnect from the robot on exception from api call.
-        offline_mode : bool
-            If true, socket connections are not created, only used for testing.
 
         """
         self._is_initialized = False
 
-        # Check that the ip address is a string.
-        if not isinstance(address, str):
-            raise TypeError('Please provide a string argument for the address.')
-
-        # Check that the ip address is valid.
-        ipaddress.ip_address(address)
-
-        self._address = address
+        self._address = None
 
         self._command_socket = None
         self._monitor_socket = None
@@ -814,10 +794,10 @@ class Robot:
 
         self._reset_disconnect_attributes()
 
-        self._enable_synchronous_mode = enable_synchronous_mode
-        self._disconnect_on_exception = disconnect_on_exception
+        self._enable_synchronous_mode = None
+        self._disconnect_on_exception = None
 
-        self._offline_mode = offline_mode
+        self._offline_mode = None
         self._monitor_mode = None
 
         self.logger = logging.getLogger(__name__)
@@ -1743,24 +1723,44 @@ class Robot:
 
     ### Robot control functions.
 
-    def Connect(self, monitor_mode=False):
+    def Connect(
+        self,
+        address=MX_DEFAULT_ROBOT_IP,
+        enable_synchronous_mode=False,
+        disconnect_on_exception=True,
+        monitor_mode=False,
+        offline_mode=False,
+    ):
         """Attempt to connect to a physical Mecademic Robot.
 
         Parameters
         ----------
+        address : string
+            The IP address associated to the Mecademic Robot.
+        enable_synchronous_mode : bool
+            If true, each command will wait until previous is done executing.
+        disconnect_on_exception : bool
+            If true, will attempt to disconnect from the robot on exception from api call.
         monitor_mode : bool
             If true, command connection will not be established.
-        num_joints : int
-            Number of joints in robot, required for monitor mode.
-
-        Returns
-        -------
-        status : boolean
-            Returns the status of the connection, true for success, false for failure.
+        offline_mode : bool
+            If true, socket connections are not created, only used for testing.
 
         """
         with self._main_lock:
+
+            # Check that the ip address is valid and set address.
+            if not isinstance(address, str):
+                raise TypeError('Invalid IP address.')
+            ipaddress.ip_address(address)
+            self._address = address
+
+            self._enable_synchronous_mode = enable_synchronous_mode
+            self._disconnect_on_exception = disconnect_on_exception
+
+            self._offline_mode = offline_mode
             self._monitor_mode = monitor_mode
+
             if not self._monitor_mode:
                 self._initialize_command_socket()
                 self._initialize_command_connection()

@@ -54,22 +54,24 @@ class FakeSocket():
 
 
 def test_setup_invalid_input():
+    robot = mdr.Robot()
+
     with pytest.raises(TypeError):
-        mdr.Robot(2)
+        robot.Connect(2)
     with pytest.raises(ValueError):
-        mdr.Robot('1.1.1.1.1')
+        robot.Connect('1.1.1.1.1')
 
 
 def test_connection_no_robot():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot()
     assert robot is not None
 
     with pytest.raises(mdr.CommunicationError):
-        robot.Connect()
+        robot.Connect(TEST_IP)
 
 
 def test_successful_connection_full_socket():
-    robot = mdr.Robot(TEST_IP)
+    robot = mdr.Robot()
     assert robot is not None
 
     command_server_thread = run_fake_server(TEST_IP, mdr.MX_ROBOT_TCP_PORT_CONTROL,
@@ -78,7 +80,7 @@ def test_successful_connection_full_socket():
 
     assert not robot.WaitConnected(timeout=0)
 
-    robot.Connect()
+    robot.Connect(TEST_IP)
     assert robot.WaitConnected()
 
     assert robot._robot_info.model == 'Meca500'
@@ -109,19 +111,19 @@ def test_successful_connection_split_response():
 
 
 def test_sequential_connections():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_USER_ALREADY, ''))
     with pytest.raises(Exception):
-        robot.Connect()
+        robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     robot._command_rx_queue.put(mdr.Message(99999, ''))
     with pytest.raises(Exception):
-        robot.Connect()
+        robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
     robot.Disconnect()
 
 
@@ -140,12 +142,12 @@ def test_monitoring_connection():
     # Use this as the seed array, add the response code to each element to guarantee uniqueness.
     fake_array = [1, 2, 3, 4, 5, 6, 7]
 
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
 
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     # Send monitor messages.
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_GET_JOINTS, fake_array[:-1]))
@@ -205,11 +207,11 @@ def test_monitoring_connection():
 
 
 def test_internal_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     # Validate internal checkpoint waiting.
     checkpoint_1 = robot.SetCheckpoint(1)
@@ -227,11 +229,11 @@ def test_internal_checkpoints():
 
 
 def test_external_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     # Validate external checkpoint waiting.
     checkpoint_1 = robot.ExpectExternalCheckpoint(1)
@@ -249,11 +251,11 @@ def test_external_checkpoints():
 
 
 def test_multiple_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     # Validate multiple checkpoints, internal and external.
     checkpoint_1 = robot.SetCheckpoint(1)
@@ -278,11 +280,11 @@ def test_multiple_checkpoints():
 
 
 def test_repeated_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     # Repeated checkpoints are discouraged, but supported.
     checkpoint_1_a = robot.SetCheckpoint(1)
@@ -302,11 +304,11 @@ def test_repeated_checkpoints():
 
 
 def test_special_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     checkpoint_1 = robot.SetCheckpoint(1)
     checkpoint_2 = robot.SetCheckpoint(2)
@@ -320,11 +322,11 @@ def test_special_checkpoints():
 
 
 def test_unaccounted_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     # Send unexpected checkpoint.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
@@ -335,11 +337,11 @@ def test_unaccounted_checkpoints():
 
 
 def test_stranded_checkpoints():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     checkpoint_1 = robot.SetCheckpoint(1)
 
@@ -351,7 +353,7 @@ def test_stranded_checkpoints():
 
 
 def test_events():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     assert not robot.WaitActivated(timeout=0)
@@ -360,7 +362,7 @@ def test_events():
     assert robot.WaitDisconnected()
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     assert robot.WaitConnected()
     assert not robot.WaitDisconnected(timeout=0)
@@ -424,21 +426,21 @@ def test_events():
 
 
 def test_disconnect_on_exception():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=True)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=True)
 
     with pytest.raises(mdr.DisconnectError):
         robot.SetCheckpoint(0)
 
     # Test that disabling the feature avoids the disconnect.
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     with pytest.raises(AssertionError):
         robot.SetCheckpoint(0)
@@ -447,7 +449,7 @@ def test_disconnect_on_exception():
 
 
 def test_callbacks():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, enable_synchronous_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     # Initialize object which will contain all user-defined callback functions.
@@ -491,7 +493,7 @@ def test_callbacks():
         robot.RegisterCallbacks(callbacks, run_callbacks_in_separate_thread=run_in_thread)
 
         robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-        robot.Connect()
+        robot.Connect(TEST_IP, offline_mode=True, enable_synchronous_mode=True, disconnect_on_exception=False)
 
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,0,0,0,0,0,0'))
         robot.ActivateRobot()
@@ -568,11 +570,11 @@ def test_event_with_exception():
 
 
 def test_motion_commands():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel']
 
@@ -603,11 +605,11 @@ def test_motion_commands():
 
 
 def test_joint_moves():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     test_args = [1, 2, 3, 4, 5, 6]
     test_args_text = ','.join([str(x) for x in test_args])
@@ -645,11 +647,11 @@ def simple_response_handler(queue_in, queue_out, expected_in, desired_out):
 
 
 def test_simple_gets():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     test_data = [1, 2, 3, 4, 5, 6]
     test_data_string = ','.join([str(x) for x in test_data])
@@ -720,11 +722,11 @@ def test_simple_gets():
 
 
 def test_start_offline_program():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=True)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect()
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=True)
 
     expected_command = 'StartProgram(1)'
 
@@ -755,22 +757,26 @@ def test_start_offline_program():
 
 
 def test_monitor_mode():
-    robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=True)
+    robot = mdr.Robot()
     assert robot is not None
 
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect(monitor_mode=True)
+    robot.Connect(TEST_IP,
+                  monitor_mode=True,
+                  offline_mode=True,
+                  disconnect_on_exception=False,
+                  enable_synchronous_mode=True)
 
     assert robot.WaitConnected(timeout=0)
 
     # Check that the Meca500 response was correctly parsed to have 6 joints.
     assert robot._robot_info.num_joints == 6
 
-    # Send test events.
+    # Send test messages.
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, '1, 2, 3, 4, 5, 6'))
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, '7, 8, 9, 10, 11, 12'))
 
-    #
+    # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdr.TERMINATE)
     robot._monitor_handler_thread.join(timeout=5)
 
