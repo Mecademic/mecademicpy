@@ -59,11 +59,12 @@ robot.MoveJoints(0, 0, 0, 0, 0, 0)
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
 ```
 
-When done with the robot, the user should always deactivate and disconnect. Note that deactivating before the motion is complete will cause the motion to immediately stop. The user can wait for motions to complete using the [checkpoint system](#checkpoints).
+When done with the robot, the user should always deactivate and disconnect. Note that deactivating before the motion is complete will cause the motion to immediately stop. The user can wait for motions to complete using `WaitIdle()`.
 
 Deactivating and disconnecting can be done with the following commands:
 
 ```python
+robot.WaitIdle()
 robot.DeactivateRobot()
 robot.Disconnect()
 ```

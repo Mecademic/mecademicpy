@@ -33,12 +33,9 @@ robot.Delay(1)
 # Return the robot to folded position.
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
 
-# Set a checkpoint to know that the motion has completed.
-checkpoint = robot.SetCheckpoint(1)
-
 # Wait until checkpoint is reached. Without this wait, the script would immediately
 # reach the DeactivateRobot and Disconnect command, which stops the motion.
-checkpoint.wait(60)
+robot.WaitIdle(60)
 print('Robot finished drawing square.', flush=True)
 
 # Deactivate and disconnect from the robot.
