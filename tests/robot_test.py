@@ -755,9 +755,16 @@ def test_monitor_mode():
     robot = mdr.Robot(TEST_IP, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=True)
     assert robot is not None
 
-    with pytest.raises(ValueError):
-        robot.Connect(monitor_mode=True)
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
+    assert robot.Connect(monitor_mode=True)
 
-    assert robot.Connect(monitor_mode=True, num_joints=6)
+    assert robot.WaitConnected(timeout=0)
+
+    # Check that the Meca500 response was correctly parsed to have 6 joints.
+    assert robot._robot_info.num_joints == 6
+
+    # Check that these gets do not raise an exception.
+    robot.GetJoints()
+    robot.GetPose()
 
     robot.Disconnect()

@@ -179,7 +179,7 @@ class TimestampedData:
         TimestampedData object
 
         """
-        return cls(0, [0] * length)
+        return cls(0, [0.] * length)
 
     def __eq__(self, other):
         """ Return true if other object has identical timestamp and data.
@@ -1468,18 +1468,18 @@ class Robot:
             self.Disconnect()
             raise
 
-    def _initialize_command_connection(self):
-        """Attempt to connect to the command port of the Mecademic Robot.
+    def _receive_welcome_message(self, message_queue):
+        """Receive and parse a welcome message in order to set _robot_info and _robot_state.
 
-        Returns
-        -------
-        status : boolean
-            Returns the status of the connection, true for success, false for failure.
+        Parameters
+        ----------
+        message_queue : queue
+            The welcome message will be fetched from this queue.
 
         """
 
         try:
-            response = self._command_rx_queue.get(block=True, timeout=10)  # 10s timeout.
+            response = message_queue.get(block=True, timeout=10)  # 10s timeout.
         except queue.Empty:
             self.logger.error('No response received within timeout interval.')
             self.Disconnect()
@@ -1499,6 +1499,17 @@ class Robot:
 
         self._robot_state = RobotState(self._robot_info.num_joints)
 
+    def _initialize_command_connection(self):
+        """Attempt to connect to the command port of the Mecademic Robot.
+
+        Returns
+        -------
+        status : boolean
+            Returns the status of the connection, true for success, false for failure.
+
+        """
+        self._receive_welcome_message(self._command_rx_queue)
+
         self._command_response_handler_thread = self._launch_thread(
             target=self._command_response_handler,
             args=(self._command_rx_queue, self._robot_state, self._user_checkpoints, self._internal_checkpoints,
@@ -1514,6 +1525,9 @@ class Robot:
             Returns the status of the connection, true for success, false for failure.
 
         """
+
+        if self._monitor_mode:
+            self._receive_welcome_message(self._monitor_rx_queue)
 
         self._monitor_handler_thread = self._launch_thread(target=self._monitor_handler,
                                                            args=(self._monitor_rx_queue, self._robot_state,
@@ -1739,7 +1753,7 @@ class Robot:
 
     ### Robot control functions.
 
-    def Connect(self, monitor_mode=False, num_joints=None):
+    def Connect(self, monitor_mode=False):
         """Attempt to connect to a physical Mecademic Robot.
 
         Parameters
@@ -1757,11 +1771,7 @@ class Robot:
         """
         with self._main_lock:
             self._monitor_mode = monitor_mode
-            if self._monitor_mode:
-                if num_joints == None:
-                    raise ValueError('The num_joints argument must be provided in monitor mode.')
-                self._robot_state = RobotState(num_joints)
-            else:
+            if not self._monitor_mode:
                 self._initialize_command_socket()
                 self._initialize_command_connection()
 
