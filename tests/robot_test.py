@@ -4,13 +4,13 @@ import sys
 import os
 import socket
 import threading
-import time
 import queue
 from functools import partial
 
 import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import mecademic.Robot as mdr
 
 TEST_IP = '127.0.0.1'
@@ -392,6 +392,9 @@ def test_events():
     robot.ClearMotion()
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CLEAR_MOTION, ''))
     assert robot.WaitMotionCleared(timeout=1)
+
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,0'))
+    assert robot._robot_events.on_end_of_block.wait(timeout=1)
 
     # Robot enters error state.
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,1,0,0,0'))
