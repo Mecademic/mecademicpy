@@ -95,6 +95,7 @@ for _ in range(100):
     print(robot.GetJoints())
     time.sleep(0.05)
 
+robot.WaitIdle()
 robot.DeactivateRobot()
 robot.Disconnect()
 ```
@@ -199,6 +200,16 @@ Running any callback in a separate thread (either through the `Robot` class or o
 Note that user-provided callback functions will be run in the **same process** as the rest of the `Robot` class. As such, callbacks which require non-trivial computation may interfere with the function of the API, especially when processing many monitoring messages at high frequency.
 
 If non-trivial computation and high-frequency monitoring are both necessary, the user may offload computation into a separate python process using the built-in [multiprocessing](https://docs.python.org/3/library/multiprocessing.html) library.
+
+### Handling Robot Errors
+
+If during use the Robot encounters an error, it will go into error mode. In this mode, the module will block any command to the robot unless the error is reset. If the robot is in an error state, `GetRobotState().error_status` will return `True`. To properly reset errors on the robot, the following function must be run:
+
+```python
+robot.ResetError()
+```
+
+The `on_error` callback can also be used to manage robot errors.
 ### Preserved State on Disconnection
 
 Once the robot is disconnected, not all state is immediately cleared. Therefore, it is possible to still get the last-known state of the robot. 

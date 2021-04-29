@@ -83,12 +83,12 @@ def test_successful_connection_full_socket():
     robot.Connect(TEST_IP)
     assert robot.WaitConnected()
 
-    assert robot._robot_info.model == 'Meca500'
-    assert robot._robot_info.revision == 3
-    assert robot._robot_info.is_virtual == True
-    assert robot._robot_info.fw_major_rev == 9
-    assert robot._robot_info.fw_minor_rev == 1
-    assert robot._robot_info.fw_patch_num == 0
+    assert robot.GetRobotInfo().model == 'Meca500'
+    assert robot.GetRobotInfo().revision == 3
+    assert robot.GetRobotInfo().is_virtual == True
+    assert robot.GetRobotInfo().fw_major_rev == 9
+    assert robot.GetRobotInfo().fw_minor_rev == 1
+    assert robot.GetRobotInfo().fw_patch_num == 0
 
     robot.Disconnect()
     assert robot._command_socket is None
@@ -770,7 +770,7 @@ def test_monitor_mode():
     assert robot.WaitConnected(timeout=0)
 
     # Check that the Meca500 response was correctly parsed to have 6 joints.
-    assert robot._robot_info.num_joints == 6
+    assert robot.GetRobotInfo().num_joints == 6
 
     # Send test messages.
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, '1, 2, 3, 4, 5, 6'))

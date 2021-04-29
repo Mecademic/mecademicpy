@@ -7,6 +7,7 @@ import threading
 import queue
 import functools
 import re
+import copy
 
 from .mx_robot_def import *
 
@@ -2722,6 +2723,11 @@ class Robot:
         By default, brakes are enabled until robot is activated (brakes are automatically disabled upon activation).
         Corresponds to text API calls "BrakesOn" / "BrakesOff".
 
+        Parameters
+        ----------
+        activated : bool
+            Engage brakes if true, otherwise disengage brakes.
+
         """
         with self._main_lock:
             self._check_internal_states()
@@ -2735,3 +2741,25 @@ class Robot:
                 self._robot_events.on_brakes_activated.wait()
             else:
                 self._robot_events.on_brakes_deactivated.wait()
+
+    def GetRobotInfo(self):
+        """Return a copy of the known robot information.
+
+        Return
+        ------
+        RobotInfo
+            Object containing robot information.
+
+        """
+        return copy.deepcopy(self._robot_info)
+
+    def GetRobotState(self):
+        """Return a copy of the current robot state.
+
+        Return
+        ------
+        RobotState
+            Object containing the current robot state.
+
+        """
+        return copy.deepcopy(self._robot_state)
