@@ -177,8 +177,8 @@ def test_monitoring_connection():
     robot._monitor_handler_thread.join()
     robot._monitor_handler_thread = None
 
-    assert robot.GetJoints(updated=False) == make_test_array(mdr.MX_ST_GET_JOINTS, fake_array[:-1])
-    assert robot.GetPose(updated=False) == make_test_array(mdr.MX_ST_GET_POSE, fake_array[:-1])
+    assert robot.GetJoints(force_update=False) == make_test_array(mdr.MX_ST_GET_JOINTS, fake_array[:-1])
+    assert robot.GetPose(force_update=False) == make_test_array(mdr.MX_ST_GET_POSE, fake_array[:-1])
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
     assert robot._robot_state.nc_joint_positions == make_test_data(mdr.MX_ST_RT_NC_JOINT_POS, fake_array)
@@ -665,7 +665,7 @@ def test_simple_gets():
 
     fake_robot.start()
 
-    assert robot.GetJoints(updated=True, timeout=1) == test_data
+    assert robot.GetJoints(force_update=True, timeout=1) == test_data
     fake_robot.join()
 
     # Test GetPose.
@@ -677,7 +677,7 @@ def test_simple_gets():
 
     fake_robot.start()
 
-    assert robot.GetPose(updated=True, timeout=1) == test_data
+    assert robot.GetPose(force_update=True, timeout=1) == test_data
     fake_robot.join()
 
     # Test GetCmdPendingCount.
@@ -689,7 +689,7 @@ def test_simple_gets():
 
     fake_robot.start()
 
-    assert robot.GetCmdPendingCount(updated=True, timeout=1) == 5
+    assert robot.GetCmdPendingCount(force_update=True, timeout=1) == 5
     fake_robot.join()
 
     # Test GetCmdPendingCount.
@@ -701,22 +701,22 @@ def test_simple_gets():
 
     fake_robot.start()
 
-    assert robot.GetConf(updated=True, timeout=1) == [1, -1, 1]
+    assert robot.GetConf(force_update=True, timeout=1) == [1, -1, 1]
     fake_robot.join()
 
     # Attempting these gets without the appropriate robot response should result in timeout.
 
     with pytest.raises(TimeoutError):
-        robot.GetJoints(updated=True, timeout=0)
+        robot.GetJoints(force_update=True, timeout=0)
 
     with pytest.raises(TimeoutError):
-        robot.GetPose(updated=True, timeout=0)
+        robot.GetPose(force_update=True, timeout=0)
 
     with pytest.raises(TimeoutError):
-        robot.GetCmdPendingCount(updated=True, timeout=0)
+        robot.GetCmdPendingCount(force_update=True, timeout=0)
 
     with pytest.raises(TimeoutError):
-        robot.GetConf(updated=True, timeout=0)
+        robot.GetConf(force_update=True, timeout=0)
 
     robot.Disconnect()
 
