@@ -148,22 +148,23 @@ class TimestampedData:
         self.timestamp = timestamp
         self.data = data
 
-    @classmethod
-    def from_csv(cls, input_string):
-        """ Construct from comma-separated string.
+    def update_from_csv(self, input_string):
+        """ Update from comma-separated string, only if timestamp is newer.
 
         Parameters
         ----------
         input_string : string
             Comma-separated string. First value is timestamp, rest is data.
 
-        Return
-        ------
-        TimestampedData object
-
         """
         floats = string_to_floats(input_string)
-        return cls(floats[0], floats[1:])
+
+        if (len(floats) - 1) != len(self.data):
+            raise ValueError('Cannot update TimestampedData with incompatible data.')
+
+        if floats[0] > self.timestamp:
+            self.timestamp = floats[0]
+            self.data = floats[1:]
 
     @classmethod
     def zeros(cls, length):
@@ -1189,39 +1190,41 @@ class Robot:
                     callback_queue.put('on_status_updated')
 
                 elif response.id == MX_ST_RT_NC_JOINT_POS:
-                    robot_state.nc_joint_positions = TimestampedData.from_csv(response.data)
+                    robot_state.nc_joint_positions.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CART_POS:
-                    robot_state.nc_end_effector_pose = TimestampedData.from_csv(response.data)
+                    robot_state.nc_end_effector_pose.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_JOINT_VEL:
-                    robot_state.nc_joint_velocity = TimestampedData.from_csv(response.data)
+                    robot_state.nc_joint_velocity.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CART_VEL:
-                    robot_state.nc_end_effector_velocity = TimestampedData.from_csv(response.data)
+                    robot_state.nc_end_effector_velocity.update_from_csv(response.data)
 
                 elif response.id == MX_ST_RT_NC_CONF:
-                    robot_state.nc_joint_configurations = TimestampedData.from_csv(response.data)
+                    robot_state.nc_joint_configurations.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CONF_MULTITURN:
-                    robot_state.nc_multiturn = TimestampedData.from_csv(response.data)
+                    robot_state.nc_multiturn.update_from_csv(response.data)
 
                 elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
-                    robot_state.drive_joint_positions = TimestampedData.from_csv(response.data)
+                    robot_state.drive_joint_positions.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CART_POS:
-                    robot_state.drive_end_effector_pose = TimestampedData.from_csv(response.data)
+                    robot_state.drive_end_effector_pose.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
-                    robot_state.drive_joint_velocity = TimestampedData.from_csv(response.data)
+                    robot_state.drive_joint_velocity.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
-                    robot_state.drive_joint_torque_ratio = TimestampedData.from_csv(response.data)
+                    robot_state.drive_joint_torque_ratio.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CART_VEL:
-                    robot_state.drive_end_effector_velocity = TimestampedData.from_csv(response.data)
+                    robot_state.drive_end_effector_velocity.update_from_csv(response.data)
 
                 elif response.id == MX_ST_RT_DRIVE_CONF:
-                    robot_state.drive_joint_configurations = TimestampedData.from_csv(response.data)
+                    robot_state.drive_joint_configurations.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_DRIVE_CONF_MULTITURN:
-                    robot_state.drive_multiturn = TimestampedData.from_csv(response.data)
+                    robot_state.drive_multiturn.update_from_csv(response.data)
 
                 elif response.id == MX_ST_RT_ACCELEROMETER:
-                    # The data is stored as [timestamp, accelerometer_id, {measurements...}]
-                    raw_data = string_to_floats(response.data)
-                    robot_state.accelerometer[raw_data[1]] = TimestampedData(raw_data[0], raw_data[2:])
+                    # The data is stored as [timestamp, index, {measurements...}]
+                    timestamp, index, *measurements = string_to_floats(response.data)
+                    # Record accelerometer measurement only if newer.
+                    if index not in robot_state.accelerometer or timestamp > robot_state.accelerometer[index].timestamp:
+                        robot_state.accelerometer[index] = TimestampedData(timestamp, measurements)
 
     @staticmethod
     def _connect_socket(logger, address, port):
