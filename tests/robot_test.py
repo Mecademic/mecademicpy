@@ -159,7 +159,7 @@ def test_monitoring_connection():
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CART_VEL, fake_array))
 
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CONF, fake_array[:4]))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CONF_MULTITURN, fake_array[:2]))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CONF_TURN, fake_array[:2]))
 
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array))
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array))
@@ -168,7 +168,7 @@ def test_monitoring_connection():
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_array))
 
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CONF, fake_array[:4]))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CONF_MULTITURN, fake_array[:2]))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CONF_TURN, fake_array[:2]))
 
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_ACCELEROMETER, fake_array[:5]))
 
@@ -187,7 +187,7 @@ def test_monitoring_connection():
     assert robot._robot_state.nc_end_effector_velocity == make_test_data(mdr.MX_ST_RT_NC_CART_VEL, fake_array)
 
     assert robot._robot_state.nc_joint_configurations == make_test_data(mdr.MX_ST_RT_NC_CONF, fake_array[:4])
-    assert robot._robot_state.nc_multiturn == make_test_data(mdr.MX_ST_RT_NC_CONF_MULTITURN, fake_array[:2])
+    assert robot._robot_state.nc_last_joint_turn == make_test_data(mdr.MX_ST_RT_NC_CONF_TURN, fake_array[:2])
 
     assert robot._robot_state.drive_joint_positions == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array)
     assert robot._robot_state.drive_end_effector_pose == make_test_data(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array)
@@ -196,7 +196,7 @@ def test_monitoring_connection():
     assert robot._robot_state.drive_end_effector_velocity == make_test_data(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_array)
 
     assert robot._robot_state.drive_joint_configurations == make_test_data(mdr.MX_ST_RT_DRIVE_CONF, fake_array[:4])
-    assert robot._robot_state.drive_multiturn == make_test_data(mdr.MX_ST_RT_DRIVE_CONF_MULTITURN, fake_array[:2])
+    assert robot._robot_state.drive_last_joint_turn == make_test_data(mdr.MX_ST_RT_DRIVE_CONF_TURN, fake_array[:2])
 
     # The data is sent as [timestamp, accelerometer_id, {measurements...}].
     # We convert it to a dictionary which maps the accelerometer_id to a TimestampedData object.
