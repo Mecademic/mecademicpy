@@ -331,7 +331,7 @@ def test_unaccounted_checkpoints():
     # Send unexpected checkpoint.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
 
-    robot._check_background_threads()
+    robot._check_internal_states()
 
     robot.Disconnect()
 
@@ -783,5 +783,8 @@ def test_monitor_mode():
     # Check that these gets do not raise an exception.
     assert robot.GetJoints() == [1, 2, 3, 4, 5, 6]
     robot.GetPose() == [7, 8, 9, 10, 11, 12]
+
+    with pytest.raises(mdr.InvalidStateError):
+        robot.MoveJoints(1, 2, 3, 4, 5, 6)
 
     robot.Disconnect()

@@ -1336,13 +1336,17 @@ class Robot:
             self.Disconnect()
             raise InvalidStateError('No command tx thread, are you in monitor mode?')
 
-    def _check_background_threads(self):
+    def _check_internal_states(self):
         """Check that the threads which handle robot messages are alive.
 
         Attempt to disconnect from the robot if not.
 
         """
-        self._check_command_threads()
+        if self._monitor_mode:
+            raise InvalidStateError('Cannot send command while in monitoring mode.')
+        else:
+            self._check_command_threads()
+
         self._check_monitor_threads()
 
     def _send_command(self, command, arg_list=None):
@@ -1654,7 +1658,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command(command, arg_list)
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
@@ -1829,7 +1833,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('ActivateRobot')
 
         if self._enable_synchronous_mode:
@@ -1841,7 +1845,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('Home')
 
         if self._enable_synchronous_mode:
@@ -1861,7 +1865,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('PauseMotion')
 
         if self._enable_synchronous_mode:
@@ -1873,7 +1877,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('ResumeMotion')
 
         if self._enable_synchronous_mode:
@@ -1885,7 +1889,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('DeactivateRobot')
 
         if self._enable_synchronous_mode:
@@ -1897,7 +1901,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
 
             # Increment the number of pending ClearMotion requests.
             self._clear_motion_requests += 1
@@ -2272,7 +2276,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n)
 
@@ -2292,7 +2296,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n, send_to_robot=False)
 
@@ -2312,7 +2316,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             if '*' not in self._internal_checkpoints:
                 self._internal_checkpoints['*'] = list()
             event = InterruptableEvent()
@@ -2471,7 +2475,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('ResetError')
 
         if self._enable_synchronous_mode:
@@ -2483,7 +2487,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('ResetPStop')
 
         if self._enable_synchronous_mode:
@@ -2500,7 +2504,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             if not self._robot_events.on_homed.is_set():
                 raise InvalidStateError('This command requires robot to be homed.')
             self._send_command('Delay', [t])
@@ -2521,7 +2525,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command(command)
 
     @disconnect_on_exception
@@ -2539,7 +2543,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._robot_events.on_offline_program_started.clear()
 
             self._send_command('StartProgram', [n])
@@ -2565,7 +2569,7 @@ class Robot:
         # Updating the joints is not possible in monitor mode.
         if updated and not self._monitor_mode:
             with self._main_lock:
-                self._check_background_threads()
+                self._check_internal_states()
                 if self._robot_events.on_joints_updated.is_set():
                     self._robot_events.on_joints_updated.clear()
                     self._send_command('GetJoints')
@@ -2588,7 +2592,7 @@ class Robot:
         # Updating the joints is not possible in monitor mode.
         if updated and not self._monitor_mode:
             with self._main_lock:
-                self._check_background_threads()
+                self._check_internal_states()
                 if self._robot_events.on_pose_updated.is_set():
                     self._robot_events.on_pose_updated.clear()
                     self._send_command('GetPose')
@@ -2609,7 +2613,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('SetMonitoringInterval', [t])
 
     @disconnect_on_exception
@@ -2623,7 +2627,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('SetRTC', [t])
 
     @disconnect_on_exception
@@ -2632,7 +2636,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('ActivateSim')
 
     @disconnect_on_exception
@@ -2641,7 +2645,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             self._send_command('DeactivateSim')
 
     @disconnect_on_exception
@@ -2656,7 +2660,7 @@ class Robot:
         """
         if updated:
             with self._main_lock:
-                self._check_background_threads()
+                self._check_internal_states()
                 if self._robot_events.on_cmd_pending_count_updated.is_set():
                     self._robot_events.on_cmd_pending_count_updated.clear()
                     self._send_command('GetCmdPendingCount')
@@ -2678,7 +2682,7 @@ class Robot:
         """
         if updated:
             with self._main_lock:
-                self._check_background_threads()
+                self._check_internal_states()
                 if self._robot_events.on_conf_updated.is_set():
                     self._robot_events.on_conf_updated.clear()
                     self._send_command('GetConf')
@@ -2697,7 +2701,7 @@ class Robot:
 
         """
         with self._main_lock:
-            self._check_background_threads()
+            self._check_internal_states()
             if activated:
                 self._send_command('BrakesOn')
             else:
