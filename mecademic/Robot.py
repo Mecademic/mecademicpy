@@ -2560,7 +2560,7 @@ class Robot:
     ### Non-motion commands.
 
     @disconnect_on_exception
-    def GetJoints(self, force_update=None, timeout=None):
+    def GetJoints(self, synchronous_update=None, timeout=None):
         """Returns the current joint positions of the robot.
 
         Parameters
@@ -2576,11 +2576,11 @@ class Robot:
             Returns list of joint positions in degrees.
 
         """
-        # Automatically set force_update flag based on mode.
-        if force_update is None:
-            force_update = not self._monitor_mode
+        # Automatically set synchronous_update flag based on mode.
+        if synchronous_update is None:
+            synchronous_update = not self._monitor_mode
 
-        if force_update:
+        if synchronous_update:
             with self._main_lock:
                 self._check_internal_states()
                 if self._robot_events.on_joints_updated.is_set():
@@ -2593,7 +2593,7 @@ class Robot:
         return self._robot_state.joint_positions
 
     @disconnect_on_exception
-    def GetPose(self, force_update=None, timeout=None):
+    def GetPose(self, synchronous_update=None, timeout=None):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
         Parameters
@@ -2609,11 +2609,11 @@ class Robot:
             Returns end-effector pose [x, y, z, alpha, beta, gamma].
 
         """
-        # Automatically set force_update flag based on mode.
-        if force_update is None:
-            force_update = not self._monitor_mode
+        # Automatically set synchronous_update flag based on mode.
+        if synchronous_update is None:
+            synchronous_update = not self._monitor_mode
 
-        if force_update:
+        if synchronous_update:
             with self._main_lock:
                 self._check_internal_states()
                 if self._robot_events.on_pose_updated.is_set():
@@ -2672,7 +2672,7 @@ class Robot:
             self._send_command('DeactivateSim')
 
     @disconnect_on_exception
-    def GetCmdPendingCount(self, force_update=True, timeout=None):
+    def GetCmdPendingCount(self, synchronous_update=True, timeout=None):
         """Gets the number of pending commands on the robot.
 
         Returns
@@ -2681,7 +2681,7 @@ class Robot:
             Number of pending events on the robot.
 
         """
-        if force_update:
+        if synchronous_update:
             with self._main_lock:
                 self._check_internal_states()
                 if self._robot_events.on_cmd_pending_count_updated.is_set():
@@ -2694,7 +2694,7 @@ class Robot:
         return self._robot_state.cmd_pending_count
 
     @disconnect_on_exception
-    def GetConf(self, force_update=True, timeout=None):
+    def GetConf(self, synchronous_update=True, timeout=None):
         """Get robot's current (physical) inverse-kinematics configuration.
 
         Returns
@@ -2703,7 +2703,7 @@ class Robot:
             Number of pending events on the robot.
 
         """
-        if force_update:
+        if synchronous_update:
             with self._main_lock:
                 self._check_internal_states()
                 if self._robot_events.on_conf_updated.is_set():
