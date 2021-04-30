@@ -210,6 +210,13 @@ robot.ResetError()
 ```
 
 The `on_error` callback can also be used to manage robot errors.
+
+Improper use of the class can also cause exceptions to be raised. For example, calling `MoveJoints()` without any arguments will raise an exception. 
+
+If the user is waiting on an event or checkpoint that the `Robot` class later determines will never activate, the event will unblock and raise an exception. For example, if the user is waiting on a checkpoint, but calls `Disconnect()` or `ClearMotion()` before the checkpoint is received, the checkpoint will unblock and raise an exception.
+
+The user should use python's built-in `try...except` blocks to handle exceptions.
+
 ### Preserved State on Disconnection
 
 Once the robot is disconnected, not all state is immediately cleared. Therefore, it is possible to still get the last-known state of the robot. 

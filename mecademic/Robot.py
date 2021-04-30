@@ -2561,13 +2561,13 @@ class Robot:
     ### Non-motion commands.
 
     @disconnect_on_exception
-    def GetJoints(self, synchronous_update=None, timeout=None):
+    def GetJoints(self, synchronous_update=False, timeout=None):
         """Returns the current joint positions of the robot.
 
         Parameters
         ----------
-        forced_update : bool or None
-            If not provided, defaults to False in monitor mode and True otherwise.
+        synchronous_update : bool
+            If true, requests updated joints and waits for response, else uses last know joints.
         timeout : float
             Maximum time in second to wait for forced update.
 
@@ -2577,10 +2577,6 @@ class Robot:
             Returns list of joint positions in degrees.
 
         """
-        # Automatically set synchronous_update flag based on mode.
-        if synchronous_update is None:
-            synchronous_update = not self._monitor_mode
-
         if synchronous_update:
             with self._main_lock:
                 self._check_internal_states()
@@ -2594,13 +2590,13 @@ class Robot:
         return self._robot_state.joint_positions
 
     @disconnect_on_exception
-    def GetPose(self, synchronous_update=None, timeout=None):
+    def GetPose(self, synchronous_update=False, timeout=None):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
         Parameters
         ----------
-        forced_update : bool or None
-            If not provided, defaults to False in monitor mode and True otherwise.
+        synchronous_update : bool
+            If true, requests updated pose and waits for response, else uses last know pose.
         timeout : float
             Maximum time in second to wait for forced update.
 
@@ -2610,9 +2606,6 @@ class Robot:
             Returns end-effector pose [x, y, z, alpha, beta, gamma].
 
         """
-        # Automatically set synchronous_update flag based on mode.
-        if synchronous_update is None:
-            synchronous_update = not self._monitor_mode
 
         if synchronous_update:
             with self._main_lock:
