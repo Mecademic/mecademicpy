@@ -2068,20 +2068,20 @@ class Robot:
         self._send_motion_command('SetVelTimeout', [t])
 
     @disconnect_on_exception
-    def SetConf(self, c1, c3, c5):
+    def SetConf(self, shoulder, elbow, wrist):
         """Manually set inverse kinematics options (and disable auto-conf).
 
         Parameters
         ----------
-        c1 : +1 or -1
-            First inverse kinematics parameter.
-        c3 : +1 or -1
-            Second inverse kinematics parameter.
-        c5 : +1 or -1
-            Third inverse kinematics parameter.
+        shoulder : +1 or -1
+            Shoulder inverse kinematics parameter.
+        elbow : +1 or -1
+            Elbow inverse kinematics parameter.
+        wrist : +1 or -1
+            Wrist inverse kinematics parameter.
 
         """
-        self._send_motion_command('SetConf', [c1, c3, c5])
+        self._send_motion_command('SetConf', [shoulder, elbow, wrist])
 
     @disconnect_on_exception
     def SetAutoConf(self, e):
