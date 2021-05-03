@@ -783,9 +783,61 @@ def test_monitor_mode():
 
     # Check that these gets do not raise an exception.
     assert robot.GetJoints() == [1, 2, 3, 4, 5, 6]
-    robot.GetPose() == [7, 8, 9, 10, 11, 12]
+    assert robot.GetPose() == [7, 8, 9, 10, 11, 12]
 
     with pytest.raises(mdr.InvalidStateError):
         robot.MoveJoints(1, 2, 3, 4, 5, 6)
+
+    robot.Disconnect()
+
+
+def test_legacy_and_realtime_gets():
+    robot = mdr.Robot()
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+
+    assert robot.WaitConnected(timeout=0)
+
+    # Test legacy messages:
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, '1, 1, 1, 1, 1, 1'))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, '1, 1, 1, 1, 1, 1'))
+
+    # Terminate queue and wait for thread to exit to ensure messages are processed.
+    robot._monitor_rx_queue.put(mdr.TERMINATE)
+    robot._monitor_handler_thread.join(timeout=5)
+
+    # Without RT messages, enabling 'include_timestamp' should raise exception.
+    with pytest.raises(mdr.InvalidStateError):
+        robot.GetJoints(include_timestamp=True)
+    with pytest.raises(mdr.InvalidStateError):
+        robot.GetPose(include_timestamp=True)
+
+    expected_response = [1, 1, 1, 1, 1, 1]
+    robot.GetJoints(include_timestamp=False) == expected_response
+    robot.GetPose(include_timestamp=False) == expected_response
+
+    assert not robot.GetRobotInfo().rt_message_compatible
+
+    # assert robot._command_tx_queue.get() == 'GetJoints'
+    # assert robot._command_tx_queue.get() == 'GetPose'
+
+    # Test RT messages compatible:
+    robot._initialize_monitoring_connection()
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, '2, 2, 2, 2, 2, 2'))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, '2, 2, 2, 2, 2, 2'))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, '2'))
+
+    # Terminate queue and wait for thread to exit to ensure messages are processed.
+    robot._monitor_rx_queue.put(mdr.TERMINATE)
+    robot._monitor_handler_thread.join(timeout=5)
+
+    expected_response = mdr.TimestampedData(2, [2, 2, 2, 2, 2, 2])
+
+    assert robot.GetJoints(include_timestamp=True) == expected_response
+    assert robot.GetPose(include_timestamp=True) == expected_response
+
+    assert robot.GetRobotInfo().rt_message_compatible
 
     robot.Disconnect()

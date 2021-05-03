@@ -159,7 +159,7 @@ class TimestampedData:
         self.data = data
 
     def update_from_csv(self, input_string):
-        """ Update from comma-separated string, only if timestamp is newer.
+        """Update from comma-separated string, only if timestamp is newer.
 
         Parameters
         ----------
@@ -175,6 +175,21 @@ class TimestampedData:
         if floats[0] > self.timestamp:
             self.timestamp = floats[0]
             self.data = floats[1:]
+
+    def update_from_data(self, timestamp, data):
+        """Update with data if timestamp is newer.
+
+        Parameters
+        ----------
+        timestamp : number-like
+            Timestamp associated with data.
+        data : object
+            Data to be stored if timestamp is newer.
+
+        """
+        if timestamp > self.timestamp:
+            self.timestamp = timestamp
+            self.data = data
 
     @classmethod
     def zeros(cls, length):
@@ -278,6 +293,7 @@ class RobotInfo:
         self.fw_major_rev = fw_major_rev
         self.fw_minor_rev = fw_minor_rev
         self.fw_patch_num = fw_patch_num
+        self.rt_message_compatible = False
 
         if self.model == 'Meca500':
             self.num_joints = 6
@@ -319,9 +335,14 @@ class RobotState:
     Attributes
     ----------
     joint_positions : vector
-        The positions of the robot joints in degrees.
+        The positions of the robot joints in degrees, obtained from legacy messages.
     end_effector_pose : vector
-        The end effector pose in [x, y, z, alpha, beta, gamma] (mm and degrees).
+        The end effector pose in [x, y, z, alpha, beta, gamma] (mm and degrees), from legacy messages.
+
+    joint_positions_ts : TimestampedData
+        The positions of the robot joints in degrees, obtained from legacy messages, with timestamp.
+    end_effector_pose_ts : TimestampedData
+        The end effector pose in [x, y, z, alpha, beta, gamma] (mm and degrees), from legacy messages, with timestamp.
 
     nc_joint_positions : TimestampedData
         Controller desired joint positions in degrees [theta_1...6], includes timestamp.
@@ -380,6 +401,9 @@ class RobotState:
     def __init__(self, num_joints):
         self.joint_positions = [0] * num_joints  # degrees
         self.end_effector_pose = [0] * num_joints  # mm and degrees
+
+        self.joint_positions_ts = TimestampedData.zeros(num_joints)  # degrees
+        self.end_effector_pose_ts = TimestampedData.zeros(6)  # mm and degrees
 
         self.nc_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
         self.nc_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
@@ -1444,6 +1468,14 @@ class Robot:
                     if (index not in self._robot_state.accelerometer
                             or timestamp > self._robot_state.accelerometer[index].timestamp):
                         self._robot_state.accelerometer[index] = TimestampedData(timestamp, measurements)
+
+                elif response.id == MX_ST_RT_CYCLE_END:
+                    if not self._robot_info.rt_message_compatible:
+                        self._robot_info.rt_message_compatible = True
+                    timestamp = float(response.data)
+                    self._robot_state.joint_positions_ts.update_from_data(timestamp, self._robot_state.joint_positions)
+                    self._robot_state.end_effector_pose_ts.update_from_data(timestamp,
+                                                                            self._robot_state.end_effector_pose)
 
     def _command_response_handler(self):
         """Handle received messages on the command socket.
@@ -2539,11 +2571,15 @@ class Robot:
     ### Non-motion commands.
 
     @disconnect_on_exception
-    def GetJoints(self, synchronous_update=False, timeout=None):
+    def GetJoints(self, include_timestamp=False, synchronous_update=False, timeout=None):
         """Returns the current joint positions of the robot.
+
+        Uses RT commands if possible, otherwise uses legacy versions.
 
         Parameters
         ----------
+        include_timestamp : bool
+            If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated joints positions and waits for response, else uses last known positions.
         timeout : float
@@ -2551,8 +2587,8 @@ class Robot:
 
         Return
         ------
-        list of floats
-            Returns list of joint positions in degrees.
+        TimestampedData or list of floats
+            Returns joint positions in degrees.
 
         """
         if synchronous_update:
@@ -2560,19 +2596,37 @@ class Robot:
                 self._check_internal_states()
                 if self._robot_events.on_joints_updated.is_set():
                     self._robot_events.on_joints_updated.clear()
-                    self._send_command('GetJoints')
+                    if self._robot_info.rt_message_compatible:
+                        self._send_command('GetRtJointPos')
+                    else:
+                        self._send_command('GetJoints')
 
             if not self._robot_events.on_joints_updated.wait(timeout=timeout):
                 raise TimeoutError
 
-        return self._robot_state.joint_positions
+        with self._main_lock:
+            # If RT messages are not available, we cannot provide the timestamp.
+            if not self._robot_info.rt_message_compatible:
+                if include_timestamp:
+                    raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
+                else:
+                    return copy.deepcopy(self._robot_state.joint_positions)
+
+            # RT message are available.
+            else:
+                if include_timestamp:
+                    return copy.deepcopy(self._robot_state.joint_positions_ts)
+                else:
+                    return copy.deepcopy(self._robot_state.joint_positions_ts.data)
 
     @disconnect_on_exception
-    def GetPose(self, synchronous_update=False, timeout=None):
+    def GetPose(self, include_timestamp=False, synchronous_update=False, timeout=None):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
         Parameters
         ----------
+        include_timestamp : bool
+            If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated pose and waits for response, else uses last know pose.
         timeout : float
@@ -2580,7 +2634,7 @@ class Robot:
 
         Return
         ------
-        list of floats
+        TimestampedData or list of floats
             Returns end-effector pose [x, y, z, alpha, beta, gamma].
 
         """
@@ -2590,12 +2644,28 @@ class Robot:
                 self._check_internal_states()
                 if self._robot_events.on_pose_updated.is_set():
                     self._robot_events.on_pose_updated.clear()
-                    self._send_command('GetPose')
+                    if self._robot_info.rt_message_compatible:
+                        self._send_command('GetRtCartPos')
+                    else:
+                        self._send_command('GetPose')
 
             if not self._robot_events.on_pose_updated.wait(timeout=timeout):
                 raise TimeoutError
 
-        return self._robot_state.end_effector_pose[:]
+        with self._main_lock:
+            # If RT messages are not available, we cannot provide the timestamp.
+            if not self._robot_info.rt_message_compatible:
+                if include_timestamp:
+                    raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
+                else:
+                    return copy.deepcopy(self._robot_state.end_effector_pose)
+
+            # RT message are available.
+            else:
+                if include_timestamp:
+                    return copy.deepcopy(self._robot_state.end_effector_pose_ts)
+                else:
+                    return copy.deepcopy(self._robot_state.end_effector_pose_ts.data)
 
     @disconnect_on_exception
     def SetMonitoringInterval(self, t):
