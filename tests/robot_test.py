@@ -15,6 +15,7 @@ import mecademic.Robot as mdr
 
 TEST_IP = '127.0.0.1'
 MECA500_CONNECTED_RESPONSE = 'Connected to Meca500 R3 v9.0.0'
+DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
 
 def fake_server(address, port, data_list, server_up):
@@ -36,7 +37,7 @@ def run_fake_server(address, port, data_list):
     server_up_event = threading.Event()  # Synchronization event for fake server.
     server_thread = threading.Thread(target=fake_server, args=(address, port, data_list, server_up_event))
     server_thread.start()
-    server_up_event.wait()
+    assert server_up_event.wait(timeout=DEFAULT_TIMEOUT)
     return server_thread
 
 
@@ -223,7 +224,7 @@ def test_internal_checkpoints():
     assert not checkpoint_1.wait(timeout=0)
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
     # Check that wait succeeds if response is sent.
-    assert checkpoint_1.wait()
+    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
     robot.Disconnect()
 
@@ -245,7 +246,7 @@ def test_external_checkpoints():
     assert not checkpoint_1.wait(timeout=0)
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
     # Check that wait succeeds if response is sent.
-    assert checkpoint_1.wait()
+    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
     robot.Disconnect()
 
@@ -272,9 +273,9 @@ def test_multiple_checkpoints():
     assert not checkpoint_3.wait(timeout=0)
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '3'))
     # Check that waits succeeds if response is sent.
-    assert checkpoint_3.wait()
-    assert checkpoint_2.wait()
-    assert checkpoint_1.wait()
+    assert checkpoint_3.wait(timeout=DEFAULT_TIMEOUT)
+    assert checkpoint_2.wait(timeout=DEFAULT_TIMEOUT)
+    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
     robot.Disconnect()
 
@@ -297,8 +298,8 @@ def test_repeated_checkpoints():
     assert not checkpoint_1_b.wait(timeout=0)
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
     # Check that waits succeeds if response is sent.
-    assert checkpoint_1_b.wait()
-    assert checkpoint_1_a.wait()
+    assert checkpoint_1_b.wait(timeout=DEFAULT_TIMEOUT)
+    assert checkpoint_1_a.wait(timeout=DEFAULT_TIMEOUT)
 
     robot.Disconnect()
 
@@ -349,7 +350,7 @@ def test_stranded_checkpoints():
 
     # Checkpoint should throw error instead of blocking since robot is already disconnected.
     with pytest.raises(mdr.InterruptException):
-        checkpoint_1.wait()
+        checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
 
 def test_events():
@@ -384,7 +385,7 @@ def test_events():
     robot.PauseMotion()
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,1,0,0'))
     # Wait until pause is successfully set.
-    robot._robot_events.on_motion_paused.wait()
+    assert robot.WaitMotionPaused(timeout=DEFAULT_TIMEOUT)
 
     assert not robot.WaitMotionResumed(timeout=0)
     robot.ResumeMotion()
@@ -415,10 +416,10 @@ def test_events():
     assert not robot.WaitActivated(timeout=0)
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_BRAKES_OFF, ''))
-    assert robot._robot_events.on_brakes_deactivated.wait()
+    assert robot._robot_events.on_brakes_deactivated.wait(timeout=DEFAULT_TIMEOUT)
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_BRAKES_ON, ''))
-    assert robot._robot_events.on_brakes_activated.wait()
+    assert robot._robot_events.on_brakes_activated.wait(timeout=DEFAULT_TIMEOUT)
 
     assert not robot.WaitDisconnected(timeout=0)
     robot.Disconnect()

@@ -133,6 +133,15 @@ class InterruptableEvent:
             else:
                 return self._event.is_set()
 
+    def clear_abort(self):
+        """Clears the abort.
+
+        """
+        with self._lock:
+            if self._interrupted:
+                self._interrupted = False
+                self._event.clear()
+
 
 class TimestampedData:
     """ Class for storing timestamped data.
@@ -373,20 +382,20 @@ class RobotState:
         self.end_effector_pose = [0] * num_joints  # mm and degrees
 
         self.nc_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.nc_end_effector_pose = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm and degrees
+        self.nc_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
 
         self.nc_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.nc_end_effector_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm/s and deg/s
+        self.nc_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
 
         self.nc_joint_configurations = TimestampedData.zeros(3)
         self.nc_last_joint_turn = TimestampedData.zeros(1)
 
         self.drive_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.drive_end_effector_pose = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm and degrees
+        self.drive_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
 
         self.drive_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
         self.drive_joint_torque_ratio = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.drive_end_effector_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, mm/s and deg/s
+        self.drive_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
 
         self.drive_joint_configurations = TimestampedData.zeros(3)
         self.drive_last_joint_turn = TimestampedData.zeros(1)
@@ -397,7 +406,7 @@ class RobotState:
 
         self.max_queue_size = 0
 
-        # The following status fields are updated together, and is protected by a single lock.
+        # The following are status fields.
         self.activation_state = False
         self.homing_state = False
         self.simulation_mode = False
@@ -526,6 +535,13 @@ class RobotEvents:
         for attr in self.__dict__:
             if attr != 'on_connected':
                 self.__dict__[attr].abort()
+
+    def clear_abort_all(self):
+        """Clear aborts for all events.
+
+        """
+        for attr in self.__dict__:
+            self.__dict__[attr].clear_abort()
 
 
 class RobotCallbacks:
@@ -922,312 +938,6 @@ class Robot:
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
-    def _handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger, callback_queue):
-        """Handle the checkpoint message from the robot, set the appropriate events, etc.
-
-        Parameters
-        ----------
-        response : Message object
-            Response message which includes the received checkpoint id.
-        user_checkpoints : shared dictionary
-            Dictionary of active checkpoint id's (set by user) and corresponding events.
-        internal_checkpoints : shared dictionary
-            Dictionary of active checkpoint id's (set interally) and corresponding events.
-
-        """
-        assert response.id == MX_ST_CHECKPOINT_REACHED
-        checkpoint_id = int(response.data)
-
-        # Check user checkpoints.
-        if checkpoint_id in user_checkpoints and user_checkpoints[checkpoint_id]:
-            user_checkpoints[checkpoint_id].pop(0).set()
-            # If list corresponding to checkpoint id is empty, remove the key from the dict.
-            if not user_checkpoints[checkpoint_id]:
-                user_checkpoints.pop(checkpoint_id)
-            # If there are events are waiting on 'any checkpoint', set them all.
-            if '*' in internal_checkpoints and internal_checkpoints['*']:
-                for event in internal_checkpoints.pop('*'):
-                    event.set()
-            # Enque the on_checkpoint_reached callback.
-            callback_queue.put('on_checkpoint_reached', checkpoint_id)
-
-        # Check internal checkpoints.
-        elif checkpoint_id in internal_checkpoints and internal_checkpoints[checkpoint_id]:
-            internal_checkpoints[checkpoint_id].pop(0).set()
-            # If list corresponding to checkpoint id is empty, remove the key from the dict.
-            if not internal_checkpoints[checkpoint_id]:
-                internal_checkpoints.pop(checkpoint_id)
-        else:
-            logger.warning('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
-
-    @staticmethod
-    def _command_response_handler(rx_queue, robot_state, user_checkpoints, internal_checkpoints, events, main_lock,
-                                  logger, callback_queue, clear_motion_requests):
-        """Handle received messages on the command socket.
-
-        Parameters
-        ----------
-        rx_queue : queue
-            Thread-safe queue to get received messages from.
-        robot_state : RobotState object
-            The current robot state.
-        user_checkpoints : shared dictionary
-            Dictionary of active checkpoint id's (set by user) and corresponding events.
-        internal_checkpoints : shared dictionary
-            Dictionary of active checkpoint id's (set interally) and corresponding events.
-        events : RobotEvents object
-            Contains event objects corresponding to various robot state changes.
-        main_lock : recursive lock object
-            Used to protect internal state of robot class.
-        logger : logger
-            Used for logging.
-        callback_queue : CallbackQueue
-            Used to push triggered callbacks onto.
-        clear_motion_requests : int
-            Number of active ClearMotion requests.
-
-        """
-        while True:
-            # Wait for a response to be available from the queue.
-            response = rx_queue.get(block=True)
-
-            # Terminate thread if requested.
-            if response == TERMINATE:
-                return
-
-            with main_lock:
-                callback_queue.put('on_command_message', response)
-
-                if response.id == MX_ST_GET_JOINTS:
-                    robot_state.joint_positions = string_to_floats(response.data)
-                    events.on_joints_updated.set()
-
-                elif response.id == MX_ST_GET_POSE:
-                    robot_state.end_effector_pose = string_to_floats(response.data)
-                    events.on_pose_updated.set()
-
-                elif response.id == MX_ST_CLEAR_MOTION:
-                    if clear_motion_requests <= 1:
-                        clear_motion_requests = 0
-                        events.on_motion_cleared.set()
-                        callback_queue.put('on_motion_cleared')
-                    else:
-                        clear_motion_requests -= 1
-
-                elif response.id == MX_ST_GET_STATUS_ROBOT:
-                    Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
-                    events.on_status_activated.set()
-                    callback_queue.put('on_status_updated')
-
-                elif response.id == MX_ST_CHECKPOINT_REACHED:
-                    Robot._handle_checkpoint_response(response, user_checkpoints, internal_checkpoints, logger,
-                                                      callback_queue)
-
-                elif response.id == MX_ST_PSTOP:
-                    if bool(int(response.data)):
-                        events.on_p_stop_reset.clear()
-                        events.on_p_stop.set()
-                        callback_queue.put('on_p_stop')
-                    else:
-                        events.on_p_stop.clear()
-                        events.on_p_stop_reset.set()
-                        callback_queue.put('on_p_stop_reset')
-
-                elif response.id == MX_ST_GET_CMD_PENDING_COUNT:
-                    robot_state.cmd_pending_count = int(response.data)
-                    events.on_cmd_pending_count_updated.set()
-
-                elif response.id == MX_ST_GET_CONF:
-                    robot_state.configuration = string_to_floats(response.data)
-                    events.on_conf_updated.set()
-
-                elif response.id == MX_ST_BRAKES_ON:
-                    events.on_brakes_deactivated.clear()
-                    events.on_brakes_activated.set()
-
-                elif response.id == MX_ST_BRAKES_OFF:
-                    events.on_brakes_activated.clear()
-                    events.on_brakes_deactivated.set()
-
-                elif response.id == MX_ST_OFFLINE_START:
-                    events.on_offline_program_started.set()
-                    callback_queue.put('on_offline_program_state')
-
-                elif response.id == MX_ST_NO_OFFLINE_SAVED:
-                    events.on_offline_program_started.abort()
-
-    @staticmethod
-    def _handle_robot_status_response(response, robot_state, events, callback_queue):
-        """Parse robot status response and update status fields and events.
-
-        Parameters
-        ----------
-        response : Message object
-            Robot status response to parse and handle.
-
-        robot_state : RobotState object
-            Stores the robot state.
-
-        events : RobotEvents object
-            Stores events associated with changes in robot state.
-
-        callback_queue : queue
-            Used to push triggered callbacks onto.
-
-        """
-        assert response.id == MX_ST_GET_STATUS_ROBOT
-        status_flags = [bool(int(x)) for x in response.data.split(',')]
-
-        if robot_state.activation_state != status_flags[0]:
-            if status_flags[0]:
-                events.on_deactivated.clear()
-                events.on_activated.set()
-                events.on_brakes_activated.clear()
-                events.on_brakes_deactivated.set()
-                callback_queue.put('on_activated')
-            else:
-                events.on_activated.clear()
-                events.on_deactivated.set()
-                events.on_brakes_deactivated.clear()
-                events.on_brakes_activated.set()
-                callback_queue.put('on_deactivated')
-            robot_state.activation_state = status_flags[0]
-
-        if robot_state.homing_state != status_flags[1]:
-            if status_flags[1]:
-                events.on_homed.set()
-                callback_queue.put('on_homed')
-            else:
-                events.on_homed.clear()
-            robot_state.homing_state = status_flags[1]
-
-        if robot_state.simulation_mode != status_flags[2]:
-            if status_flags[2]:
-                events.on_deactivate_sim.clear()
-                events.on_activate_sim.set()
-                callback_queue.put('on_activate_sim')
-            else:
-                events.on_activate_sim.clear()
-                events.on_deactivate_sim.set()
-                callback_queue.put('on_deactivate_sim')
-            robot_state.simulation_mode = status_flags[2]
-
-        if robot_state.error_status != status_flags[3]:
-            if status_flags[3]:
-                events.on_error_reset.clear()
-                events.on_error.set()
-                callback_queue.put('on_error')
-            else:
-                events.on_error.clear()
-                events.on_error_reset.set()
-                callback_queue.put('on_error_reset')
-            robot_state.error_status = status_flags[3]
-
-        if robot_state.pause_motion_status != status_flags[4]:
-            if status_flags[4]:
-                events.on_motion_resumed.clear()
-                events.on_motion_paused.set()
-                callback_queue.put('on_motion_paused')
-            else:
-                events.on_motion_paused.clear()
-                events.on_motion_resumed.set()
-                callback_queue.put('on_motion_resumed')
-            robot_state.pause_motion_status = status_flags[4]
-
-        if robot_state.end_of_block_status != status_flags[5]:
-            if status_flags[5]:
-                events.on_end_of_block.set()
-            else:
-                events.on_end_of_block.clear()
-            robot_state.end_of_block_status = status_flags[5]
-
-        robot_state.end_of_movement_status = status_flags[6]
-
-    @staticmethod
-    def _monitor_handler(monitor_queue, robot_state, events, main_lock, callback_queue):
-        """Handle messages from the monitoring port of the robot.
-
-        Parameters
-        ----------
-        monitor_queue : queue
-            Thread-safe queue to get received messages from.
-        robot_state : RobotState object
-            The current robot state.
-        events : RobotEvents object
-            Contains event objects corresponding to various robot state changes.
-        main_lock : recursive lock object
-            Used to protect internal state of robot class.
-        callback_queue : queue
-            Used to push triggered callbacks onto.
-
-        """
-        while True:
-            # Wait for a message in the queue.
-            response = monitor_queue.get(block=True)
-
-            # Terminate thread if requested.
-            if response == TERMINATE:
-                return
-
-            callback_queue.put('on_monitor_message', response)
-
-            queue_size = monitor_queue.qsize()
-            if queue_size > robot_state.max_queue_size:
-                robot_state.max_queue_size = queue_size
-
-            with main_lock:
-
-                if response.id == MX_ST_GET_JOINTS:
-                    robot_state.joint_positions = string_to_floats(response.data)
-                    events.on_joints_updated.set()
-
-                elif response.id == MX_ST_GET_POSE:
-                    robot_state.end_effector_pose = string_to_floats(response.data)
-                    events.on_pose_updated.set()
-
-                elif response.id == MX_ST_GET_STATUS_ROBOT:
-                    Robot._handle_robot_status_response(response, robot_state, events, callback_queue)
-                    events.on_status_updated.set()
-                    callback_queue.put('on_status_updated')
-
-                elif response.id == MX_ST_RT_NC_JOINT_POS:
-                    robot_state.nc_joint_positions.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_CART_POS:
-                    robot_state.nc_end_effector_pose.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_JOINT_VEL:
-                    robot_state.nc_joint_velocity.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_CART_VEL:
-                    robot_state.nc_end_effector_velocity.update_from_csv(response.data)
-
-                elif response.id == MX_ST_RT_NC_CONF:
-                    robot_state.nc_joint_configurations.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_CONF_TURN:
-                    robot_state.nc_last_joint_turn.update_from_csv(response.data)
-
-                elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
-                    robot_state.drive_joint_positions.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_CART_POS:
-                    robot_state.drive_end_effector_pose.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
-                    robot_state.drive_joint_velocity.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
-                    robot_state.drive_joint_torque_ratio.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_CART_VEL:
-                    robot_state.drive_end_effector_velocity.update_from_csv(response.data)
-
-                elif response.id == MX_ST_RT_DRIVE_CONF:
-                    robot_state.drive_joint_configurations.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_CONF_TURN:
-                    robot_state.drive_last_joint_turn.update_from_csv(response.data)
-
-                elif response.id == MX_ST_RT_ACCELEROMETER:
-                    # The data is stored as [timestamp, index, {measurements...}]
-                    timestamp, index, *measurements = string_to_floats(response.data)
-                    # Record accelerometer measurement only if newer.
-                    if index not in robot_state.accelerometer or timestamp > robot_state.accelerometer[index].timestamp:
-                        robot_state.accelerometer[index] = TimestampedData(timestamp, measurements)
-
-    @staticmethod
     def _connect_socket(logger, address, port):
         """Connects to an arbitrary socket.
 
@@ -1489,10 +1199,7 @@ class Robot:
         """
         self._receive_welcome_message(self._command_rx_queue)
 
-        self._command_response_handler_thread = self._launch_thread(
-            target=self._command_response_handler,
-            args=(self._command_rx_queue, self._robot_state, self._user_checkpoints, self._internal_checkpoints,
-                  self._robot_events, self._main_lock, self.logger, self._callback_queue, self._clear_motion_requests))
+        self._command_response_handler_thread = self._launch_thread(target=self._command_response_handler, args=())
 
     def _initialize_monitoring_connection(self):
         """Attempt to connect to the monitor port of the Mecademic Robot.
@@ -1507,10 +1214,7 @@ class Robot:
         if self._monitor_mode:
             self._receive_welcome_message(self._monitor_rx_queue)
 
-        self._monitor_handler_thread = self._launch_thread(target=self._monitor_handler,
-                                                           args=(self._monitor_rx_queue, self._robot_state,
-                                                                 self._robot_events, self._main_lock,
-                                                                 self._callback_queue))
+        self._monitor_handler_thread = self._launch_thread(target=self._monitor_handler, args=())
 
         return
 
@@ -1669,6 +1373,263 @@ class Robot:
 
         if self._enable_synchronous_mode:
             checkpoint.wait()
+
+    def _monitor_handler(self):
+        """Handle messages from the monitoring port of the robot.
+
+        """
+        while True:
+            # Wait for a message in the queue.
+            response = self._monitor_rx_queue.get(block=True)
+
+            # Terminate thread if requested.
+            if response == TERMINATE:
+                return
+
+            self._callback_queue.put('on_monitor_message', response)
+
+            queue_size = self._monitor_rx_queue.qsize()
+            if queue_size > self._robot_state.max_queue_size:
+                self._robot_state.max_queue_size = queue_size
+
+            with self._main_lock:
+
+                if response.id == MX_ST_GET_JOINTS:
+                    self._robot_state.joint_positions = string_to_floats(response.data)
+                    self._robot_events.on_joints_updated.set()
+
+                elif response.id == MX_ST_GET_POSE:
+                    self._robot_state.end_effector_pose = string_to_floats(response.data)
+                    self._robot_events.on_pose_updated.set()
+
+                elif response.id == MX_ST_GET_STATUS_ROBOT:
+                    self._handle_robot_status_response(response)
+                    self._robot_events.on_status_updated.set()
+                    self._callback_queue.put('on_status_updated')
+
+                elif response.id == MX_ST_RT_NC_JOINT_POS:
+                    self._robot_state.nc_joint_positions.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_NC_CART_POS:
+                    self._robot_state.nc_end_effector_pose.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_NC_JOINT_VEL:
+                    self._robot_state.nc_joint_velocity.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_NC_CART_VEL:
+                    self._robot_state.nc_end_effector_velocity.update_from_csv(response.data)
+
+                elif response.id == MX_ST_RT_NC_CONF:
+                    self._robot_state.nc_joint_configurations.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_NC_CONF_TURN:
+                    self._robot_state.nc_last_joint_turn.update_from_csv(response.data)
+
+                elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
+                    self._robot_state.drive_joint_positions.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_DRIVE_CART_POS:
+                    self._robot_state.drive_end_effector_pose.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
+                    self._robot_state.drive_joint_velocity.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
+                    self._robot_state.drive_joint_torque_ratio.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_DRIVE_CART_VEL:
+                    self._robot_state.drive_end_effector_velocity.update_from_csv(response.data)
+
+                elif response.id == MX_ST_RT_DRIVE_CONF:
+                    self._robot_state.drive_joint_configurations.update_from_csv(response.data)
+                elif response.id == MX_ST_RT_DRIVE_CONF_TURN:
+                    self._robot_state.drive_last_joint_turn.update_from_csv(response.data)
+
+                elif response.id == MX_ST_RT_ACCELEROMETER:
+                    # The data is stored as [timestamp, index, {measurements...}]
+                    timestamp, index, *measurements = string_to_floats(response.data)
+                    # Record accelerometer measurement only if newer.
+                    if (index not in self._robot_state.accelerometer
+                            or timestamp > self._robot_state.accelerometer[index].timestamp):
+                        self._robot_state.accelerometer[index] = TimestampedData(timestamp, measurements)
+
+    def _command_response_handler(self):
+        """Handle received messages on the command socket.
+
+        """
+        while True:
+            # Wait for a response to be available from the queue.
+            response = self._command_rx_queue.get(block=True)
+
+            # Terminate thread if requested.
+            if response == TERMINATE:
+                return
+
+            with self._main_lock:
+                self._callback_queue.put('on_command_message', response)
+
+                if response.id == MX_ST_GET_JOINTS:
+                    self._robot_state.joint_positions = string_to_floats(response.data)
+                    self._robot_events.on_joints_updated.set()
+
+                elif response.id == MX_ST_GET_POSE:
+                    self._robot_state.end_effector_pose = string_to_floats(response.data)
+                    self._robot_events.on_pose_updated.set()
+
+                elif response.id == MX_ST_CLEAR_MOTION:
+                    if self._clear_motion_requests <= 1:
+                        self._clear_motion_requests = 0
+                        self._robot_events.on_motion_cleared.set()
+                        self._callback_queue.put('on_motion_cleared')
+                    else:
+                        self._clear_motion_requests -= 1
+
+                elif response.id == MX_ST_GET_STATUS_ROBOT:
+                    self._handle_robot_status_response(response)
+                    self._robot_events.on_status_activated.set()
+                    self._callback_queue.put('on_status_updated')
+
+                elif response.id == MX_ST_CHECKPOINT_REACHED:
+                    self._handle_checkpoint_response(response)
+
+                elif response.id == MX_ST_PSTOP:
+                    if bool(int(response.data)):
+                        self._robot_events.on_p_stop_reset.clear()
+                        self._robot_events.on_p_stop.set()
+                        self._callback_queue.put('on_p_stop')
+                    else:
+                        self._robot_events.on_p_stop.clear()
+                        self._robot_events.on_p_stop_reset.set()
+                        self._callback_queue.put('on_p_stop_reset')
+
+                elif response.id == MX_ST_GET_CMD_PENDING_COUNT:
+                    self._robot_state.cmd_pending_count = int(response.data)
+                    self._robot_events.on_cmd_pending_count_updated.set()
+
+                elif response.id == MX_ST_GET_CONF:
+                    self._robot_state.configuration = string_to_floats(response.data)
+                    self._robot_events.on_conf_updated.set()
+
+                elif response.id == MX_ST_BRAKES_ON:
+                    self._robot_events.on_brakes_deactivated.clear()
+                    self._robot_events.on_brakes_activated.set()
+
+                elif response.id == MX_ST_BRAKES_OFF:
+                    self._robot_events.on_brakes_activated.clear()
+                    self._robot_events.on_brakes_deactivated.set()
+
+                elif response.id == MX_ST_OFFLINE_START:
+                    self._robot_events.on_offline_program_started.set()
+                    self._callback_queue.put('on_offline_program_state')
+
+                elif response.id == MX_ST_NO_OFFLINE_SAVED:
+                    self._robot_events.on_offline_program_started.abort()
+
+    def _handle_robot_status_response(self, response):
+        """Parse robot status response and update status fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        assert response.id == MX_ST_GET_STATUS_ROBOT
+        status_flags = [bool(int(x)) for x in response.data.split(',')]
+
+        if self._robot_state.activation_state != status_flags[0]:
+            if status_flags[0]:
+                self._robot_events.on_deactivated.clear()
+                self._robot_events.on_activated.set()
+                self._robot_events.on_brakes_activated.clear()
+                self._robot_events.on_brakes_deactivated.set()
+                self._callback_queue.put('on_activated')
+            else:
+                self._robot_events.on_activated.clear()
+                self._robot_events.on_deactivated.set()
+                self._robot_events.on_brakes_deactivated.clear()
+                self._robot_events.on_brakes_activated.set()
+                self._callback_queue.put('on_deactivated')
+            self._robot_state.activation_state = status_flags[0]
+
+        if self._robot_state.homing_state != status_flags[1]:
+            if status_flags[1]:
+                self._robot_events.on_homed.set()
+                self._callback_queue.put('on_homed')
+            else:
+                self._robot_events.on_homed.clear()
+            self._robot_state.homing_state = status_flags[1]
+
+        if self._robot_state.simulation_mode != status_flags[2]:
+            if status_flags[2]:
+                self._robot_events.on_deactivate_sim.clear()
+                self._robot_events.on_activate_sim.set()
+                self._callback_queue.put('on_activate_sim')
+            else:
+                self._robot_events.on_activate_sim.clear()
+                self._robot_events.on_deactivate_sim.set()
+                self._callback_queue.put('on_deactivate_sim')
+            self._robot_state.simulation_mode = status_flags[2]
+
+        if self._robot_state.error_status != status_flags[3]:
+            if status_flags[3]:
+                self._invalidate_checkpoints()
+                self._robot_events.on_error.set()
+                self._robot_events.abort_all_except_on_connected()
+                self._robot_events.on_error_reset.clear()
+                self._callback_queue.put('on_error')
+            else:
+                self._robot_events.clear_abort_all()
+                self._robot_events.on_error.clear()
+                self._robot_events.on_error_reset.set()
+                self._callback_queue.put('on_error_reset')
+            self._robot_state.error_status = status_flags[3]
+
+        if self._robot_state.pause_motion_status != status_flags[4]:
+            if status_flags[4]:
+                self._robot_events.on_motion_resumed.clear()
+                self._robot_events.on_motion_paused.set()
+                self._callback_queue.put('on_motion_paused')
+            else:
+                self._robot_events.on_motion_paused.clear()
+                self._robot_events.on_motion_resumed.set()
+                self._callback_queue.put('on_motion_resumed')
+            self._robot_state.pause_motion_status = status_flags[4]
+
+        if self._robot_state.end_of_block_status != status_flags[5]:
+            if status_flags[5]:
+                self._robot_events.on_end_of_block.set()
+            else:
+                self._robot_events.on_end_of_block.clear()
+            self._robot_state.end_of_block_status = status_flags[5]
+
+        self._robot_state.end_of_movement_status = status_flags[6]
+
+    def _handle_checkpoint_response(self, response):
+        """Handle the checkpoint message from the robot, set the appropriate events, etc.
+
+        Parameters
+        ----------
+        response : Message object
+            Response message which includes the received checkpoint id.
+
+        """
+        assert response.id == MX_ST_CHECKPOINT_REACHED
+        checkpoint_id = int(response.data)
+
+        # Check user checkpoints.
+        if checkpoint_id in self._user_checkpoints and self._user_checkpoints[checkpoint_id]:
+            self._user_checkpoints[checkpoint_id].pop(0).set()
+            # If list corresponding to checkpoint id is empty, remove the key from the dict.
+            if not self._user_checkpoints[checkpoint_id]:
+                self._user_checkpoints.pop(checkpoint_id)
+            # If there are events are waiting on 'any checkpoint', set them all.
+            if '*' in self._internal_checkpoints and self._internal_checkpoints['*']:
+                for event in self._internal_checkpoints.pop('*'):
+                    event.set()
+            # Enque the on_checkpoint_reached callback.
+            self._callback_queue.put('on_checkpoint_reached', checkpoint_id)
+
+        # Check internal checkpoints.
+        elif checkpoint_id in self._internal_checkpoints and self._internal_checkpoints[checkpoint_id]:
+            self._internal_checkpoints[checkpoint_id].pop(0).set()
+            # If list corresponding to checkpoint id is empty, remove the key from the dict.
+            if not self._internal_checkpoints[checkpoint_id]:
+                self._internal_checkpoints.pop(checkpoint_id)
+        else:
+            self.logger.warning('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
 
     #####################################################################################
     # Public methods = Pascal case is used to maintain consistency with text and c++ API.
@@ -2431,6 +2392,23 @@ class Robot:
         return self._robot_events.on_motion_resumed.wait(timeout=timeout)
 
     @disconnect_on_exception
+    def WaitMotionPaused(self, timeout=None):
+        """Pause program execution until the robot motion is paused.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
+        return self._robot_events.on_motion_paused.wait(timeout=timeout)
+
+    @disconnect_on_exception
     def WaitMotionCleared(self, timeout=None):
         """Pause program execution until all pending request to clear motion have been acknowledged.
 
@@ -2567,7 +2545,7 @@ class Robot:
         Parameters
         ----------
         synchronous_update : bool
-            If true, requests updated joints and waits for response, else uses last know joints.
+            If true, requests updated joints positions and waits for response, else uses last known positions.
         timeout : float
             Maximum time in second to wait for forced update.
 
@@ -2744,7 +2722,8 @@ class Robot:
             Object containing robot information.
 
         """
-        return copy.deepcopy(self._robot_info)
+        with self._main_lock:
+            return copy.deepcopy(self._robot_info)
 
     def GetRobotState(self):
         """Return a copy of the current robot state.
@@ -2755,4 +2734,5 @@ class Robot:
             Object containing the current robot state.
 
         """
-        return copy.deepcopy(self._robot_state)
+        with self._main_lock:
+            return copy.deepcopy(self._robot_state)
