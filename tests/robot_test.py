@@ -151,9 +151,6 @@ def test_monitoring_connection():
     robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     # Send monitor messages.
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_GET_JOINTS, fake_array[:-1]))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_GET_POSE, fake_array[:-1]))
-
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_POS, fake_array))
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CART_POS, fake_array))
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array))
@@ -178,17 +175,14 @@ def test_monitoring_connection():
     robot._monitor_handler_thread.join()
     robot._monitor_handler_thread = None
 
-    assert robot.GetJoints(synchronous_update=False) == make_test_array(mdr.MX_ST_GET_JOINTS, fake_array[:-1])
-    assert robot.GetPose(synchronous_update=False) == make_test_array(mdr.MX_ST_GET_POSE, fake_array[:-1])
-
     # Temporarily test using direct members, switch to using proper getters once implemented.
-    assert robot._robot_state.nc_joint_positions == make_test_data(mdr.MX_ST_RT_NC_JOINT_POS, fake_array)
-    assert robot._robot_state.nc_end_effector_pose == make_test_data(mdr.MX_ST_RT_NC_CART_POS, fake_array)
-    assert robot._robot_state.nc_joint_velocity == make_test_data(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array)
-    assert robot._robot_state.nc_end_effector_velocity == make_test_data(mdr.MX_ST_RT_NC_CART_VEL, fake_array)
+    assert robot._robot_state.target_joint_positions == make_test_data(mdr.MX_ST_RT_NC_JOINT_POS, fake_array)
+    assert robot._robot_state.target_end_effector_pose == make_test_data(mdr.MX_ST_RT_NC_CART_POS, fake_array)
+    assert robot._robot_state.target_joint_velocity == make_test_data(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array)
+    assert robot._robot_state.target_end_effector_velocity == make_test_data(mdr.MX_ST_RT_NC_CART_VEL, fake_array)
 
-    assert robot._robot_state.nc_joint_configurations == make_test_data(mdr.MX_ST_RT_NC_CONF, fake_array[:4])
-    assert robot._robot_state.nc_last_joint_turn == make_test_data(mdr.MX_ST_RT_NC_CONF_TURN, fake_array[:2])
+    assert robot._robot_state.target_joint_configurations == make_test_data(mdr.MX_ST_RT_NC_CONF, fake_array[:4])
+    assert robot._robot_state.target_last_joint_turn == make_test_data(mdr.MX_ST_RT_NC_CONF_TURN, fake_array[:2])
 
     assert robot._robot_state.drive_joint_positions == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array)
     assert robot._robot_state.drive_end_effector_pose == make_test_data(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array)
@@ -835,6 +829,7 @@ def test_gets_with_timestamp():
     fake_robot.join()
 
     # Test RT messages compatible:
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, '2'))
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(3)))
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, fake_string(3)))
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, '3'))

@@ -334,28 +334,18 @@ class RobotState:
 
     Attributes
     ----------
-    joint_positions : vector
-        The positions of the robot joints in degrees, obtained from legacy messages.
-    end_effector_pose : vector
-        The end effector pose in [x, y, z, alpha, beta, gamma] (mm and degrees), from legacy messages.
-
-    joint_positions_ts : TimestampedData
-        The positions of the robot joints in degrees, obtained from legacy messages, with timestamp.
-    end_effector_pose_ts : TimestampedData
-        The end effector pose in [x, y, z, alpha, beta, gamma] (mm and degrees), from legacy messages, with timestamp.
-
-    nc_joint_positions : TimestampedData
+    target_joint_positions : TimestampedData
         Controller desired joint positions in degrees [theta_1...6], includes timestamp.
-    nc_end_effector_pose : TimestampedData
+    target_end_effector_pose : TimestampedData
         Controller desired end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
 
-    nc_joint_velocity : TimestampedData
+    target_joint_velocity : TimestampedData
         Controller desired joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
-    nc_end_effector_velocity : TimestampedData
+    target_end_effector_velocity : TimestampedData
         Controller desired end effector velocity in mm/s and degrees/s, includes timestamp.
-    nc_joint_configurations : TimestampedData
+    target_joint_configurations : TimestampedData
         Controller joint configuration that corresponds to desired joint positions.
-    nc_last_joint_turn : TimestampedData
+    target_last_joint_turn : TimestampedData
         Controller last joint turn number that corresponds to desired joint positions.
 
     drive_joint_positions : TimestampedData
@@ -395,20 +385,14 @@ class RobotState:
 
     """
     def __init__(self, num_joints):
-        self.joint_positions = [0] * num_joints  # degrees
-        self.end_effector_pose = [0] * num_joints  # mm and degrees
+        self.target_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+        self.target_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
 
-        self.joint_positions_ts = TimestampedData.zeros(num_joints)  # degrees
-        self.end_effector_pose_ts = TimestampedData.zeros(6)  # mm and degrees
+        self.target_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
+        self.target_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
 
-        self.nc_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.nc_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
-
-        self.nc_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.nc_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
-
-        self.nc_joint_configurations = TimestampedData.zeros(3)
-        self.nc_last_joint_turn = TimestampedData.zeros(1)
+        self.target_joint_configurations = TimestampedData.zeros(3)
+        self.target_last_joint_turn = TimestampedData.zeros(1)
 
         self.drive_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
         self.drive_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
@@ -1392,6 +1376,10 @@ class Robot:
         """Handle messages from the monitoring port of the robot.
 
         """
+        # Variables to hold joint positions and poses while waiting for timestamp.
+        joint_positions = None
+        end_effector_pose = None
+
         while True:
             # Wait for a message in the queue.
             response = self._monitor_rx_queue.get(block=True)
@@ -1409,12 +1397,16 @@ class Robot:
             with self._main_lock:
 
                 if response.id == MX_ST_GET_JOINTS:
-                    self._robot_state.joint_positions = string_to_floats(response.data)
-                    self._robot_events.on_joints_updated.set()
+                    if self._robot_info.rt_message_compatible:
+                        joint_positions = string_to_floats(response.data)
+                    else:
+                        self._robot_state.target_joint_positions = TimestampedData(0, string_to_floats(response.data))
 
                 elif response.id == MX_ST_GET_POSE:
-                    self._robot_state.end_effector_pose = string_to_floats(response.data)
-                    self._robot_events.on_pose_updated.set()
+                    if self._robot_info.rt_message_compatible:
+                        end_effector_pose = string_to_floats(response.data)
+                    else:
+                        self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
 
                 elif response.id == MX_ST_GET_STATUS_ROBOT:
                     self._handle_robot_status_response(response)
@@ -1422,18 +1414,18 @@ class Robot:
                     self._callback_queue.put('on_status_updated')
 
                 elif response.id == MX_ST_RT_NC_JOINT_POS:
-                    self._robot_state.nc_joint_positions.update_from_csv(response.data)
+                    self._robot_state.target_joint_positions.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CART_POS:
-                    self._robot_state.nc_end_effector_pose.update_from_csv(response.data)
+                    self._robot_state.target_end_effector_pose.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_JOINT_VEL:
-                    self._robot_state.nc_joint_velocity.update_from_csv(response.data)
+                    self._robot_state.target_joint_velocity.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CART_VEL:
-                    self._robot_state.nc_end_effector_velocity.update_from_csv(response.data)
+                    self._robot_state.target_end_effector_velocity.update_from_csv(response.data)
 
                 elif response.id == MX_ST_RT_NC_CONF:
-                    self._robot_state.nc_joint_configurations.update_from_csv(response.data)
+                    self._robot_state.target_joint_configurations.update_from_csv(response.data)
                 elif response.id == MX_ST_RT_NC_CONF_TURN:
-                    self._robot_state.nc_last_joint_turn.update_from_csv(response.data)
+                    self._robot_state.target_last_joint_turn.update_from_csv(response.data)
 
                 elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
                     self._robot_state.drive_joint_positions.update_from_csv(response.data)
@@ -1463,9 +1455,12 @@ class Robot:
                     if not self._robot_info.rt_message_compatible:
                         self._robot_info.rt_message_compatible = True
                     timestamp = float(response.data)
-                    self._robot_state.joint_positions_ts.update_from_data(timestamp, self._robot_state.joint_positions)
-                    self._robot_state.end_effector_pose_ts.update_from_data(timestamp,
-                                                                            self._robot_state.end_effector_pose)
+                    if joint_positions:
+                        self._robot_state.target_joint_positions.update_from_data(timestamp, joint_positions)
+                        joint_positions = None
+                    if end_effector_pose:
+                        self._robot_state.target_end_effector_pose.update_from_data(timestamp, end_effector_pose)
+                        end_effector_pose = None
 
     def _command_response_handler(self):
         """Handle received messages on the command socket.
@@ -1483,21 +1478,19 @@ class Robot:
                 self._callback_queue.put('on_command_message', response)
 
                 if response.id == MX_ST_GET_JOINTS:
-                    self._robot_state.joint_positions = string_to_floats(response.data)
+                    self._robot_state.target_joint_positions = TimestampedData(0, string_to_floats(response.data))
                     self._robot_events.on_joints_updated.set()
 
                 elif response.id == MX_ST_GET_POSE:
-                    self._robot_state.end_effector_pose = string_to_floats(response.data)
+                    self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
                     self._robot_events.on_pose_updated.set()
 
                 elif response.id == MX_ST_RT_NC_JOINT_POS:
-                    self._robot_state.joint_positions_ts.update_from_csv(response.data)
-                    self._robot_state.nc_joint_positions.update_from_csv(response.data)
+                    self._robot_state.target_joint_positions.update_from_csv(response.data)
                     self._robot_events.on_joints_updated.set()
 
                 elif response.id == MX_ST_RT_NC_CART_POS:
-                    self._robot_state.end_effector_pose_ts.update_from_csv(response.data)
-                    self._robot_state.nc_end_effector_pose.update_from_csv(response.data)
+                    self._robot_state.target_end_effector_pose.update_from_csv(response.data)
                     self._robot_events.on_pose_updated.set()
 
                 elif response.id == MX_ST_CLEAR_MOTION:
@@ -2598,19 +2591,13 @@ class Robot:
                 raise TimeoutError
 
         with self._main_lock:
-            # If RT messages are not available, we cannot provide the timestamp.
-            if not self._robot_info.rt_message_compatible:
-                if include_timestamp:
+            if include_timestamp:
+                if not self._robot_info.rt_message_compatible:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_state.joint_positions)
+                    return copy.deepcopy(self._robot_state.target_joint_positions)
 
-            # RT message are available.
-            else:
-                if include_timestamp:
-                    return copy.deepcopy(self._robot_state.joint_positions_ts)
-                else:
-                    return copy.deepcopy(self._robot_state.joint_positions_ts.data)
+            return copy.deepcopy(self._robot_state.target_joint_positions.data)
 
     @disconnect_on_exception
     def GetPose(self, include_timestamp=False, synchronous_update=False, timeout=None):
@@ -2646,19 +2633,13 @@ class Robot:
                 raise TimeoutError
 
         with self._main_lock:
-            # If RT messages are not available, we cannot provide the timestamp.
-            if not self._robot_info.rt_message_compatible:
-                if include_timestamp:
+            if include_timestamp:
+                if not self._robot_info.rt_message_compatible:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_state.end_effector_pose)
+                    return copy.deepcopy(self._robot_state.target_end_effector_pose)
 
-            # RT message are available.
-            else:
-                if include_timestamp:
-                    return copy.deepcopy(self._robot_state.end_effector_pose_ts)
-                else:
-                    return copy.deepcopy(self._robot_state.end_effector_pose_ts.data)
+            return copy.deepcopy(self._robot_state.target_end_effector_pose.data)
 
     @disconnect_on_exception
     def SetMonitoringInterval(self, t):
