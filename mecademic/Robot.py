@@ -390,8 +390,6 @@ class RobotState:
         True if motion is currently paused.
     end_of_block_status : boolean
         True if robot is not moving and motion queue is empty.
-    end_of_movement_status : boolean
-        True if robot is idle.
     cmd_pending_count : int
         Number of commands pending in the robot's motion queue.
     configuration : array
@@ -437,7 +435,6 @@ class RobotState:
         self.error_status = False
         self.pause_motion_status = False
         self.end_of_block_status = False
-        self.end_of_movement_status = False
 
         self.cmd_pending_count = 0
         self.configuration = [0] * 3
@@ -1636,8 +1633,6 @@ class Robot:
             else:
                 self._robot_events.on_end_of_block.clear()
             self._robot_state.end_of_block_status = status_flags[5]
-
-        self._robot_state.end_of_movement_status = status_flags[6]
 
     def _handle_checkpoint_response(self, response):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.
