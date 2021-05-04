@@ -390,8 +390,6 @@ class RobotState:
         True if motion is currently paused.
     end_of_block_status : boolean
         True if robot is not moving and motion queue is empty.
-    cmd_pending_count : int
-        Number of commands pending in the robot's motion queue.
     configuration : array
         Current configuration of the robot.
 
@@ -436,7 +434,6 @@ class RobotState:
         self.pause_motion_status = False
         self.end_of_block_status = False
 
-        self.cmd_pending_count = 0
         self.configuration = [0] * 3
 
 
@@ -477,8 +474,6 @@ class RobotEvents:
         Set if robot is not in sim mode.
     on_conf_updated : event
         Set if robot configuration has been updated.
-    on_cmd_pending_count_updated : event
-        Set if robot number of pending commands has been updated.
     on_joints_updated : event
         Set if joint angles has been updated.
     on_pose_updated : event
@@ -517,7 +512,6 @@ class RobotEvents:
         self.on_deactivate_sim = InterruptableEvent()
 
         self.on_conf_updated = InterruptableEvent()
-        self.on_cmd_pending_count_updated = InterruptableEvent()
         self.on_joints_updated = InterruptableEvent()
         self.on_pose_updated = InterruptableEvent()
 
@@ -537,7 +531,6 @@ class RobotEvents:
 
         self.on_status_updated.set()
         self.on_conf_updated.set()
-        self.on_cmd_pending_count_updated.set()
         self.on_joints_updated.set()
         self.on_pose_updated.set()
         self.on_brakes_activated.set()
@@ -1533,10 +1526,6 @@ class Robot:
                         self._robot_events.on_p_stop_reset.set()
                         self._callback_queue.put('on_p_stop_reset')
 
-                elif response.id == MX_ST_GET_CMD_PENDING_COUNT:
-                    self._robot_state.cmd_pending_count = int(response.data)
-                    self._robot_events.on_cmd_pending_count_updated.set()
-
                 elif response.id == MX_ST_GET_CONF:
                     self._robot_state.configuration = string_to_floats(response.data)
                     self._robot_events.on_conf_updated.set()
@@ -1784,7 +1773,6 @@ class Robot:
 
             self._robot_events.on_status_updated.set()
             self._robot_events.on_conf_updated.set()
-            self._robot_events.on_cmd_pending_count_updated.set()
             self._robot_events.on_joints_updated.set()
             self._robot_events.on_pose_updated.set()
 
@@ -2719,35 +2707,13 @@ class Robot:
             self._send_command('DeactivateSim')
 
     @disconnect_on_exception
-    def GetCmdPendingCount(self, synchronous_update=True, timeout=None):
-        """Gets the number of pending commands on the robot.
-
-        Returns
-        -------
-        integer
-            Number of pending events on the robot.
-
-        """
-        if synchronous_update:
-            with self._main_lock:
-                self._check_internal_states()
-                if self._robot_events.on_cmd_pending_count_updated.is_set():
-                    self._robot_events.on_cmd_pending_count_updated.clear()
-                    self._send_command('GetCmdPendingCount')
-
-            if not self._robot_events.on_cmd_pending_count_updated.wait(timeout=timeout):
-                raise TimeoutError
-
-        return self._robot_state.cmd_pending_count
-
-    @disconnect_on_exception
-    def GetConf(self, synchronous_update=True, timeout=None):
+    def GetConf(self, synchronous_update=False, timeout=None):
         """Get robot's current (physical) inverse-kinematics configuration.
 
         Returns
         -------
-        integer
-            Number of pending events on the robot.
+        list of ints
+            Configuration status of robot.
 
         """
         if synchronous_update:

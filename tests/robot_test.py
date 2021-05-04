@@ -681,19 +681,7 @@ def test_simple_gets():
     assert robot.GetPose(synchronous_update=True, timeout=1) == test_data
     fake_robot.join()
 
-    # Test GetCmdPendingCount.
-    expected_command = 'GetCmdPendingCount'
-    robot_response = mdr.Message(mdr.MX_ST_GET_CMD_PENDING_COUNT, '5')
-    fake_robot = threading.Thread(target=simple_response_handler,
-                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
-                                        robot_response))
-
-    fake_robot.start()
-
-    assert robot.GetCmdPendingCount(synchronous_update=True, timeout=1) == 5
-    fake_robot.join()
-
-    # Test GetCmdPendingCount.
+    # Test GetConf.
     expected_command = 'GetConf'
     robot_response = mdr.Message(mdr.MX_ST_GET_CONF, '1,-1,1')
     fake_robot = threading.Thread(target=simple_response_handler,
@@ -712,9 +700,6 @@ def test_simple_gets():
 
     with pytest.raises(TimeoutError):
         robot.GetPose(synchronous_update=True, timeout=0)
-
-    with pytest.raises(TimeoutError):
-        robot.GetCmdPendingCount(synchronous_update=True, timeout=0)
 
     with pytest.raises(TimeoutError):
         robot.GetConf(synchronous_update=True, timeout=0)
