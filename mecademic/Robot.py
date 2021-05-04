@@ -332,6 +332,10 @@ class RobotInfo:
 class RobotState:
     """Class for storing the internal state of a generic Mecademic robot.
 
+    Note that the recency and availability of the states which are not 'status fields' depends on the monitoring
+    interval and which monitoring events are enabled. Monitoring events can be configured using SetMonitoringInterval()
+    and SetRealTimeMonitoring().
+
     Attributes
     ----------
     target_joint_positions : TimestampedData
