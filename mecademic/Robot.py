@@ -1500,6 +1500,16 @@ class Robot:
                     self._robot_state.end_effector_pose = string_to_floats(response.data)
                     self._robot_events.on_pose_updated.set()
 
+                elif response.id == MX_ST_RT_NC_JOINT_POS:
+                    self._robot_state.joint_positions_ts.update_from_csv(response.data)
+                    self._robot_state.nc_joint_positions.update_from_csv(response.data)
+                    self._robot_events.on_joints_updated.set()
+
+                elif response.id == MX_ST_RT_NC_CART_POS:
+                    self._robot_state.end_effector_pose_ts.update_from_csv(response.data)
+                    self._robot_state.nc_end_effector_pose.update_from_csv(response.data)
+                    self._robot_events.on_pose_updated.set()
+
                 elif response.id == MX_ST_CLEAR_MOTION:
                     if self._clear_motion_requests <= 1:
                         self._clear_motion_requests = 0

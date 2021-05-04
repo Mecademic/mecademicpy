@@ -791,7 +791,13 @@ def test_monitor_mode():
     robot.Disconnect()
 
 
-def test_legacy_and_realtime_gets():
+def test_gets_with_timestamp():
+    def fake_data(seed, length=6):
+        return [seed] * length
+
+    def fake_string(seed, length=6):
+        return ','.join([str(x) for x in fake_data(seed, length)])
+
     robot = mdr.Robot()
     assert robot is not None
 
@@ -801,12 +807,13 @@ def test_legacy_and_realtime_gets():
     assert robot.WaitConnected(timeout=0)
 
     # Test legacy messages:
-    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, '1, 1, 1, 1, 1, 1'))
-    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, '1, 1, 1, 1, 1, 1'))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(1)))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, fake_string(1)))
 
     # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdr.TERMINATE)
     robot._monitor_handler_thread.join(timeout=5)
+    robot._initialize_monitoring_connection()
 
     # Without RT messages, enabling 'include_timestamp' should raise exception.
     with pytest.raises(mdr.InvalidStateError):
@@ -814,30 +821,74 @@ def test_legacy_and_realtime_gets():
     with pytest.raises(mdr.InvalidStateError):
         robot.GetPose(include_timestamp=True)
 
-    expected_response = [1, 1, 1, 1, 1, 1]
-    robot.GetJoints(include_timestamp=False) == expected_response
-    robot.GetPose(include_timestamp=False) == expected_response
+    robot.GetJoints(include_timestamp=False) == fake_data(1)
+    robot.GetPose(include_timestamp=False) == fake_data(1)
 
     assert not robot.GetRobotInfo().rt_message_compatible
 
-    # assert robot._command_tx_queue.get() == 'GetJoints'
-    # assert robot._command_tx_queue.get() == 'GetPose'
+    # Test synchronous gets without RT messages.
+    expected_command = 'GetJoints'
+    robot_response = mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(2))
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    assert robot.GetJoints(synchronous_update=True, timeout=1) == fake_data(2)
+    fake_robot.join()
+
+    expected_command = 'GetPose'
+    robot_response = mdr.Message(mdr.MX_ST_GET_POSE, fake_string(2))
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    assert robot.GetPose(synchronous_update=True, timeout=1) == fake_data(2)
+    fake_robot.join()
 
     # Test RT messages compatible:
-    robot._initialize_monitoring_connection()
-    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, '2, 2, 2, 2, 2, 2'))
-    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, '2, 2, 2, 2, 2, 2'))
-    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, '2'))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(3)))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, fake_string(3)))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, '3'))
 
     # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdr.TERMINATE)
     robot._monitor_handler_thread.join(timeout=5)
+    robot._initialize_monitoring_connection()
 
-    expected_response = mdr.TimestampedData(2, [2, 2, 2, 2, 2, 2])
+    expected_response = mdr.TimestampedData(3, fake_data(3))
 
     assert robot.GetJoints(include_timestamp=True) == expected_response
     assert robot.GetPose(include_timestamp=True) == expected_response
 
     assert robot.GetRobotInfo().rt_message_compatible
+
+    # Test synchronous gets with RT messages.
+    expected_command = 'GetRtJointPos'
+    robot_response = mdr.Message(mdr.MX_ST_RT_NC_JOINT_POS, fake_string(4, 7))
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    expected_response = mdr.TimestampedData(4, fake_data(4))
+    assert robot.GetJoints(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
+    fake_robot.join()
+
+    expected_command = 'GetRtCartPos'
+    robot_response = mdr.Message(mdr.MX_ST_RT_NC_CART_POS, fake_string(4, 7))
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    expected_response = mdr.TimestampedData(4, fake_data(4))
+    assert robot.GetPose(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
+    fake_robot.join()
 
     robot.Disconnect()
