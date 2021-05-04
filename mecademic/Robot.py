@@ -1400,71 +1400,27 @@ class Robot:
 
             with self._main_lock:
 
-                if response.id == MX_ST_GET_JOINTS:
-                    if self._robot_info.rt_message_compatible:
-                        joint_positions = string_to_floats(response.data)
-                    else:
-                        self._robot_state.target_joint_positions = TimestampedData(0, string_to_floats(response.data))
+                # Temporarily save joints and pose if rt messages will be availble to add timestamps.
+                if response.id == MX_ST_GET_JOINTS and self._robot_info.rt_message_compatible:
+                    joint_positions = string_to_floats(response.data)
+                if response.id == MX_ST_GET_POSE and self._robot_info.rt_message_compatible:
+                    end_effector_pose = string_to_floats(response.data)
 
-                elif response.id == MX_ST_GET_POSE:
-                    if self._robot_info.rt_message_compatible:
-                        end_effector_pose = string_to_floats(response.data)
-                    else:
-                        self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
-
-                elif response.id == MX_ST_GET_STATUS_ROBOT:
-                    self._handle_robot_status_response(response)
-                    self._robot_events.on_status_updated.set()
-                    self._callback_queue.put('on_status_updated')
-
-                elif response.id == MX_ST_RT_NC_JOINT_POS:
-                    self._robot_state.target_joint_positions.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_CART_POS:
-                    self._robot_state.target_end_effector_pose.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_JOINT_VEL:
-                    self._robot_state.target_joint_velocity.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_CART_VEL:
-                    self._robot_state.target_end_effector_velocity.update_from_csv(response.data)
-
-                elif response.id == MX_ST_RT_NC_CONF:
-                    self._robot_state.target_joint_configurations.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_NC_CONF_TURN:
-                    self._robot_state.target_last_joint_turn.update_from_csv(response.data)
-
-                elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
-                    self._robot_state.drive_joint_positions.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_CART_POS:
-                    self._robot_state.drive_end_effector_pose.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
-                    self._robot_state.drive_joint_velocity.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
-                    self._robot_state.drive_joint_torque_ratio.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_CART_VEL:
-                    self._robot_state.drive_end_effector_velocity.update_from_csv(response.data)
-
-                elif response.id == MX_ST_RT_DRIVE_CONF:
-                    self._robot_state.drive_joint_configurations.update_from_csv(response.data)
-                elif response.id == MX_ST_RT_DRIVE_CONF_TURN:
-                    self._robot_state.drive_last_joint_turn.update_from_csv(response.data)
-
-                elif response.id == MX_ST_RT_ACCELEROMETER:
-                    # The data is stored as [timestamp, index, {measurements...}]
-                    timestamp, index, *measurements = string_to_floats(response.data)
-                    # Record accelerometer measurement only if newer.
-                    if (index not in self._robot_state.accelerometer
-                            or timestamp > self._robot_state.accelerometer[index].timestamp):
-                        self._robot_state.accelerometer[index] = TimestampedData(timestamp, measurements)
-
-                elif response.id == MX_ST_RT_CYCLE_END:
+                if response.id == MX_ST_RT_CYCLE_END:
                     if not self._robot_info.rt_message_compatible:
                         self._robot_info.rt_message_compatible = True
                     timestamp = float(response.data)
+
+                    # Update the legacy joint and pose messages with timestamps.
                     if joint_positions:
                         self._robot_state.target_joint_positions.update_from_data(timestamp, joint_positions)
                         joint_positions = None
                     if end_effector_pose:
                         self._robot_state.target_end_effector_pose.update_from_data(timestamp, end_effector_pose)
                         end_effector_pose = None
+
+                else:
+                    self._handle_common_messages(response, is_command_response=False)
 
     def _command_response_handler(self):
         """Handle received messages on the command socket.
@@ -1478,24 +1434,12 @@ class Robot:
             if response == TERMINATE:
                 return
 
+            self._callback_queue.put('on_command_message', response)
+
             with self._main_lock:
-                self._callback_queue.put('on_command_message', response)
 
-                if response.id == MX_ST_GET_JOINTS:
-                    self._robot_state.target_joint_positions = TimestampedData(0, string_to_floats(response.data))
-                    self._robot_events.on_joints_updated.set()
-
-                elif response.id == MX_ST_GET_POSE:
-                    self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
-                    self._robot_events.on_pose_updated.set()
-
-                elif response.id == MX_ST_RT_NC_JOINT_POS:
-                    self._robot_state.target_joint_positions.update_from_csv(response.data)
-                    self._robot_events.on_joints_updated.set()
-
-                elif response.id == MX_ST_RT_NC_CART_POS:
-                    self._robot_state.target_end_effector_pose.update_from_csv(response.data)
-                    self._robot_events.on_pose_updated.set()
+                if response.id == MX_ST_CHECKPOINT_REACHED:
+                    self._handle_checkpoint_response(response)
 
                 elif response.id == MX_ST_CLEAR_MOTION:
                     if self._clear_motion_requests <= 1:
@@ -1504,14 +1448,6 @@ class Robot:
                         self._callback_queue.put('on_motion_cleared')
                     else:
                         self._clear_motion_requests -= 1
-
-                elif response.id == MX_ST_GET_STATUS_ROBOT:
-                    self._handle_robot_status_response(response)
-                    self._robot_events.on_status_activated.set()
-                    self._callback_queue.put('on_status_updated')
-
-                elif response.id == MX_ST_CHECKPOINT_REACHED:
-                    self._handle_checkpoint_response(response)
 
                 elif response.id == MX_ST_PSTOP:
                     if bool(int(response.data)):
@@ -1541,6 +1477,79 @@ class Robot:
 
                 elif response.id == MX_ST_NO_OFFLINE_SAVED:
                     self._robot_events.on_offline_program_started.abort()
+
+                else:
+                    self._handle_common_messages(response, is_command_response=True)
+
+    def _handle_common_messages(self, response, is_command_response=False):
+        """Handle response messages which are received on the command and monitor port, and are processed the same way.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        if response.id == MX_ST_GET_STATUS_ROBOT:
+            self._handle_robot_status_response(response)
+
+        elif response.id == MX_ST_GET_JOINTS and not self._robot_info.rt_message_compatible:
+            self._robot_state.target_joint_positions = TimestampedData(0, string_to_floats(response.data))
+            if is_command_response:
+                self._robot_events.on_joints_updated.set()
+
+        elif response.id == MX_ST_GET_POSE and not self._robot_info.rt_message_compatible:
+            self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
+            if is_command_response:
+                self._robot_events.on_pose_updated.set()
+
+        elif response.id == MX_ST_RT_NC_JOINT_POS:
+            self._robot_state.target_joint_positions.update_from_csv(response.data)
+            if is_command_response:
+                self._robot_events.on_joints_updated.set()
+
+        elif response.id == MX_ST_RT_NC_CART_POS:
+            self._robot_state.target_end_effector_pose.update_from_csv(response.data)
+            if is_command_response:
+                self._robot_events.on_pose_updated.set()
+
+        elif response.id == MX_ST_RT_NC_JOINT_POS:
+            self._robot_state.target_joint_positions.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_NC_CART_POS:
+            self._robot_state.target_end_effector_pose.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_NC_JOINT_VEL:
+            self._robot_state.target_joint_velocity.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_NC_CART_VEL:
+            self._robot_state.target_end_effector_velocity.update_from_csv(response.data)
+
+        elif response.id == MX_ST_RT_NC_CONF:
+            self._robot_state.target_joint_configurations.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_NC_CONF_TURN:
+            self._robot_state.target_last_joint_turn.update_from_csv(response.data)
+
+        elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
+            self._robot_state.drive_joint_positions.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_DRIVE_CART_POS:
+            self._robot_state.drive_end_effector_pose.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
+            self._robot_state.drive_joint_velocity.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
+            self._robot_state.drive_joint_torque_ratio.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_DRIVE_CART_VEL:
+            self._robot_state.drive_end_effector_velocity.update_from_csv(response.data)
+
+        elif response.id == MX_ST_RT_DRIVE_CONF:
+            self._robot_state.drive_joint_configurations.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_DRIVE_CONF_TURN:
+            self._robot_state.drive_last_joint_turn.update_from_csv(response.data)
+
+        elif response.id == MX_ST_RT_ACCELEROMETER:
+            # The data is stored as [timestamp, index, {measurements...}]
+            timestamp, index, *measurements = string_to_floats(response.data)
+            # Record accelerometer measurement only if newer.
+            if (index not in self._robot_state.accelerometer
+                    or timestamp > self._robot_state.accelerometer[index].timestamp):
+                self._robot_state.accelerometer[index] = TimestampedData(timestamp, measurements)
 
     def _handle_robot_status_response(self, response):
         """Parse robot status response and update status fields and events.
@@ -1619,6 +1628,9 @@ class Robot:
             else:
                 self._robot_events.on_end_of_block.clear()
             self._robot_state.end_of_block_status = status_flags[5]
+
+        self._robot_events.on_status_updated.set()
+        self._callback_queue.put('on_status_updated')
 
     def _handle_checkpoint_response(self, response):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.
