@@ -293,7 +293,7 @@ class RobotInfo:
         self.fw_major_rev = fw_major_rev
         self.fw_minor_rev = fw_minor_rev
         self.fw_patch_num = fw_patch_num
-        self.rt_message_compatible = False
+        self.rt_message_capable = False
 
         if self.model == 'Meca500':
             self.num_joints = 6
@@ -835,6 +835,7 @@ class Robot:
         self._command_rx_queue = queue.Queue()
         self._command_tx_queue = queue.Queue()
         self._monitor_rx_queue = queue.Queue()
+        self._custom_response_queue = None
 
         self._user_checkpoints = dict()
         self._internal_checkpoints = dict()
@@ -1401,14 +1402,14 @@ class Robot:
             with self._main_lock:
 
                 # Temporarily save joints and pose if rt messages will be availble to add timestamps.
-                if response.id == MX_ST_GET_JOINTS and self._robot_info.rt_message_compatible:
+                if response.id == MX_ST_GET_JOINTS and self._robot_info.rt_message_capable:
                     joint_positions = string_to_floats(response.data)
-                if response.id == MX_ST_GET_POSE and self._robot_info.rt_message_compatible:
+                if response.id == MX_ST_GET_POSE and self._robot_info.rt_message_capable:
                     end_effector_pose = string_to_floats(response.data)
 
                 if response.id == MX_ST_RT_CYCLE_END:
-                    if not self._robot_info.rt_message_compatible:
-                        self._robot_info.rt_message_compatible = True
+                    if not self._robot_info.rt_message_capable:
+                        self._robot_info.rt_message_capable = True
                     timestamp = float(response.data)
 
                     # Update the legacy joint and pose messages with timestamps.
@@ -1435,6 +1436,9 @@ class Robot:
                 return
 
             self._callback_queue.put('on_command_message', response)
+
+            if self._custom_response_queue:
+                self._custom_response_queue.put(response)
 
             with self._main_lock:
 
@@ -1493,12 +1497,13 @@ class Robot:
         if response.id == MX_ST_GET_STATUS_ROBOT:
             self._handle_robot_status_response(response)
 
-        elif response.id == MX_ST_GET_JOINTS and not self._robot_info.rt_message_compatible:
+        # Only update using legacy messages if robot is not capable of rt messages.
+        elif response.id == MX_ST_GET_JOINTS and not self._robot_info.rt_message_capable:
             self._robot_state.target_joint_positions = TimestampedData(0, string_to_floats(response.data))
             if is_command_response:
                 self._robot_events.on_joints_updated.set()
 
-        elif response.id == MX_ST_GET_POSE and not self._robot_info.rt_message_compatible:
+        elif response.id == MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
             self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
             if is_command_response:
                 self._robot_events.on_pose_updated.set()
@@ -2531,7 +2536,7 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def SendCustomCommand(self, command):
+    def SendCustomCommand(self, command, wait_for_response=False, timeout=None):
         """Send custom command to robot.
 
         Parameters
@@ -2542,7 +2547,16 @@ class Robot:
         """
         with self._main_lock:
             self._check_internal_states()
+
+            if wait_for_response:
+                self._custom_response_queue = queue.Queue()
+
             self._send_command(command)
+
+            if wait_for_response:
+                response = self._custom_response_queue.get(block=True, timeout=timeout)
+                self._custom_response_queue = None
+                return response
 
     @disconnect_on_exception
     def StartOfflineProgram(self, n, timeout=None):
@@ -2598,7 +2612,7 @@ class Robot:
                 self._check_internal_states()
                 if self._robot_events.on_joints_updated.is_set():
                     self._robot_events.on_joints_updated.clear()
-                    if self._robot_info.rt_message_compatible:
+                    if self._robot_info.rt_message_capable:
                         self._send_command('GetRtJointPos')
                     else:
                         self._send_command('GetJoints')
@@ -2608,7 +2622,7 @@ class Robot:
 
         with self._main_lock:
             if include_timestamp:
-                if not self._robot_info.rt_message_compatible:
+                if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
                     return copy.deepcopy(self._robot_state.target_joint_positions)
@@ -2640,7 +2654,7 @@ class Robot:
                 self._check_internal_states()
                 if self._robot_events.on_pose_updated.is_set():
                     self._robot_events.on_pose_updated.clear()
-                    if self._robot_info.rt_message_compatible:
+                    if self._robot_info.rt_message_capable:
                         self._send_command('GetRtCartPos')
                     else:
                         self._send_command('GetPose')
@@ -2650,7 +2664,7 @@ class Robot:
 
         with self._main_lock:
             if include_timestamp:
-                if not self._robot_info.rt_message_compatible:
+                if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
                     return copy.deepcopy(self._robot_state.target_end_effector_pose)

@@ -803,7 +803,7 @@ def test_gets_with_timestamp():
     robot.GetJoints(include_timestamp=False) == fake_data(1)
     robot.GetPose(include_timestamp=False) == fake_data(1)
 
-    assert not robot.GetRobotInfo().rt_message_compatible
+    assert not robot.GetRobotInfo().rt_message_capable
 
     # Test synchronous gets without RT messages.
     expected_command = 'GetJoints'
@@ -844,7 +844,7 @@ def test_gets_with_timestamp():
     assert robot.GetJoints(include_timestamp=True) == expected_response
     assert robot.GetPose(include_timestamp=True) == expected_response
 
-    assert robot.GetRobotInfo().rt_message_compatible
+    assert robot.GetRobotInfo().rt_message_capable
 
     # Test synchronous gets with RT messages.
     expected_command = 'GetRtJointPos'
@@ -870,5 +870,27 @@ def test_gets_with_timestamp():
     expected_response = mdr.TimestampedData(4, fake_data(4))
     assert robot.GetPose(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
     fake_robot.join()
+
+    robot.Disconnect()
+
+
+def test_custom_command():
+    robot = mdr.Robot()
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+
+    assert robot.WaitConnected(timeout=0)
+
+    expected_command = 'TestCommand'
+    robot_response = mdr.Message(8888, 'TestResponse')
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    assert robot.SendCustomCommand('TestCommand', wait_for_response=True, timeout=DEFAULT_TIMEOUT) == robot_response
 
     robot.Disconnect()
