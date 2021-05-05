@@ -678,6 +678,107 @@ class CallbackQueue():
         return self._queue.get(block=block, timeout=timeout)
 
 
+class CSVFileLogger:
+    """Class to handle logging robot state to file.
+
+    Attributes
+    ----------
+    file : file handle
+        File to be written to.
+    fields : list of strings
+        Fields to be logged.
+    command_queue : queue
+        Queue to store sent commands.
+    element_width : int
+        Each numerical element will have this width.
+
+    """
+    def __init__(self, robot_info, fields, robot_state, file_path=None):
+        """Initialize class.
+
+        Parameters
+        ----------
+        robot_info : RobotInfo
+            Contains robot information.
+        fields : list of strings
+            List of fields to be logged.
+        robot_state : RobotState
+            Contains state of robot.
+        file_path : string or None
+            If not provided, file will be saved in working directory.
+
+        """
+        # Add unique name to file path.
+        file_name = (f"{robot_info.model}_R{robot_info.revision}_"
+                     f"v{robot_info.fw_major_rev}_{robot_info.fw_minor_rev}_{robot_info.fw_patch_num}_"
+                     f"log_{time.strftime('%Y-%m-%d-%H-%M-%S')}.csv")
+
+        if file_path:
+            file_name = file_path + file_name
+
+        # Set attributes
+        self.file = open(file_name, 'w', newline='')
+        self.fields = fields
+        self.command_queue = queue.Queue()
+        self.element_width = 10
+
+        # Write robot information.
+        for attr in ['model', 'revision', 'fw_major_rev', 'fw_minor_rev', 'fw_patch_num']:
+            self.file.write(f'{attr}, {getattr(robot_info, attr)}\n')
+
+        self.file.write('\nLOGGED_DATA\n')
+
+        # Write fields to be logged.
+        self.file.write(f"{'timestamp':>15},")
+        for field in self.fields:
+            # Get number of elements in each field.
+            num_elements = len(getattr(robot_state, field).data)
+
+            # Add appropriate number of commas to align columns.
+            self.file.write(' ,' * (num_elements - 1))
+
+            # Calculate width of field given number of elements, accounting for commas.
+            width = (self.element_width - 1) * num_elements + 1
+            self.file.write(f'{field:>{width}},')
+        self.file.write('\n')
+
+    def write_fields(self, timestamp, robot_state):
+        """Write fields to file.
+
+        Parameters
+        ----------
+        timestamp : numeric
+            The timestamp of the current data.
+        robot_state : RobotState
+            This object contains the current robot state.
+
+        """
+        if self.file.closed:
+            return
+
+        # First write the timestamp
+        self.file.write(f'{timestamp:15},')
+
+        for field in self.fields:
+            # For each field, write each value with appropriate spacing.
+            self.file.write(','.join([f'{x:{self.element_width}}' for x in getattr(robot_state, field).data]))
+            self.file.write(',')
+
+        # End line with newline.
+        self.file.write('\n')
+
+    def end_log(self, trim_last_command=False):
+        """Write all accumulated sent commands and close file.
+
+        """
+        # Write all sent commands.
+        self.file.write('\nSENT_COMMANDS\n')
+        while not self.command_queue.empty():
+            self.file.write(f'{self.command_queue.get()}\n')
+
+        self.file.close()
+
+
 def disconnect_on_exception(func):
     """Decorator to call disconnect if an exception is raised. Needs to be declared outside of class.
 
@@ -812,6 +913,8 @@ class Robot:
         self._robot_state = None
         self._robot_events = RobotEvents()
 
+        self._file_logger = None
+
         self._reset_disconnect_attributes()
 
         self._enable_synchronous_mode = None
@@ -886,7 +989,7 @@ class Robot:
             try:
                 robot_socket.setblocking(True)
                 raw_responses = robot_socket.recv(1024)
-            except ConnectionAbortedError:
+            except (ConnectionAbortedError, BrokenPipeError):
                 return
 
             # Socket has been closed.
@@ -1084,6 +1187,10 @@ class Robot:
 
         # Put command into tx queue.
         self._command_tx_queue.put(command)
+
+        # If logging is enabled, send command to logger.
+        if self._file_logger:
+            self._file_logger.command_queue.put(command)
 
     def _launch_thread(self, *, target, args):
         """Establish the threads responsible for reading/sending messages using the sockets.
@@ -1419,6 +1526,10 @@ class Robot:
                     if end_effector_pose:
                         self._robot_state.target_end_effector_pose.update_from_data(timestamp, end_effector_pose)
                         end_effector_pose = None
+
+                    # If logging is active, log the current state.
+                    if self._file_logger != None:
+                        self._file_logger.write_fields(timestamp, self._robot_state)
 
                 else:
                     self._handle_common_messages(response, is_command_response=False)
@@ -2487,7 +2598,11 @@ class Robot:
             return False
         end_time = time.time()
 
-        remaining_timeout = timeout - (end_time - start_time)
+        if timeout:
+            remaining_timeout = timeout - (end_time - start_time)
+        else:
+            remaining_timeout = None
+
         return self._robot_events.on_end_of_block.wait(timeout=remaining_timeout)
 
     @disconnect_on_exception
@@ -2788,3 +2903,46 @@ class Robot:
         """
         with self._main_lock:
             return copy.deepcopy(self._robot_state)
+
+    def StartLogging(self, file_path=None, wait_idle=True, timeout=None):
+        """Start logging robot state to file.
+
+        Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
+        By default, will wait until robot is idle before logging.
+
+        Parameters
+        ----------
+        filename : string or None
+            File path to saved log.
+
+        wait_idle : bool
+            If true, will wait for robot to be idle before starting logging.
+
+        timeout : float or None
+            Max time in seconds to wait for idle before logging.
+
+        """
+        if self._file_logger != None:
+            raise InvalidStateError('Another file logging operation is in progress.')
+
+        if wait_idle:
+            self.WaitIdle(timeout=timeout)
+
+        self._file_logger = CSVFileLogger(self._robot_info, ['target_joint_positions', 'target_end_effector_pose'],
+                                          self._robot_state, file_path)
+
+    def StopLogging(self, wait_idle=True, timeout=None):
+        """Stop logging robot state to file.
+
+        wait_idle : bool
+            If true, will wait for robot to be idle before ending logging.
+
+        timeout : float or None
+            Max time in seconds to wait for idle before ending logging.
+
+        """
+        if wait_idle:
+            self.WaitIdle(timeout=timeout)
+
+        self._file_logger.end_log(trim_last_command=wait_idle)
+        self._file_logger = None

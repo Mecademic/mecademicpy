@@ -834,6 +834,10 @@ def test_gets_with_timestamp():
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, fake_string(3)))
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, '3'))
 
+    # Ensure late messages are ignored.
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(1)))
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, fake_string(1)))
+
     # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdr.TERMINATE)
     robot._monitor_handler_thread.join(timeout=5)
