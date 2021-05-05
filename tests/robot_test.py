@@ -5,6 +5,7 @@ import os
 import socket
 import threading
 import queue
+import filecmp
 from functools import partial
 
 import pytest
@@ -896,5 +897,65 @@ def test_custom_command():
     fake_robot.start()
 
     assert robot.SendCustomCommand('TestCommand', wait_for_response=True, timeout=DEFAULT_TIMEOUT) == robot_response
+
+    robot.Disconnect()
+
+
+def test_file_logger(tmp_path):
+    def fake_data(seed, length=6):
+        return [seed] * length
+
+    def fake_string(seed, length=6):
+        return ','.join([str(x) for x in fake_data(seed, length)])
+
+    robot = mdr.Robot()
+    assert robot is not None
+
+    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
+    robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+
+    assert robot.WaitConnected(timeout=0)
+
+    robot._robot_info.rt_message_capable = True
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1'))
+
+    with robot.FileLogger(file_path=tmp_path, wait_idle=False, timeout=DEFAULT_TIMEOUT):
+        robot.MoveJoints(0, -60, 60, 0, 0, 0)
+        robot.MoveJoints(0, 0, 0, 0, 0, 0)
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(1)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, fake_string(2)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_JOINT_VEL, fake_string(3, 7)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CART_VEL, fake_string(4, 7)))
+
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CONF, fake_string(5, 4)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CONF_TURN, fake_string(6, 2)))
+
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_string(7, 7)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CART_POS, fake_string(8, 7)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_string(9, 7)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_string(10, 7)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_string(11, 7)))
+
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CONF, fake_string(12, 4)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CONF_TURN, fake_string(13, 2)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, '999'))
+
+        # Terminate queue and wait for thread to exit to ensure messages are processed.
+        robot._monitor_rx_queue.put(mdr.TERMINATE)
+        robot._monitor_handler_thread.join(timeout=5)
+        robot._initialize_monitoring_connection()
+
+    # Ensure one log file is created.
+    directory = os.listdir(tmp_path)
+    assert len(directory) == 1
+
+    log_file_name = directory[0]
+    assert log_file_name.startswith('Meca500_R3_v9_0_0')
+
+    log_file_path = os.path.join(tmp_path, log_file_name)
+    reference_file_path = os.path.join(os.path.dirname(__file__), 'log_file_reference.csv')
+
+    # Check that the logger output matches the reference file.
+    assert filecmp.cmp(log_file_path, reference_file_path)
 
     robot.Disconnect()

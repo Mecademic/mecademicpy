@@ -8,6 +8,8 @@ import queue
 import functools
 import re
 import copy
+import contextlib
+import os
 
 from .mx_robot_def import *
 
@@ -693,7 +695,7 @@ class CSVFileLogger:
         Each numerical element will have this width.
 
     """
-    def __init__(self, robot_info, fields, robot_state, file_path=None):
+    def __init__(self, robot_info, robot_state, fields=None, file_path=None):
         """Initialize class.
 
         Parameters
@@ -714,9 +716,16 @@ class CSVFileLogger:
                      f"log_{time.strftime('%Y-%m-%d-%H-%M-%S')}.csv")
 
         if file_path:
-            file_name = file_path + file_name
+            file_name = os.path.join(file_path, file_name)
 
-        # Set attributes
+        # If fields argument is None, log all compatible fields.
+        if fields == None:
+            fields = []
+            for attr in vars(robot_state):
+                if attr.startswith('target') or attr.startswith('drive'):
+                    fields.append(attr)
+
+        # Set attributes.
         self.file = open(file_name, 'w', newline='')
         self.fields = fields
         self.command_queue = queue.Queue()
@@ -729,17 +738,17 @@ class CSVFileLogger:
         self.file.write('\nLOGGED_DATA\n')
 
         # Write fields to be logged.
-        self.file.write(f"{'timestamp':>15},")
+        self.file.write(f"{'timestamp':15},")
         for field in self.fields:
             # Get number of elements in each field.
             num_elements = len(getattr(robot_state, field).data)
 
             # Add appropriate number of commas to align columns.
-            self.file.write(' ,' * (num_elements - 1))
+            commas = ',' * (num_elements - 1)
 
             # Calculate width of field given number of elements, accounting for commas.
-            width = (self.element_width - 1) * num_elements + 1
-            self.file.write(f'{field:>{width}},')
+            width = (self.element_width + 1) * num_elements - 1
+            self.file.write(f'{field + commas:{width}},')
         self.file.write('\n')
 
     def write_fields(self, timestamp, robot_state):
@@ -767,14 +776,19 @@ class CSVFileLogger:
         # End line with newline.
         self.file.write('\n')
 
-    def end_log(self, trim_last_command=False):
+    def end_log(self, ignore_checkpoints=True):
         """Write all accumulated sent commands and close file.
 
         """
         # Write all sent commands.
         self.file.write('\nSENT_COMMANDS\n')
         while not self.command_queue.empty():
-            self.file.write(f'{self.command_queue.get()}\n')
+            command = self.command_queue.get()
+
+            if ignore_checkpoints and command.startswith('SetCheckpoint'):
+                continue
+
+            self.file.write(f'"{command}"\n')
 
         self.file.close()
 
@@ -2904,7 +2918,7 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_state)
 
-    def StartLogging(self, file_path=None, wait_idle=True, timeout=None):
+    def StartLogging(self, file_path=None, fields=None, wait_idle=True, timeout=None):
         """Start logging robot state to file.
 
         Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
@@ -2912,8 +2926,11 @@ class Robot:
 
         Parameters
         ----------
-        filename : string or None
+        file_path : string or None
             File path to saved log.
+
+        fields : list of strings or None
+            List of fields to log. Taken from RobotState attributes. None means log all compatible fields.
 
         wait_idle : bool
             If true, will wait for robot to be idle before starting logging.
@@ -2925,15 +2942,19 @@ class Robot:
         if self._file_logger != None:
             raise InvalidStateError('Another file logging operation is in progress.')
 
+        if not self._robot_info.rt_message_capable:
+            raise InvalidStateError('Real-time logging not available on this robot or firmware.')
+
         if wait_idle:
             self.WaitIdle(timeout=timeout)
 
-        self._file_logger = CSVFileLogger(self._robot_info, ['target_joint_positions', 'target_end_effector_pose'],
-                                          self._robot_state, file_path)
+        self._file_logger = CSVFileLogger(self._robot_info, self._robot_state, fields, file_path)
 
-    def StopLogging(self, wait_idle=True, timeout=None):
+    def EndLogging(self, wait_idle=True, timeout=None):
         """Stop logging robot state to file.
 
+        Parameters
+        ----------
         wait_idle : bool
             If true, will wait for robot to be idle before ending logging.
 
@@ -2941,8 +2962,36 @@ class Robot:
             Max time in seconds to wait for idle before ending logging.
 
         """
+        if self._file_logger == None:
+            raise InvalidStateError('No existing logger to stop.')
+
         if wait_idle:
             self.WaitIdle(timeout=timeout)
 
-        self._file_logger.end_log(trim_last_command=wait_idle)
+        self._file_logger.end_log()
         self._file_logger = None
+
+    @contextlib.contextmanager
+    def FileLogger(self, file_path=None, fields=None, wait_idle=True, timeout=None):
+        """Contextmanager interface for file logger.
+
+        Parameters
+        ----------
+        file_path : string or None
+            File path to saved log.
+
+        fields : list of strings or None
+            List of fields to log. Taken from RobotState attributes. None means log all compatible fields.
+
+        wait_idle : bool
+            If true, will wait for robot to be idle before starting logging.
+
+        timeout : float or None
+            Max time in seconds to wait for idle before logging.
+
+        """
+        self.StartLogging(file_path=file_path, fields=fields, wait_idle=wait_idle, timeout=timeout)
+        try:
+            yield
+        finally:
+            self.EndLogging(wait_idle=wait_idle, timeout=timeout)
