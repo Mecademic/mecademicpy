@@ -142,7 +142,7 @@ def test_monitoring_connection():
         return mdr.Message(code, ','.join([str(x) for x in test_array]))
 
     # Use this as the seed array, add the response code to each element to guarantee uniqueness.
-    fake_array = [1, 2, 3, 4, 5, 6, 7]
+    fake_array = [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     robot = mdr.Robot()
     assert robot is not None
@@ -152,18 +152,18 @@ def test_monitoring_connection():
     robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     # Send monitor messages.
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_POS, fake_array))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CART_POS, fake_array))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_POS, fake_array[:7]))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CART_POS, fake_array[:7]))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array[:7]))
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CART_VEL, fake_array))
 
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CONF, fake_array[:4]))
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CONF_TURN, fake_array[:2]))
 
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_array))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_array))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array[:7]))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array[:7]))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_array[:7]))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_array[:7]))
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_array))
 
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CONF, fake_array[:4]))
@@ -177,18 +177,18 @@ def test_monitoring_connection():
     robot._monitor_handler_thread = None
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
-    assert robot._robot_state.target_joint_positions == make_test_data(mdr.MX_ST_RT_NC_JOINT_POS, fake_array)
-    assert robot._robot_state.target_end_effector_pose == make_test_data(mdr.MX_ST_RT_NC_CART_POS, fake_array)
-    assert robot._robot_state.target_joint_velocity == make_test_data(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array)
+    assert robot._robot_state.target_joint_positions == make_test_data(mdr.MX_ST_RT_NC_JOINT_POS, fake_array[:7])
+    assert robot._robot_state.target_end_effector_pose == make_test_data(mdr.MX_ST_RT_NC_CART_POS, fake_array[:7])
+    assert robot._robot_state.target_joint_velocity == make_test_data(mdr.MX_ST_RT_NC_JOINT_VEL, fake_array[:7])
     assert robot._robot_state.target_end_effector_velocity == make_test_data(mdr.MX_ST_RT_NC_CART_VEL, fake_array)
 
     assert robot._robot_state.target_joint_configurations == make_test_data(mdr.MX_ST_RT_NC_CONF, fake_array[:4])
     assert robot._robot_state.target_last_joint_turn == make_test_data(mdr.MX_ST_RT_NC_CONF_TURN, fake_array[:2])
 
-    assert robot._robot_state.drive_joint_positions == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array)
-    assert robot._robot_state.drive_end_effector_pose == make_test_data(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array)
-    assert robot._robot_state.drive_joint_velocity == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_array)
-    assert robot._robot_state.drive_joint_torque_ratio == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_array)
+    assert robot._robot_state.drive_joint_positions == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_array[:7])
+    assert robot._robot_state.drive_end_effector_pose == make_test_data(mdr.MX_ST_RT_DRIVE_CART_POS, fake_array[:7])
+    assert robot._robot_state.drive_joint_velocity == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_array[:7])
+    assert robot._robot_state.drive_joint_torque_ratio == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_array[:7])
     assert robot._robot_state.drive_end_effector_velocity == make_test_data(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_array)
 
     assert robot._robot_state.drive_joint_configurations == make_test_data(mdr.MX_ST_RT_DRIVE_CONF, fake_array[:4])
@@ -925,7 +925,7 @@ def test_file_logger(tmp_path):
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(1)))
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, fake_string(2)))
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_JOINT_VEL, fake_string(3, 7)))
-        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CART_VEL, fake_string(4, 7)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CART_VEL, fake_string(4, 9)))
 
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CONF, fake_string(5, 4)))
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CONF_TURN, fake_string(6, 2)))
@@ -934,7 +934,7 @@ def test_file_logger(tmp_path):
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CART_POS, fake_string(8, 7)))
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_string(9, 7)))
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_string(10, 7)))
-        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_string(11, 7)))
+        robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_string(11, 9)))
 
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CONF, fake_string(12, 4)))
         robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CONF_TURN, fake_string(13, 2)))

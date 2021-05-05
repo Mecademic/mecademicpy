@@ -348,7 +348,8 @@ class RobotState:
     target_joint_velocity : TimestampedData
         Controller desired joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
     target_end_effector_velocity : TimestampedData
-        Controller desired end effector velocity in mm/s and degrees/s, includes timestamp.
+        Controller desired end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
+        [linear_speed, linear_velocity vector, rotational_speed, angular_velocity vector]
     target_joint_configurations : TimestampedData
         Controller joint configuration that corresponds to desired joint positions.
     target_last_joint_turn : TimestampedData
@@ -364,7 +365,8 @@ class RobotState:
     drive_joint_torque_ratio : TimestampedData
         Drive-measured torque ratio as a percent of maximum [torque_1...6], includes timestamp.
     drive_end_effector_velocity : TimestampedData
-        Drive-measured end effector velocity in mm/s and degrees/s, includes timestamp.
+        Drive-measured end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
+        [linear_speed, linear_velocity vector, rotational_speed, angular_velocity vector]
 
     drive_joint_configurations : TimestampedData
         Controller joint configuration that corresponds to drives-measured joint positions.
@@ -395,7 +397,7 @@ class RobotState:
         self.target_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
 
         self.target_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.target_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
+        self.target_end_effector_velocity = TimestampedData.zeros(8)  # microseconds timestamp, mm/s and deg/s
 
         self.target_joint_configurations = TimestampedData.zeros(3)
         self.target_last_joint_turn = TimestampedData.zeros(1)
@@ -405,7 +407,7 @@ class RobotState:
 
         self.drive_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
         self.drive_joint_torque_ratio = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.drive_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
+        self.drive_end_effector_velocity = TimestampedData.zeros(8)  # microseconds timestamp, mm/s and deg/s
 
         self.drive_joint_configurations = TimestampedData.zeros(3)
         self.drive_last_joint_turn = TimestampedData.zeros(1)
@@ -1523,9 +1525,10 @@ class Robot:
             with self._main_lock:
 
                 # Temporarily save joints and pose if rt messages will be availble to add timestamps.
+                # Note that if robot platform isn't RT message capable, the update occurs in _handle_common_messages.
                 if response.id == MX_ST_GET_JOINTS and self._robot_info.rt_message_capable:
                     joint_positions = string_to_floats(response.data)
-                if response.id == MX_ST_GET_POSE and self._robot_info.rt_message_capable:
+                elif response.id == MX_ST_GET_POSE and self._robot_info.rt_message_capable:
                     end_effector_pose = string_to_floats(response.data)
 
                 if response.id == MX_ST_RT_CYCLE_END:

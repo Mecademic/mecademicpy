@@ -7,7 +7,11 @@ import mecademic.Robot as mdr
 robot = mdr.Robot()
 
 # CHECK THAT IP ADDRESS IS CORRECT! #
-robot.Connect(address='192.168.0.100')
+try:
+    robot.Connect(address='192.168.0.100')
+except mdr.CommunicationError:
+    print('Robot failed to connect. Is the IP address correct?')
+    raise
 
 try:
     # Send the commands to get the robot ready for operation.
@@ -40,9 +44,10 @@ try:
     robot.WaitIdle(60)
     print('Robot finished drawing square.', flush=True)
 
-except:
+except Exception as exception:
     # Attempt to clear error if robot is in error.
     if robot.GetRobotState().error_status:
+        print(exception)
         print('Robot has encountered an error, attempting to clear...', flush=True)
         robot.ResetError()
         robot.ResumeMotion()
