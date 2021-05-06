@@ -919,7 +919,16 @@ def test_file_logger(tmp_path):
     robot._robot_info.rt_message_capable = True
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1'))
 
-    with robot.FileLogger(file_path=tmp_path, wait_idle=False, timeout=DEFAULT_TIMEOUT):
+    # Initialize fake robot to exchange serial.
+    expected_command = 'GetRobotSerial'
+    robot_response = mdr.Message(mdr.MX_ST_GET_ROBOT_SERIAL, 'm500-99999999')
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
+
+    with robot.FileLogger(file_path=tmp_path, wait_idle=False, timeout=DEFAULT_TIMEOUT, record_time=False):
         robot.MoveJoints(0, -60, 60, 0, 0, 0)
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
         for i in range(1, 4):

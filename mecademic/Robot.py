@@ -697,7 +697,7 @@ class CSVFileLogger:
         Each numerical element will have this width.
 
     """
-    def __init__(self, robot_info, robot_state, fields=None, file_path=None):
+    def __init__(self, robot_info, robot_state, fields=None, file_path=None, serial_number=None, record_time=True):
         """Initialize class.
 
         Parameters
@@ -710,12 +710,18 @@ class CSVFileLogger:
             Contains state of robot.
         file_path : string or None
             If not provided, file will be saved in working directory.
+        serial_number : string or None
+            Serial number of the robot.
+        record_time : bool
+            If true, current time will also be recorded in the text file. (Time is also available in filename.)
 
         """
+        current_date_time = time.strftime('%Y-%m-%d-%H-%M-%S')
+
         # Add unique name to file path.
         file_name = (f"{robot_info.model}_R{robot_info.revision}_"
                      f"v{robot_info.fw_major_rev}_{robot_info.fw_minor_rev}_{robot_info.fw_patch_num}_"
-                     f"log_{time.strftime('%Y-%m-%d-%H-%M-%S')}.csv")
+                     f"log_{current_date_time}.csv")
 
         if file_path:
             file_name = os.path.join(file_path, file_name)
@@ -737,6 +743,10 @@ class CSVFileLogger:
         self.file.write('ROBOT_INFORMATION\n')
         for attr in ['model', 'revision', 'fw_major_rev', 'fw_minor_rev', 'fw_patch_num']:
             self.file.write(f'{attr}, {getattr(robot_info, attr)}\n')
+        if serial_number:
+            self.file.write(f'serial_number, {serial_number}\n')
+        if record_time:
+            self.file.write(f'time_recorded, {current_date_time}\n')
 
         # Write headers for logged data.
         self.file.write('\nLOGGED_DATA\n')
@@ -1035,6 +1045,30 @@ class Robot:
             raise e
 
     @staticmethod
+    def _parse_response(response):
+        """Parse raw response string into Message object.
+
+        Parameters
+        ----------
+        response : string
+            Raw response to parse.
+
+        """
+        id_start = response.find('[') + 1
+        id_end = response.find(']', id_start)
+        id = int(response[id_start:id_end])
+
+        # Find next square brackets (contains data).
+        data_start = response.find('[', id_end) + 1
+        data_end = response.find(']', data_start)
+
+        data = ''
+        if data_start != -1 and data_end != -1:
+            data = response[data_start:data_end]
+
+        return Message(id, data)
+
+    @staticmethod
     def _handle_socket_rx(robot_socket, rx_queue):
         """Handle received data on the socket.
 
@@ -1071,18 +1105,7 @@ class Robot:
 
             # Put all responses into the queue.
             for response in responses[:-1]:
-                id_start = response.find('[') + 1
-                id_end = response.find(']', id_start)
-                id = int(response[id_start:id_end])
-
-                # Find next square brackets (contains data).
-                data_start = response.find('[', id_end) + 1
-                data_end = response.find(']', data_start)
-
-                data = ''
-                if data_start != -1 and data_end != -1:
-                    data = response[data_start:data_end]
-                rx_queue.put(Message(id, data))
+                rx_queue.put(Robot._parse_response(response))
 
     @staticmethod
     def _handle_socket_tx(robot_socket, tx_queue):
@@ -2969,7 +2992,13 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_state)
 
-    def StartLogging(self, file_path=None, fields=None, wait_idle=True, timeout=None):
+    def StartLogging(self,
+                     file_path=None,
+                     fields=None,
+                     wait_idle=True,
+                     timeout=None,
+                     record_serial=True,
+                     record_time=True):
         """Start logging robot state to file.
 
         Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
@@ -2989,6 +3018,12 @@ class Robot:
         timeout : float or None
             Max time in seconds to wait for idle before logging.
 
+        record_serial : bool
+            If true, robot serial will be queried and recorded.
+
+        record_time : bool
+            If true, current date and time will be recorded in file.
+
         """
         if self._file_logger != None:
             raise InvalidStateError('Another file logging operation is in progress.')
@@ -2996,10 +3031,20 @@ class Robot:
         if not self._robot_info.rt_message_capable:
             raise InvalidStateError('Real-time logging not available on this robot or firmware.')
 
+        if record_serial and self._monitor_mode:
+            raise InvalidStateError('Cannot query for serial number in monitor mode. Please set record_serial=False.')
+
         if wait_idle:
             self.WaitIdle(timeout=timeout)
 
-        self._file_logger = CSVFileLogger(self._robot_info, self._robot_state, fields, file_path)
+        serial_message = self.SendCustomCommand('GetRobotSerial', wait_for_response=True, timeout=10)
+
+        self._file_logger = CSVFileLogger(self._robot_info,
+                                          self._robot_state,
+                                          fields,
+                                          file_path,
+                                          serial_message.data,
+                                          record_time=record_time)
 
     def EndLogging(self, wait_idle=True, timeout=None):
         """Stop logging robot state to file.
@@ -3023,7 +3068,13 @@ class Robot:
         self._file_logger = None
 
     @contextlib.contextmanager
-    def FileLogger(self, file_path=None, fields=None, wait_idle=True, timeout=None):
+    def FileLogger(self,
+                   file_path=None,
+                   fields=None,
+                   wait_idle=True,
+                   timeout=None,
+                   record_serial=True,
+                   record_time=True):
         """Contextmanager interface for file logger.
 
         Parameters
@@ -3040,8 +3091,19 @@ class Robot:
         timeout : float or None
             Max time in seconds to wait for idle before logging.
 
+        record_serial : bool
+            If true, robot serial will be queried and recorded.
+
+        record_time : bool
+            If true, current date and time will be recorded in file.
+
         """
-        self.StartLogging(file_path=file_path, fields=fields, wait_idle=wait_idle, timeout=timeout)
+        self.StartLogging(file_path=file_path,
+                          fields=fields,
+                          wait_idle=wait_idle,
+                          timeout=timeout,
+                          record_serial=record_serial,
+                          record_time=record_time)
         try:
             yield
         finally:
