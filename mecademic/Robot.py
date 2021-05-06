@@ -734,12 +734,26 @@ class CSVFileLogger:
         self.element_width = 10
 
         # Write robot information.
+        self.file.write('ROBOT_INFORMATION\n')
         for attr in ['model', 'revision', 'fw_major_rev', 'fw_minor_rev', 'fw_patch_num']:
             self.file.write(f'{attr}, {getattr(robot_info, attr)}\n')
 
+        # Write headers for logged data.
         self.file.write('\nLOGGED_DATA\n')
+        self.write_field_headers(robot_state)
+        self.write_field_and_element_headers(robot_info)
 
-        # Write fields to be logged.
+    def write_field_headers(self, robot_state):
+        """For a field with multiple elements, write field name in first column, empty spaces for rest.
+
+        These headers are mostly for CSV and excel legibility.
+
+        Parameters
+        ----------
+        robot_state : RobotState
+            Current state of robot. Used only to get length of data fields.
+
+        """
         self.file.write(f"{'timestamp':15},")
         for field in self.fields:
             # Get number of elements in each field.
@@ -751,6 +765,40 @@ class CSVFileLogger:
             # Calculate width of field given number of elements, accounting for commas.
             width = (self.element_width + 1) * num_elements - 1
             self.file.write(f'{field + commas:{width}},')
+        self.file.write('\n')
+
+    def write_field_and_element_headers(self, robot_info):
+        """Write the full field name and element name in each column.
+
+        Parameters
+        ----------
+        robot_info : RobotInfo
+            Information about the robot, such as model name and number of joints.
+
+        """
+        def assemble_with_prefix(field, names):
+            return ','.join([field + '_' + str(x) for x in names]) + ','
+
+        # Write full name for each field.
+        self.file.write(f"{'timestamp':15},")
+        for field in self.fields:
+            if (field.endswith('joint_positions') or field.endswith('joint_velocity')
+                    or field.endswith('joint_torque_ratio')):
+                # Write field name followed by joint number. For example: "target_joint_positions_1".
+                self.file.write(assemble_with_prefix(field, range(robot_info.num_joints)))
+            elif field.endswith('end_effector_pose'):
+                self.file.write(assemble_with_prefix(field, ['x', 'y', 'z', 'alpha', 'beta', 'gamma']))
+            elif field.endswith('end_effector_velocity'):
+                self.file.write(
+                    assemble_with_prefix(
+                        field,
+                        ['linear_speed', 'x_dot', 'y_dot', 'z_dot', 'angular_speed', 'omega_x', 'omega_y', 'omega_z']))
+            elif field.endswith('configurations'):
+                self.file.write(assemble_with_prefix(field, ['1', '3', '5']))
+            elif field.endswith('last_joint_turn'):
+                self.file.write(field + ',')
+            else:
+                raise ValueError(f'Missing formatting for field: {field}')
         self.file.write('\n')
 
     def write_fields(self, timestamp, robot_state):
