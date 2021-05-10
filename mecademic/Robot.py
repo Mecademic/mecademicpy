@@ -388,8 +388,6 @@ class RobotState:
         True if motion is currently paused.
     end_of_block_status : boolean
         True if robot is not moving and motion queue is empty.
-    configuration : array
-        Current configuration of the robot.
 
     """
     def __init__(self, num_joints):
@@ -425,8 +423,6 @@ class RobotState:
         self.error_status = False
         self.pause_motion_status = False
         self.end_of_block_status = False
-
-        self.configuration = [0] * 3
 
 
 class RobotEvents:
@@ -466,6 +462,8 @@ class RobotEvents:
         Set if robot is not in sim mode.
     on_conf_updated : event
         Set if robot configuration has been updated.
+    on_conf_turn_updated : event
+        Set if last joint turn number has been updated.
     on_joints_updated : event
         Set if joint angles has been updated.
     on_pose_updated : event
@@ -504,6 +502,7 @@ class RobotEvents:
         self.on_deactivate_sim = InterruptableEvent()
 
         self.on_conf_updated = InterruptableEvent()
+        self.on_conf_turn_updated = InterruptableEvent()
         self.on_joints_updated = InterruptableEvent()
         self.on_pose_updated = InterruptableEvent()
 
@@ -523,6 +522,7 @@ class RobotEvents:
 
         self.on_status_updated.set()
         self.on_conf_updated.set()
+        self.on_conf_turn_updated.set()
         self.on_joints_updated.set()
         self.on_pose_updated.set()
         self.on_brakes_activated.set()
@@ -802,11 +802,9 @@ class CSVFileLogger:
                 self.file.write(assemble_with_prefix(field, ['x', 'y', 'z', 'alpha', 'beta', 'gamma']))
             elif field.endswith('end_effector_velocity'):
                 self.file.write(
-                    assemble_with_prefix(
-                        field,
-                        ['linear_speed', 'x_dot', 'y_dot', 'z_dot', 'angular_speed', 'omega_x', 'omega_y', 'omega_z']))
+                    assemble_with_prefix(field, ['x_dot', 'y_dot', 'z_dot', 'omega_x', 'omega_y', 'omega_z']))
             elif field.endswith('configurations'):
-                self.file.write(assemble_with_prefix(field, ['1', '3', '5']))
+                self.file.write(assemble_with_prefix(field, ['shoulder', 'elbow', 'wrist']))
             elif field.endswith('last_joint_turn'):
                 self.file.write(field + ',')
             else:
@@ -1580,6 +1578,8 @@ class Robot:
         # Variables to hold joint positions and poses while waiting for timestamp.
         joint_positions = None
         end_effector_pose = None
+        joint_configuration = None
+        last_joint_turn = None
 
         while True:
             # Wait for a message in the queue.
@@ -1597,12 +1597,16 @@ class Robot:
 
             with self._main_lock:
 
-                # Temporarily save joints and pose if rt messages will be availble to add timestamps.
+                # Temporarily save data if rt messages will be availble to add timestamps.
                 # Note that if robot platform isn't RT message capable, the update occurs in _handle_common_messages.
                 if response.id == MX_ST_GET_JOINTS and self._robot_info.rt_message_capable:
                     joint_positions = string_to_floats(response.data)
                 elif response.id == MX_ST_GET_POSE and self._robot_info.rt_message_capable:
                     end_effector_pose = string_to_floats(response.data)
+                elif response.id == MX_ST_GET_CONF and self._robot_info.rt_message_capable:
+                    joint_configuration = string_to_floats(response.data)
+                elif response.id == MX_ST_GET_CONF_TURN and self._robot_info.rt_message_capable:
+                    last_joint_turn = string_to_floats(response.data)
 
                 if response.id == MX_ST_RT_CYCLE_END:
                     if not self._robot_info.rt_message_capable:
@@ -1616,6 +1620,12 @@ class Robot:
                     if end_effector_pose:
                         self._robot_state.target_end_effector_pose.update_from_data(timestamp, end_effector_pose)
                         end_effector_pose = None
+                    if joint_configuration:
+                        self._robot_state.target_joint_configurations.update_from_data(timestamp, joint_configuration)
+                        joint_configuration = None
+                    if last_joint_turn:
+                        self._robot_state.last_joint_turn.update_from_data(timestamp, last_joint_turn)
+                        last_joint_turn = None
 
                     # If logging is active, log the current state.
                     if self._file_logger != None:
@@ -1664,10 +1674,6 @@ class Robot:
                         self._robot_events.on_p_stop_reset.set()
                         self._callback_queue.put('on_p_stop_reset')
 
-                elif response.id == MX_ST_GET_CONF:
-                    self._robot_state.configuration = string_to_floats(response.data)
-                    self._robot_events.on_conf_updated.set()
-
                 elif response.id == MX_ST_BRAKES_ON:
                     self._robot_events.on_brakes_deactivated.clear()
                     self._robot_events.on_brakes_activated.set()
@@ -1708,6 +1714,16 @@ class Robot:
             self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
             if is_command_response:
                 self._robot_events.on_pose_updated.set()
+
+        elif response.id == MX_ST_GET_CONF and not self._robot_info.rt_message_capable:
+            self._robot_state.target_joint_configurations = TimestampedData(0, string_to_floats(response.data))
+            if is_command_response:
+                self._robot_events.on_conf_updated.set()
+
+        elif response.id == MX_ST_GET_CONF_TURN and not self._robot_info.rt_message_capable:
+            self._robot_state.target_last_joint_turn = TimestampedData(0, string_to_floats(response.data))
+            if is_command_response:
+                self._robot_events.on_conf_turn_updated.set()
 
         elif response.id == MX_ST_RT_NC_JOINT_POS:
             self._robot_state.target_joint_positions.update_from_csv(response.data)
@@ -1988,6 +2004,7 @@ class Robot:
 
             self._robot_events.on_status_updated.set()
             self._robot_events.on_conf_updated.set()
+            self._robot_events.on_conf_turn_updated.set()
             self._robot_events.on_joints_updated.set()
             self._robot_events.on_pose_updated.set()
 
@@ -2877,6 +2894,70 @@ class Robot:
             return copy.deepcopy(self._robot_state.target_end_effector_pose.data)
 
     @disconnect_on_exception
+    def GetConf(self, include_timestamp=False, synchronous_update=False, timeout=None):
+        """Get robot's current (physical) inverse-kinematics configuration.
+
+        Returns
+        -------
+        list of ints (timestmap optional)
+            Configuration status of robot.
+
+        """
+        if synchronous_update:
+            with self._main_lock:
+                self._check_internal_states()
+                if self._robot_events.on_conf_updated.is_set():
+                    self._robot_events.on_conf_updated.clear()
+                    if self._robot_info.rt_message_capable:
+                        self._send_command('GetRtConf')
+                    else:
+                        self._send_command('GetConf')
+
+            if not self._robot_events.on_conf_updated.wait(timeout=timeout):
+                raise TimeoutError
+
+        with self._main_lock:
+            if include_timestamp:
+                if not self._robot_info.rt_message_capable:
+                    raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
+                else:
+                    return copy.deepcopy(self._robot_state.target_joint_configurations)
+
+            return copy.deepcopy(self._robot_state.target_joint_configurations.data)
+
+    @disconnect_on_exception
+    def GetConfTurn(self, include_timestamp=False, synchronous_update=False, timeout=None):
+        """Get robot's current (physical) last-joint turn number.
+
+        Returns
+        -------
+        int (timestamp optional)
+            Turn number of last joint.
+
+        """
+        if synchronous_update:
+            with self._main_lock:
+                self._check_internal_states()
+                if self._robot_events.on_conf_turn_updated.is_set():
+                    self._robot_events.on_conf_turn_updated.clear()
+                    if self._robot_info.rt_message_capable:
+                        self._send_command('GetRtConfTurn')
+                    else:
+                        self._send_command('GetConfTurn')
+
+            if not self._robot_events.on_conf_turn_updated.wait(timeout=timeout):
+                raise TimeoutError
+
+        with self._main_lock:
+            if include_timestamp:
+                if not self._robot_info.rt_message_capable:
+                    raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
+                else:
+                    return copy.deepcopy(self._robot_state.target_last_joint_turn)
+
+            return copy.deepcopy(self._robot_state.target_last_joint_turn.data[0])
+
+    @disconnect_on_exception
     def SetMonitoringInterval(self, t):
         """Sets the rate at which the monitoring port sends data.
 
@@ -2921,28 +3002,6 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             self._send_command('DeactivateSim')
-
-    @disconnect_on_exception
-    def GetConf(self, synchronous_update=False, timeout=None):
-        """Get robot's current (physical) inverse-kinematics configuration.
-
-        Returns
-        -------
-        list of ints
-            Configuration status of robot.
-
-        """
-        if synchronous_update:
-            with self._main_lock:
-                self._check_internal_states()
-                if self._robot_events.on_conf_updated.is_set():
-                    self._robot_events.on_conf_updated.clear()
-                    self._send_command('GetConf')
-
-            if not self._robot_events.on_conf_updated.wait(timeout=timeout):
-                raise TimeoutError
-
-        return self._robot_state.configuration
 
     @disconnect_on_exception
     def ActivateBrakes(self, activated=True):
