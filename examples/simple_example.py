@@ -9,9 +9,9 @@ robot = mdr.Robot()
 # CHECK THAT IP ADDRESS IS CORRECT! #
 try:
     robot.Connect(address='192.168.0.100')
-except mdr.CommunicationError:
-    print('Robot failed to connect. Is the IP address correct?')
-    raise
+except mdr.CommunicationError as e:
+    print(f'Robot failed to connect. Is the IP address correct? {e}')
+    raise e
 
 try:
     # Send the commands to get the robot ready for operation.

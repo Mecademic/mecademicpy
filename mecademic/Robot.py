@@ -718,10 +718,12 @@ class CSVFileLogger:
         """
         current_date_time = time.strftime('%Y-%m-%d-%H-%M-%S')
 
+        serial_number_or_blank = ('_serial_' + serial_number) if serial_number else ""
+
         # Add unique name to file path.
         file_name = (f"{robot_info.model}_R{robot_info.revision}_"
                      f"v{robot_info.fw_major_rev}_{robot_info.fw_minor_rev}_{robot_info.fw_patch_num}_"
-                     f"log_{current_date_time}.csv")
+                     f"log_{current_date_time}{serial_number_or_blank}.csv")
 
         if file_path:
             file_name = os.path.join(file_path, file_name)
@@ -764,7 +766,7 @@ class CSVFileLogger:
             Current state of robot. Used only to get length of data fields.
 
         """
-        self.file.write(f"{'timestamp':15},")
+        self.file.write(f"{'timestamp':>15},")
         for field in self.fields:
             # Get number of elements in each field.
             num_elements = len(getattr(robot_state, field).data)
@@ -790,7 +792,7 @@ class CSVFileLogger:
             return ','.join([field + '_' + str(x) for x in names]) + ','
 
         # Write full name for each field.
-        self.file.write(f"{'timestamp':15},")
+        self.file.write(f"{'timestamp':>15},")
         for field in self.fields:
             if (field.endswith('joint_positions') or field.endswith('joint_velocity')
                     or field.endswith('joint_torque_ratio')):
@@ -1319,7 +1321,7 @@ class Robot:
             self._command_socket = self._connect_socket(self.logger, self._address, MX_ROBOT_TCP_PORT_CONTROL)
 
             if self._command_socket is None:
-                raise CommunicationError('Command socket could not be created.')
+                raise CommunicationError('Command socket could not be created. Is the IP address correct?')
 
             # Create rx thread for command socket communication.
             self._command_rx_thread = self._launch_thread(target=self._handle_socket_rx,
@@ -1348,7 +1350,7 @@ class Robot:
             self._monitor_socket = self._connect_socket(self.logger, self._address, MX_ROBOT_TCP_PORT_FEED)
 
             if self._monitor_socket is None:
-                raise CommunicationError('Monitor socket could not be created.')
+                raise CommunicationError('Monitor socket could not be created. Is the IP address correct?')
 
             # Create rx thread for monitor socket communication.
             self._monitor_rx_thread = self._launch_thread(target=self._handle_socket_rx,
