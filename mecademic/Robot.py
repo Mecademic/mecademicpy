@@ -349,7 +349,7 @@ class RobotState:
         Controller desired joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
     target_end_effector_velocity : TimestampedData
         Controller desired end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
-        [linear_speed, linear_velocity vector, rotational_speed, angular_velocity vector]
+        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]
     target_joint_configurations : TimestampedData
         Controller joint configuration that corresponds to desired joint positions.
     target_last_joint_turn : TimestampedData
@@ -366,7 +366,7 @@ class RobotState:
         Drive-measured torque ratio as a percent of maximum [torque_1...6], includes timestamp.
     drive_end_effector_velocity : TimestampedData
         Drive-measured end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
-        [linear_speed, linear_velocity vector, rotational_speed, angular_velocity vector]
+        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]
 
     drive_joint_configurations : TimestampedData
         Controller joint configuration that corresponds to drives-measured joint positions.
@@ -397,7 +397,7 @@ class RobotState:
         self.target_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
 
         self.target_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.target_end_effector_velocity = TimestampedData.zeros(8)  # microseconds timestamp, mm/s and deg/s
+        self.target_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
 
         self.target_joint_configurations = TimestampedData.zeros(3)
         self.target_last_joint_turn = TimestampedData.zeros(1)
@@ -407,7 +407,7 @@ class RobotState:
 
         self.drive_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
         self.drive_joint_torque_ratio = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.drive_end_effector_velocity = TimestampedData.zeros(8)  # microseconds timestamp, mm/s and deg/s
+        self.drive_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
 
         self.drive_joint_configurations = TimestampedData.zeros(3)
         self.drive_last_joint_turn = TimestampedData.zeros(1)

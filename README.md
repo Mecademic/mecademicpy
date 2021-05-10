@@ -215,7 +215,7 @@ The `on_error` callback can also be used to manage robot errors.
 
 Improper use of the class can also cause exceptions to be raised. For example, calling `MoveJoints()` without any arguments will raise an exception. 
 
-If the user is waiting on an event or checkpoint that the `Robot` class later determines will never activate, the event will unblock and raise an exception. For example, if the user is waiting on a checkpoint, but calls `Disconnect()` or `ClearMotion()` before the checkpoint is received, the checkpoint will unblock and raise an exception. Events and checkpoints will also unblock with exception on robot error state.
+If the user is waiting on an event or checkpoint that the `Robot` class later determines will never occur, the event will unblock and raise an exception. For example, if the user is waiting on a checkpoint, but calls `Disconnect()` or `ClearMotion()` before the checkpoint is received, the checkpoint will unblock and raise an exception. Events and checkpoints will also unblock with exception on robot error state.
 
 The user should use python's built-in `try...except` blocks to handle exceptions.
 
