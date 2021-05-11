@@ -3,8 +3,6 @@ import os
 import queue
 import time
 
-from .Common import *
-
 
 class CSVFileLogger:
     """Class to handle logging robot state to file.

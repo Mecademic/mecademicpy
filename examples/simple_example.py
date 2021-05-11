@@ -2,7 +2,7 @@
 import os
 import sys
 
-import mecademic.Robot as mdr
+import mecademic.robot as mdr
 
 robot = mdr.Robot()
 
