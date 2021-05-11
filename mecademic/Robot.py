@@ -278,6 +278,10 @@ class RobotInfo:
         Minor firmware revision number.
     fw_patch_num : int
         Firmware patch number.
+    serial : string
+        Serial identifier of robot.
+    rt_message_capable : bool
+        True if robot is capable of sending real-time monitoring messages.
     num_joints : int
         Number of joints on the robot.
 
@@ -288,13 +292,15 @@ class RobotInfo:
                  is_virtual=None,
                  fw_major_rev=None,
                  fw_minor_rev=None,
-                 fw_patch_num=None):
+                 fw_patch_num=None,
+                 serial=None):
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
         self.fw_major_rev = fw_major_rev
         self.fw_minor_rev = fw_minor_rev
         self.fw_patch_num = fw_patch_num
+        self.serial = serial
         self.rt_message_capable = False
 
         if self.model == 'Meca500':
@@ -697,7 +703,7 @@ class CSVFileLogger:
         Each numerical element will have this width.
 
     """
-    def __init__(self, robot_info, robot_state, fields=None, file_path=None, serial_number=None, record_time=True):
+    def __init__(self, robot_info, robot_state, fields=None, file_path=None, record_time=True):
         """Initialize class.
 
         Parameters
@@ -710,15 +716,13 @@ class CSVFileLogger:
             Contains state of robot.
         file_path : string or None
             If not provided, file will be saved in working directory.
-        serial_number : string or None
-            Serial number of the robot.
         record_time : bool
             If true, current time will also be recorded in the text file. (Time is also available in filename.)
 
         """
         current_date_time = time.strftime('%Y-%m-%d-%H-%M-%S')
 
-        serial_number_or_blank = ('_serial_' + serial_number) if serial_number else ""
+        serial_number_or_blank = ('_serial_' + robot_info.serial) if robot_info.serial else ""
 
         # Add unique name to file path.
         file_name = (f"{robot_info.model}_R{robot_info.revision}_"
@@ -745,8 +749,8 @@ class CSVFileLogger:
         self.file.write('ROBOT_INFORMATION\n')
         for attr in ['model', 'revision', 'fw_major_rev', 'fw_minor_rev', 'fw_patch_num']:
             self.file.write(f'{attr}, {getattr(robot_info, attr)}\n')
-        if serial_number:
-            self.file.write(f'serial_number, {serial_number}\n')
+        if robot_info.serial != None:
+            self.file.write(f'serial_number, {robot_info.serial}\n')
         if record_time:
             self.file.write(f'time_recorded, {current_date_time}\n')
 
@@ -1370,7 +1374,7 @@ class Robot:
         """
 
         try:
-            response = message_queue.get(block=True, timeout=10)  # 10s timeout.
+            response = message_queue.get(block=True, timeout=self.default_timeout)
         except queue.Empty:
             self.logger.error('No response received within timeout interval.')
             self.Disconnect()
@@ -1395,6 +1399,27 @@ class Robot:
 
         """
         self._receive_welcome_message(self._command_rx_queue)
+
+        # Get robot serial number.
+        self._send_command('GetRobotSerial')
+
+        try:
+            response = self._command_rx_queue.get(block=True, timeout=self.default_timeout)
+        except queue.Empty:
+            self.logger.error('No response received within timeout interval.')
+            self.Disconnect()
+            raise CommunicationError('No response received within timeout interval.')
+        except BaseException:
+            self.Disconnect()
+            raise
+
+        # Check that response is appropriate.
+        if response.id != MX_ST_GET_ROBOT_SERIAL:
+            self.logger.error(f'Error fetching robot serial. Received response: {response}')
+            self.Disconnect()
+            raise CommunicationError(f'Error fetching robot serial. Received response: {response}')
+
+        self._robot_info.serial = response.data
 
         self._command_response_handler_thread = self._launch_thread(target=self._command_response_handler, args=())
 
@@ -1624,7 +1649,7 @@ class Robot:
                         self._robot_state.target_joint_configurations.update_from_data(timestamp, joint_configuration)
                         joint_configuration = None
                     if last_joint_turn:
-                        self._robot_state.last_joint_turn.update_from_data(timestamp, last_joint_turn)
+                        self._robot_state.target_last_joint_turn.update_from_data(timestamp, last_joint_turn)
                         last_joint_turn = None
 
                     # If logging is active, log the current state.
@@ -3053,13 +3078,7 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_state)
 
-    def StartLogging(self,
-                     file_path=None,
-                     fields=None,
-                     wait_idle=True,
-                     timeout=None,
-                     record_serial=True,
-                     record_time=True):
+    def StartLogging(self, file_path=None, fields=None, wait_idle=True, timeout=None, record_time=True):
         """Start logging robot state to file.
 
         Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
@@ -3079,9 +3098,6 @@ class Robot:
         timeout : float or None
             Max time in seconds to wait for idle before logging.
 
-        record_serial : bool
-            If true, robot serial will be queried and recorded.
-
         record_time : bool
             If true, current date and time will be recorded in file.
 
@@ -3092,19 +3108,13 @@ class Robot:
         if not self._robot_info.rt_message_capable:
             raise InvalidStateError('Real-time logging not available on this robot or firmware.')
 
-        if record_serial and self._monitor_mode:
-            raise InvalidStateError('Cannot query for serial number in monitor mode. Please set record_serial=False.')
-
         if wait_idle:
             self.WaitIdle(timeout=timeout)
-
-        serial_message = self.SendCustomCommand('GetRobotSerial', wait_for_response=True, timeout=10)
 
         self._file_logger = CSVFileLogger(self._robot_info,
                                           self._robot_state,
                                           fields,
                                           file_path,
-                                          serial_message.data,
                                           record_time=record_time)
 
     def EndLogging(self, wait_idle=True, timeout=None):
@@ -3129,13 +3139,7 @@ class Robot:
         self._file_logger = None
 
     @contextlib.contextmanager
-    def FileLogger(self,
-                   file_path=None,
-                   fields=None,
-                   wait_idle=True,
-                   timeout=None,
-                   record_serial=True,
-                   record_time=True):
+    def FileLogger(self, file_path=None, fields=None, wait_idle=True, timeout=None, record_time=True):
         """Contextmanager interface for file logger.
 
         Parameters
@@ -3152,9 +3156,6 @@ class Robot:
         timeout : float or None
             Max time in seconds to wait for idle before logging.
 
-        record_serial : bool
-            If true, robot serial will be queried and recorded.
-
         record_time : bool
             If true, current date and time will be recorded in file.
 
@@ -3163,7 +3164,6 @@ class Robot:
                           fields=fields,
                           wait_idle=wait_idle,
                           timeout=timeout,
-                          record_serial=record_serial,
                           record_time=record_time)
         try:
             yield
