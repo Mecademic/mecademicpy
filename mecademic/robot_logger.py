@@ -51,15 +51,21 @@ class CSVFileLogger:
         # If fields argument is None, log all compatible fields.
         if fields == None:
             fields = []
-            for attr in vars(robot_state):
-                if attr.startswith('target') or attr.startswith('drive'):
-                    fields.append(attr)
+
+            if robot_info.rt_message_capable:
+                for attr in vars(robot_state):
+                    if attr.startswith('target') or attr.startswith('drive'):
+                        fields.append(attr)
+            else:
+                # Only the following fields are available if platform is not rt monitoring capable.
+                fields = ['target_joint_positions', 'target_end_effector_pose']
 
         # Set attributes.
         self.file = open(file_name, 'w', newline='')
         self.fields = fields
         self.command_queue = queue.Queue()
         self.element_width = 10
+        self.timestamp_element_width = 15
 
         # Write robot information.
         self.file.write('ROBOT_INFORMATION\n')
@@ -86,7 +92,7 @@ class CSVFileLogger:
             Current state of robot. Used only to get length of data fields.
 
         """
-        self.file.write(f"{'timestamp':>15},")
+        self.file.write(f"{'timestamp':>{self.timestamp_element_width}},")
         for field in self.fields:
             # Get number of elements in each field.
             num_elements = len(getattr(robot_state, field).data)
@@ -112,7 +118,7 @@ class CSVFileLogger:
             return ','.join([field + '_' + str(x) for x in names]) + ','
 
         # Write full name for each field.
-        self.file.write(f"{'timestamp':>15},")
+        self.file.write(f"{'timestamp':>{self.timestamp_element_width}},")
         for field in self.fields:
             if (field.endswith('joint_positions') or field.endswith('joint_velocity')
                     or field.endswith('joint_torque_ratio')):
@@ -146,7 +152,7 @@ class CSVFileLogger:
             return
 
         # First write the timestamp
-        self.file.write(f'{timestamp:15},')
+        self.file.write(f'{timestamp:{self.timestamp_element_width}},')
 
         for field in self.fields:
             # For each field, write each value with appropriate spacing.

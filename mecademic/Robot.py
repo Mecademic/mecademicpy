@@ -799,6 +799,12 @@ class Robot:
                 else:
                     self._handle_common_messages(response, is_command_response=False)
 
+                    # On non-rt monitoring capable platforms, no CYCLE_END event is sent, so use system time.
+                    # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotState when GET_POSE is received.
+                    if response.id == MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
+                        if self._file_logger != None:
+                            self._file_logger.write_fields(time.time_ns(), self._robot_state)
+
     def _command_response_handler(self):
         """Handle received messages on the command socket.
 
@@ -2244,9 +2250,6 @@ class Robot:
         """
         if self._file_logger != None:
             raise InvalidStateError('Another file logging operation is in progress.')
-
-        if not self._robot_info.rt_message_capable:
-            raise InvalidStateError('Real-time logging not available on this robot or firmware.')
 
         if wait_idle:
             self.WaitIdle(timeout=timeout)
