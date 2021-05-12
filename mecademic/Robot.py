@@ -1929,13 +1929,19 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def SendCustomCommand(self, command, wait_for_response=False, timeout=None):
+    def SendCustomCommand(self, command, expected_response=False, timeout=None):
         """Send custom command to robot.
 
         Parameters
         ----------
         command : str
             Desired custom command.
+
+        expected_response : None or list of ints.
+            If not none, wait for and return one of the expected responses.
+
+        timeout : float
+            Time in seconds to wait for one of the expected responses.
 
         """
         with self._main_lock:
@@ -2141,6 +2147,23 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             self._send_command('SetMonitoringInterval', [t])
+
+    @disconnect_on_exception
+    def SetRealTimeMonitoring(self, events):
+        """Configure which real-time monitoring events to enable.
+
+        Parameters
+        ----------
+        args : list of event IDs
+            List of event IDs to enable.
+
+        """
+        with self._main_lock:
+            self._check_internal_states()
+            if isinstance(events, list):
+                self._send_command('SetRealTimeMonitoring', events)
+            else:
+                self._send_command('SetRealTimeMonitoring', [events])
 
     @disconnect_on_exception
     def SetRTC(self, t):

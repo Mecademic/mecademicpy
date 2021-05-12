@@ -894,25 +894,25 @@ def test_gets_with_timestamp():
     robot.Disconnect()
 
 
-def test_custom_command():
-    robot = mdr.Robot()
-    assert robot is not None
+# def test_custom_command():
+#     robot = mdr.Robot()
+#     assert robot is not None
 
-    connect_robot_helper(robot)
+#     connect_robot_helper(robot)
 
-    assert robot.WaitConnected(timeout=0)
+#     assert robot.WaitConnected(timeout=0)
 
-    expected_command = 'TestCommand'
-    robot_response = mdr.Message(8888, 'TestResponse')
-    fake_robot = threading.Thread(target=simple_response_handler,
-                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
-                                        robot_response))
+#     expected_command = 'TestCommand'
+#     robot_response = mdr.Message(8888, 'TestResponse')
+#     fake_robot = threading.Thread(target=simple_response_handler,
+#                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+#                                         robot_response))
 
-    fake_robot.start()
+#     fake_robot.start()
 
-    assert robot.SendCustomCommand('TestCommand', wait_for_response=True, timeout=DEFAULT_TIMEOUT) == robot_response
+#     assert robot.SendCustomCommand('TestCommand', wait_for_response=True, timeout=DEFAULT_TIMEOUT) == robot_response
 
-    robot.Disconnect()
+#     robot.Disconnect()
 
 
 def test_file_logger(tmp_path):

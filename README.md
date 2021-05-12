@@ -287,6 +287,7 @@ with robot.FileLogger(fields=['target_joint_positions', 'target_end_effector_pos
     robot.WaitIdle()
 ```
 
+Note that the `SetRealTimeMonitoring` command must be used to enable all the real-time monitoring events which are logged. Otherwise, the robot state will be zeroed. The user can also use `SetMonitoringInterval` to choose the monitoring interval.
 
 ## Getting Help
 
