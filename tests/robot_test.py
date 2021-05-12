@@ -932,7 +932,7 @@ def test_file_logger(tmp_path):
     robot._robot_info.rt_message_capable = True
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1'))
 
-    with robot.FileLogger(file_path=tmp_path, wait_idle=False, timeout=DEFAULT_TIMEOUT, record_time=False):
+    with robot.FileLogger(file_path=tmp_path, record_time=False):
         robot.MoveJoints(0, -60, 60, 0, 0, 0)
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
         for i in range(1, 4):

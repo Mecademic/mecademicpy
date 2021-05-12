@@ -203,7 +203,7 @@ If non-trivial computation and high-frequency monitoring are both necessary, the
 
 ### Handling Robot Errors
 
-If during use the Robot encounters an error, it will go into error mode. In this mode, the module will block any command to the robot unless the error is reset. If the robot is in an error state, `GetRobotState().error_status` will return `True`. To properly reset errors on the robot, the following function must be run:
+If the robot encounters an error during use, the robot will go into error mode. In this mode, the module will block any command to the robot unless the error is reset. If the robot is in an error state, `GetRobotState().error_status` will return `True`. To properly reset errors on the robot, the following function must be run:
 
 ```python
 robot.ResetError()
@@ -222,6 +222,71 @@ The user should use python's built-in `try...except` blocks to handle exceptions
 ### Preserved State on Disconnection
 
 Once the robot is disconnected, not all state is immediately cleared. Therefore, it is possible to still get the last-known state of the robot. 
+
+### Logging Data to File
+
+It is possible to continuously log the robot state to a file using the API either using the `StartLogging` and `EndLogging` functions or using the `FileLogger` context. 
+
+An example usage of `StartLogging` and `EngLogging`:
+
+```python
+robot.WaitIdle()
+robot.StartLogging()
+try:
+    robot.MoveJoints(0, -60, 60, 0, 0, 0)
+    robot.MoveJoints(0, 0, 0, 0, 0, 0)
+    robot.WaitIdle()
+except BaseException as e:
+    print(f'Logging unsuccessful, exception encountered: {e}')
+finally:
+    robot.EndLogging()
+```
+
+Note that the user should wait for the robot to be idle before starting to log, and also wait for idle before ending the log. This is to ensure the log correctly captures the movements of interest.
+
+The user can also use the `FileLogger` context:
+
+```python
+robot.WaitIdle()
+with robot.FileLogger():
+    robot.MoveJoints(0, -60, 60, 0, 0, 0)
+    robot.MoveJoints(0, 0, 0, 0, 0, 0)
+    robot.WaitIdle()
+```
+
+The `FileLogger` context will automatically end logging after either completing the `with` block or encountering an exception.
+
+The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
+
+- target_joint_positions 
+- target_end_effector_pose 
+
+- target_joint_velocity 
+- target_end_effector_velocity 
+
+- target_joint_configurations 
+- target_last_joint_turn 
+
+- drive_joint_positions 
+- drive_end_effector_pose 
+
+- drive_joint_velocity 
+- drive_joint_torque_ratio 
+- drive_end_effector_velocity 
+
+- drive_joint_configurations 
+- drive_last_joint_turn
+
+The following example only logs the `target_joint_positions` and `target_end_effector_pose`.
+
+```python
+robot.WaitIdle()
+with robot.FileLogger(fields=['target_joint_positions', 'target_end_effector_pose']):
+    robot.MoveJoints(0, -60, 60, 0, 0, 0)
+    robot.MoveJoints(0, 0, 0, 0, 0, 0)
+    robot.WaitIdle()
+```
+
 
 ## Getting Help
 

@@ -2224,7 +2224,7 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_state)
 
-    def StartLogging(self, file_path=None, fields=None, wait_idle=True, timeout=None, record_time=True):
+    def StartLogging(self, file_path=None, fields=None, record_time=True):
         """Start logging robot state to file.
 
         Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
@@ -2238,12 +2238,6 @@ class Robot:
         fields : list of strings or None
             List of fields to log. Taken from RobotState attributes. None means log all compatible fields.
 
-        wait_idle : bool
-            If true, will wait for robot to be idle before starting logging.
-
-        timeout : float or None
-            Max time in seconds to wait for idle before logging.
-
         record_time : bool
             If true, current date and time will be recorded in file.
 
@@ -2251,38 +2245,24 @@ class Robot:
         if self._file_logger != None:
             raise InvalidStateError('Another file logging operation is in progress.')
 
-        if wait_idle:
-            self.WaitIdle(timeout=timeout)
-
         self._file_logger = CSVFileLogger(self._robot_info,
                                           self._robot_state,
                                           fields,
                                           file_path,
                                           record_time=record_time)
 
-    def EndLogging(self, wait_idle=True, timeout=None):
+    def EndLogging(self):
         """Stop logging robot state to file.
-
-        Parameters
-        ----------
-        wait_idle : bool
-            If true, will wait for robot to be idle before ending logging.
-
-        timeout : float or None
-            Max time in seconds to wait for idle before ending logging.
 
         """
         if self._file_logger == None:
             raise InvalidStateError('No existing logger to stop.')
 
-        if wait_idle:
-            self.WaitIdle(timeout=timeout)
-
         self._file_logger.end_log()
         self._file_logger = None
 
     @contextlib.contextmanager
-    def FileLogger(self, file_path=None, fields=None, wait_idle=True, timeout=None, record_time=True):
+    def FileLogger(self, file_path=None, fields=None, record_time=True):
         """Contextmanager interface for file logger.
 
         Parameters
@@ -2293,22 +2273,12 @@ class Robot:
         fields : list of strings or None
             List of fields to log. Taken from RobotState attributes. None means log all compatible fields.
 
-        wait_idle : bool
-            If true, will wait for robot to be idle before starting logging.
-
-        timeout : float or None
-            Max time in seconds to wait for idle before logging.
-
         record_time : bool
             If true, current date and time will be recorded in file.
 
         """
-        self.StartLogging(file_path=file_path,
-                          fields=fields,
-                          wait_idle=wait_idle,
-                          timeout=timeout,
-                          record_time=record_time)
+        self.StartLogging(file_path=file_path, fields=fields, record_time=record_time)
         try:
             yield
         finally:
-            self.EndLogging(wait_idle=wait_idle, timeout=timeout)
+            self.EndLogging()
