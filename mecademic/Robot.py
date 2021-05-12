@@ -156,7 +156,7 @@ class Robot:
         self._command_rx_queue = queue.Queue()
         self._command_tx_queue = queue.Queue()
         self._monitor_rx_queue = queue.Queue()
-        self._custom_response_queue = None
+        self._response_events = list()
 
         self._user_checkpoints = dict()
         self._internal_checkpoints = dict()
@@ -540,27 +540,6 @@ class Robot:
         """
         self._receive_welcome_message(self._command_rx_queue)
 
-        # Get robot serial number.
-        self._send_command('GetRobotSerial')
-
-        try:
-            response = self._command_rx_queue.get(block=True, timeout=self.default_timeout)
-        except queue.Empty:
-            self.logger.error('No response received within timeout interval.')
-            self.Disconnect()
-            raise CommunicationError('No response received within timeout interval.')
-        except BaseException:
-            self.Disconnect()
-            raise
-
-        # Check that response is appropriate.
-        if response.id != MX_ST_GET_ROBOT_SERIAL:
-            self.logger.error(f'Error fetching robot serial. Received response: {response}')
-            self.Disconnect()
-            raise CommunicationError(f'Error fetching robot serial. Received response: {response}')
-
-        self._robot_info.serial = response.data
-
         self._command_response_handler_thread = self._launch_thread(target=self._command_response_handler, args=())
 
     def _initialize_monitoring_connection(self):
@@ -819,10 +798,15 @@ class Robot:
 
             self._callback_queue.put('on_command_message', response)
 
-            if self._custom_response_queue:
-                self._custom_response_queue.put(response)
-
             with self._main_lock:
+
+                # Find and handle custom response event.
+                try:
+                    response_event = next(event for event in self._response_events if response.id in event.data)
+                    response_event.set(data=response)
+                    self._response_events.remove(response_event)
+                except StopIteration:
+                    pass
 
                 if response.id == MX_ST_CHECKPOINT_REACHED:
                     self._handle_checkpoint_response(response)
@@ -1181,6 +1165,13 @@ class Robot:
 
             self._robot_events.on_connected.set()
             self._callback_queue.put('on_connected')
+
+        # Fetching the serial number must occur outside main_lock.
+        if not self._monitor_mode:
+            serial_response = self.SendCustomCommand('GetRobotSerial',
+                                                     expected_responses=[MX_ST_GET_ROBOT_SERIAL],
+                                                     timeout=self.default_timeout)
+            self._robot_info.serial = serial_response.data
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
@@ -1929,7 +1920,7 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def SendCustomCommand(self, command, expected_response=False, timeout=None):
+    def SendCustomCommand(self, command, expected_responses=None, timeout=None):
         """Send custom command to robot.
 
         Parameters
@@ -1937,7 +1928,7 @@ class Robot:
         command : str
             Desired custom command.
 
-        expected_response : None or list of ints.
+        expected_responses : None or list of ints.
             If not none, wait for and return one of the expected responses.
 
         timeout : float
@@ -1947,15 +1938,14 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
 
-            if wait_for_response:
-                self._custom_response_queue = queue.Queue()
+            if expected_responses:
+                event_with_data = InterruptableEvent(data=expected_responses)
+                self._response_events.append(event_with_data)
 
             self._send_command(command)
 
-            if wait_for_response:
-                response = self._custom_response_queue.get(block=True, timeout=timeout)
-                self._custom_response_queue = None
-                return response
+        if expected_responses:
+            return event_with_data.wait_for_data(timeout=timeout)
 
     @disconnect_on_exception
     def StartOfflineProgram(self, n, timeout=None):

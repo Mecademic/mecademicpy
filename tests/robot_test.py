@@ -20,18 +20,29 @@ MECA500_SERIAL = 'm500-99999999'
 DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
 
+def simple_response_handler(queue_in, queue_out, expected_in, desired_out):
+    assert queue_in.get(block=True, timeout=1) == expected_in
+    queue_out.put(desired_out)
+
+
 def connect_robot_helper(robot, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=False):
     # Prepare connection messages.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_GET_ROBOT_SERIAL, MECA500_SERIAL))
+
+    expected_command = 'GetRobotSerial'
+    robot_response = mdr.Message(mdr.MX_ST_GET_ROBOT_SERIAL, MECA500_SERIAL)
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
+
+    fake_robot.start()
 
     robot.Connect(TEST_IP,
                   offline_mode=offline_mode,
                   disconnect_on_exception=disconnect_on_exception,
                   enable_synchronous_mode=enable_synchronous_mode)
 
-    # Remove the GetRobotSerial command.
-    robot._command_tx_queue.get()
+    fake_robot.join()
 
 
 def fake_server(address, port, data_list, server_up):
@@ -45,8 +56,15 @@ def fake_server(address, port, data_list, server_up):
 
     client, addr = server_sock.accept()
 
-    for data in data_list:
-        client.sendall(data.encode('ascii'))
+    if data_list:
+        client.sendall(data_list.pop(0).encode('ascii'))
+
+    while True:
+        received_data = client.recv(1024)
+        if not received_data:
+            break
+        if data_list:
+            client.sendall(data_list.pop(0).encode('ascii'))
 
 
 def run_fake_server(address, port, data_list):
@@ -640,11 +658,6 @@ def test_joint_moves():
     robot.Disconnect()
 
 
-def simple_response_handler(queue_in, queue_out, expected_in, desired_out):
-    assert queue_in.get(block=True, timeout=1) == expected_in
-    queue_out.put(desired_out)
-
-
 def test_simple_gets():
     robot = mdr.Robot()
     assert robot is not None
@@ -894,25 +907,27 @@ def test_gets_with_timestamp():
     robot.Disconnect()
 
 
-# def test_custom_command():
-#     robot = mdr.Robot()
-#     assert robot is not None
+def test_custom_command():
+    robot = mdr.Robot()
+    assert robot is not None
 
-#     connect_robot_helper(robot)
+    connect_robot_helper(robot)
 
-#     assert robot.WaitConnected(timeout=0)
+    assert robot.WaitConnected(timeout=0)
 
-#     expected_command = 'TestCommand'
-#     robot_response = mdr.Message(8888, 'TestResponse')
-#     fake_robot = threading.Thread(target=simple_response_handler,
-#                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
-#                                         robot_response))
+    expected_command = 'TestCommand'
+    robot_response = mdr.Message(8888, 'TestResponse')
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
 
-#     fake_robot.start()
+    fake_robot.start()
 
-#     assert robot.SendCustomCommand('TestCommand', wait_for_response=True, timeout=DEFAULT_TIMEOUT) == robot_response
+    assert robot.SendCustomCommand('TestCommand', expected_responses=[8888], timeout=DEFAULT_TIMEOUT) == robot_response
 
-#     robot.Disconnect()
+    assert len(robot._response_events) == 0
+
+    robot.Disconnect()
 
 
 def test_file_logger(tmp_path):

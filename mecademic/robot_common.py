@@ -61,8 +61,9 @@ class InterruptableEvent:
         If true, event is in an error state.
 
     """
-    def __init__(self, id=None):
-        self.id = id
+    def __init__(self, id=None, data=None):
+        self._id = id
+        self._data = data
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._interrupted = False
@@ -86,11 +87,34 @@ class InterruptableEvent:
             raise InterruptException('Event received exception, possibly because event will never be triggered.')
         return success
 
-    def set(self):
-        """Set the event and unblock all waits.
+    def wait_for_data(self, timeout=None):
+        """Block until event is set or should raise an exception.
+
+        Attributes
+        ----------
+        timeout : float
+            Maximum duration to wait in seconds.
+
+        Return
+        ------
+        data : object
+            Return the data object.
+
+        """
+        success = self._event.wait(timeout=timeout)
+        if self._interrupted:
+            raise InterruptException('Event received exception, possibly because event will never be triggered.')
+        elif not success:
+            raise InterruptException('Event timed out.')
+        else:
+            return self._data
+
+    def set(self, data=None):
+        """Set the event and unblock all waits. Optionally modify data before setting.
 
         """
         with self._lock:
+            self._data = data
             self._event.set()
 
     def abort(self):
@@ -133,6 +157,20 @@ class InterruptableEvent:
             if self._interrupted:
                 self._interrupted = False
                 self._event.clear()
+
+    @property
+    def id(self):
+        """Make id a read-only property since it should not be changed after instantiation.
+
+        """
+        return self._id
+
+    @property
+    def data(self):
+        """Make data a read-only property and enforce that it is only assignable at construction or using set().
+
+        """
+        return self._data
 
 
 class TimestampedData:
