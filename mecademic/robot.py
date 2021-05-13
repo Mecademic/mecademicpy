@@ -189,30 +189,6 @@ class Robot:
             raise e
 
     @staticmethod
-    def _parse_response(response):
-        """Parse raw response string into Message object.
-
-        Parameters
-        ----------
-        response : string
-            Raw response to parse.
-
-        """
-        id_start = response.find('[') + 1
-        id_end = response.find(']', id_start)
-        id = int(response[id_start:id_end])
-
-        # Find next square brackets (contains data).
-        data_start = response.find('[', id_end) + 1
-        data_end = response.find(']', data_start)
-
-        data = ''
-        if data_start != -1 and data_end != -1:
-            data = response[data_start:data_end]
-
-        return Message(id, data)
-
-    @staticmethod
     def _handle_socket_rx(robot_socket, rx_queue):
         """Handle received data on the socket.
 
@@ -249,7 +225,7 @@ class Robot:
 
             # Put all responses into the queue.
             for response in responses[:-1]:
-                rx_queue.put(Robot._parse_response(response))
+                rx_queue.put(Message.from_string(response))
 
     @staticmethod
     def _handle_socket_tx(robot_socket, tx_queue):

@@ -271,7 +271,7 @@ class TimestampedData:
 
 
 class Message:
-    """Class for storing the internal state of a generic Mecademic robot.
+    """Class for storing a response message from a Mecademic robot.
 
     Attributes
     ----------
@@ -287,6 +287,29 @@ class Message:
 
     def __repr__(self):
         return "Message with id={}, data={}".format(self.id, self.data)
+
+    @classmethod
+    def from_string(cls, input):
+        """Construct message object from raw string input.
+
+        Parameters
+        ----------
+        input : string
+            Input string to convert to message.
+
+        """
+        id_start = input.find('[') + 1
+        id_end = input.find(']', id_start)
+        id = int(input[id_start:id_end])
+        # Find next square brackets (contains data).
+        data_start = input.find('[', id_end) + 1
+        data_end = input.find(']', data_start)
+
+        data = ''
+        if data_start != -1 and data_end != -1:
+            data = input[data_start:data_end]
+
+        return cls(id, data)
 
 
 class RobotInfo:
