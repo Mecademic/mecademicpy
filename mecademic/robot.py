@@ -781,6 +781,8 @@ class Robot:
                     response_event = next(event for event in self._response_events if response.id in event.data)
                     response_event.set(data=response)
                     self._response_events.remove(response_event)
+
+                # StopIteration will trigger if no response_event is found.
                 except StopIteration:
                     pass
 
@@ -1144,10 +1146,9 @@ class Robot:
 
         # Fetching the serial number must occur outside main_lock.
         if not self._monitor_mode:
-            serial_response = self.SendCustomCommand('GetRobotSerial',
-                                                     expected_responses=[MX_ST_GET_ROBOT_SERIAL],
-                                                     timeout=self.default_timeout)
-            self._robot_info.serial = serial_response.data
+            serial_response = self.SendCustomCommand('GetRobotSerial', expected_responses=[MX_ST_GET_ROBOT_SERIAL])
+            serial_response_message = serial_response.wait_for_data(timeout=self.default_timeout)
+            self._robot_info.serial = serial_response_message.data
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
@@ -1896,7 +1897,7 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def SendCustomCommand(self, command, expected_responses=None, timeout=None):
+    def SendCustomCommand(self, command, expected_responses=None):
         """Send custom command to robot.
 
         Parameters
@@ -1907,8 +1908,10 @@ class Robot:
         expected_responses : None or list of ints.
             If not none, wait for and return one of the expected responses.
 
-        timeout : float
-            Time in seconds to wait for one of the expected responses.
+        Return
+        ------
+        If expected_responses is not None, return an event. The user can use
+        event.wait_for_data() to wait for and get the response message.
 
         """
         with self._main_lock:
@@ -1921,7 +1924,7 @@ class Robot:
             self._send_command(command)
 
         if expected_responses:
-            return event_with_data.wait_for_data(timeout=timeout)
+            return event_with_data
 
     @disconnect_on_exception
     def StartOfflineProgram(self, n, timeout=None):
@@ -2121,7 +2124,8 @@ class Robot:
         Parameters
         ----------
         args : list of event IDs
-            List of event IDs to enable.
+            List of event IDs to enable. For instance: events=[MX_ST_RT_NC_JOINT_POS, MX_ST_RT_NC_CART_POS] enables the
+            target joint positions and target end effector pose messages. Can also use events='all' to enable all.
 
         """
         with self._main_lock:

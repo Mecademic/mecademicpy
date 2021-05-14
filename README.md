@@ -33,7 +33,7 @@ pip install git+https://github.com/Mecademic/mecademic
 In a python shell or script, import the library. Then initialize an instance of the Robot class by passing the IP Address of the Robot as an argument. Finally, use connect() to establish a connection:
 
 ```python
-import mecademic.Robot as mdr
+import mecademic.robot as mdr
 robot = mdr.Robot()
 assert robot.connect(address='192.168.0.100')
 ```
@@ -83,7 +83,7 @@ For complete and working examples, please refer to the `examples` folder.
 By default the API operates in 'asynchronous mode', which means sending a command to the robot does not block program execution. To illustrate, the following code will be able to successfully print out the changing joint values resulting from the `MoveJoints` command:
 
 ```python
-import mecademic.Robot as mdr
+import mecademic.robot as mdr
 robot = mdr.Robot()
 assert robot.Connect(address='192.168.0.100', enable_synchronous_mode=False)
 robot.ActivateAndHome()
@@ -105,7 +105,7 @@ However, sometimes it is desired for programs to wait until the previous command
 The code block below will only print out the final joint position, since `robot.GetJoints()` doesn't execute until the motion is complete.
 
 ```python
-import mecademic.Robot as mdr
+import mecademic.robot as mdr
 robot = mdr.Robot()
 assert robot.Connect(address='192.168.0.100', enable_synchronous_mode=True)
 robot.ActivateAndHome()
@@ -175,12 +175,12 @@ The `Robot` class supports user-provided callback functions on a variety of even
 - on_monitor_message
 - on_offline_program_state
 
-Note that `on_checkpoint_reached` passes the ID of the checkpoint, and `on_command_message` and `on_monitor_message` passes a `mecademic.Robot.Message` object. All other callbacks do not pass any arguments.
+Note that `on_checkpoint_reached` passes the ID of the checkpoint, and `on_command_message` and `on_monitor_message` passes a `mecademic.robot.Message` object. All other callbacks do not pass any arguments.
 
 A simple usage example:
 
 ```python
-import mecademic.Robot as mdr
+import mecademic.robot as mdr
 robot = mdr.Robot()
 
 def print_connected():
@@ -288,6 +288,23 @@ with robot.FileLogger(fields=['target_joint_positions', 'target_end_effector_pos
 ```
 
 Note that the `SetRealTimeMonitoring` command must be used to enable all the real-time monitoring events which are logged. Otherwise, the robot state will be zeroed. The user can also use `SetMonitoringInterval` to choose the monitoring interval.
+
+### Sending Custom Commands
+
+It is possible to send an arbitrary command to the robot using the `SendCustomCommand()` call. The user can optionally provide expected response codes, which will cause `SendCustomCommand()` to return an event which can be used to wait for the response.
+
+Example usage:
+```python
+import mecademic.robot as mdr
+
+# Connect, activate, and home robot...
+
+response_codes = [mdr.MX_ST_ERROR_RESET, mdr.MX_ST_NO_ERROR_RESET])
+response_event = robot.SendCustomCommand('ResetError', expected_responses=response_codes)
+response = response_event.wait_for_data(timeout=10)
+```
+
+Although raw numerical response codes can also be used, it is recommended to use the named aliases provided in `mx_robot_def.py` for clarity.
 
 ## Getting Help
 

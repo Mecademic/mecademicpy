@@ -923,7 +923,8 @@ def test_custom_command():
 
     fake_robot.start()
 
-    assert robot.SendCustomCommand('TestCommand', expected_responses=[8888], timeout=DEFAULT_TIMEOUT) == robot_response
+    response_event = robot.SendCustomCommand('TestCommand', expected_responses=[8888])
+    assert response_event.wait_for_data(timeout=DEFAULT_TIMEOUT) == robot_response
 
     assert len(robot._response_events) == 0
 
