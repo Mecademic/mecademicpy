@@ -2,7 +2,7 @@
 
 # Mecademic Python API
 
-A python module designed for Robot products from Mecademic. The module offers tools that give access to the features of the Mecademic Robots such as MoveLin and MoveJoints available through the TCP/IP text interface. The module can be started from a terminal or a python application and controls the Mecademic products. 
+A python module designed for robot products from Mecademic. The module offers tools that give access to the features of the Mecademic Robots such as MoveLin and MoveJoints available through the TCP/IP text interface. The module can be started from a terminal or a python application and controls the Mecademic products. 
 
 #### Supported Robots
 
@@ -12,7 +12,7 @@ A python module designed for Robot products from Mecademic. The module offers to
 
 Please read the [user programming manual](https://mecademic.com/resources/documentation) to understand concepts necessary for proper usage of the API.
 
-To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is recommended to use python version 3.7 or higher. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
+To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is required to use python version 3.7 or higher. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
 
 The user can validate their python installation by running `python --version` in a terminal.
 
