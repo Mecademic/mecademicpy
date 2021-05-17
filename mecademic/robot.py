@@ -156,7 +156,7 @@ class Robot:
         self._command_rx_queue = queue.Queue()
         self._command_tx_queue = queue.Queue()
         self._monitor_rx_queue = queue.Queue()
-        self._response_events = list()
+        self._custom_response_events = list()
 
         self._user_checkpoints = dict()
         self._internal_checkpoints = dict()
@@ -777,14 +777,10 @@ class Robot:
             with self._main_lock:
 
                 # Find and handle custom response event.
-                try:
-                    response_event = next(event for event in self._response_events if response.id in event.data)
-                    response_event.set(data=response)
-                    self._response_events.remove(response_event)
-
-                # StopIteration will trigger if no response_event is found.
-                except StopIteration:
-                    pass
+                matched_events = (event for event in self._custom_response_events if response.id in event.data)
+                for event in matched_events:
+                    event.set(data=response)
+                    self._custom_response_events.remove(event)
 
                 if response.id == MX_ST_CHECKPOINT_REACHED:
                     self._handle_checkpoint_response(response)
@@ -1919,7 +1915,7 @@ class Robot:
 
             if expected_responses:
                 event_with_data = InterruptableEvent(data=expected_responses)
-                self._response_events.append(event_with_data)
+                self._custom_response_events.append(event_with_data)
 
             self._send_command(command)
 

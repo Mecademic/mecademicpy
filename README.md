@@ -23,7 +23,7 @@ This library is compatible with Windows, Linux, and Mac.
 To install the package through pip, Mecadmic Github repository url must be given. Pip will download and install the package on your machine and place it in the python local packages directory. This is done by running the following command:
 
 ```
-pip install git+https://github.com/Mecademic/mecademic
+pip install git+https://github.com/mecademic/mecademic
 ``` 
 
 ## Quick Start

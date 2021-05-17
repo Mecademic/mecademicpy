@@ -926,7 +926,7 @@ def test_custom_command():
     response_event = robot.SendCustomCommand('TestCommand', expected_responses=[8888])
     assert response_event.wait_for_data(timeout=DEFAULT_TIMEOUT) == robot_response
 
-    assert len(robot._response_events) == 0
+    assert len(robot._custom_response_events) == 0
 
     robot.Disconnect()
 
