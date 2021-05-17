@@ -758,7 +758,8 @@ class Robot:
                     # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotState when GET_POSE is received.
                     if response.id == MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
                         if self._file_logger != None:
-                            self._file_logger.write_fields(time.time_ns(), self._robot_state)
+                            # Log time in microseconds to be consistent with real-time logging timestamp.
+                            self._file_logger.write_fields(time.time_ns() * 1000, self._robot_state)
 
     def _command_response_handler(self):
         """Handle received messages on the command socket.
