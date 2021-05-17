@@ -9,6 +9,7 @@ import filecmp
 from functools import partial
 
 import pytest
+from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -986,6 +987,62 @@ def test_file_logger(tmp_path):
 
     log_file_path = os.path.join(tmp_path, log_file_name)
     reference_file_path = os.path.join(os.path.dirname(__file__), 'log_file_reference.csv')
+
+    # Check that the logger output matches the reference file.
+    assert filecmp.cmp(log_file_path, reference_file_path)
+
+    robot.Disconnect()
+
+
+# Logging with legacy platforms use system time. To ensure consistency across tests, mock system time call to always
+# return the same time (in nanoseconds).
+@mock.patch('time.time_ns', mock.MagicMock(return_value=1621277770487091))
+def test_file_logger_legacy(tmp_path):
+
+    # The following two functions are used to mock up data to be logged.
+    def fake_data(seed, length=6):
+        return [seed] * length
+
+    def fake_string(seed, length=6):
+        return ','.join([str(x) for x in fake_data(seed, length)])
+
+    robot = mdr.Robot()
+    assert robot is not None
+
+    connect_robot_helper(robot)
+
+    assert robot.WaitConnected(timeout=0)
+
+    # This is explicitly set for readability, and is not necessary.
+    robot._robot_info.rt_message_capable = False
+    # Send status message to indicate that the robot is activated and homed, and idle.
+    robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,1'))
+
+    # Start logging with context manager version of logger. Only log the two available fields.
+    with robot.FileLogger(file_path=tmp_path,
+                          fields=['target_joint_positions', 'target_end_effector_pose'],
+                          record_time=False):
+        robot.MoveJoints(0, -60, 60, 0, 0, 0)
+        robot.MoveJoints(0, 0, 0, 0, 0, 0)
+        for i in range(1, 4):
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(i)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_POSE, fake_string(i)))
+
+        # Terminate queue and wait for thread to exit to ensure messages are processed.
+        robot._monitor_rx_queue.put(mdr.TERMINATE)
+        robot._monitor_handler_thread.join(timeout=5)
+        # Restart the monitoring connection to ensure the API is in a good state.
+        robot._initialize_monitoring_connection()
+
+    # Ensure one log file is created.
+    directory = os.listdir(tmp_path)
+    assert len(directory) == 1
+
+    log_file_name = directory[0]
+    assert log_file_name.startswith('Meca500_R3_v9_0_0')
+
+    log_file_path = os.path.join(tmp_path, log_file_name)
+    reference_file_path = os.path.join(os.path.dirname(__file__), 'legacy_log_file_reference.csv')
 
     # Check that the logger output matches the reference file.
     assert filecmp.cmp(log_file_path, reference_file_path)

@@ -1,0 +1,18 @@
+ROBOT_INFORMATION
+model, Meca500
+revision, 3
+fw_major_rev, 9
+fw_minor_rev, 0
+fw_patch_num, 0
+serial_number, m500-99999999
+
+LOGGED_DATA
+      timestamp,target_joint_positions,,,,,                                      ,target_end_effector_pose,,,,,                                    ,
+      timestamp,target_joint_positions_0,target_joint_positions_1,target_joint_positions_2,target_joint_positions_3,target_joint_positions_4,target_joint_positions_5,target_end_effector_pose_x,target_end_effector_pose_y,target_end_effector_pose_z,target_end_effector_pose_alpha,target_end_effector_pose_beta,target_end_effector_pose_gamma,
+1621277770487.091,       1.0,       1.0,       1.0,       1.0,       1.0,       1.0,       1.0,       1.0,       1.0,       1.0,       1.0,       1.0,
+1621277770487.091,       2.0,       2.0,       2.0,       2.0,       2.0,       2.0,       2.0,       2.0,       2.0,       2.0,       2.0,       2.0,
+1621277770487.091,       3.0,       3.0,       3.0,       3.0,       3.0,       3.0,       3.0,       3.0,       3.0,       3.0,       3.0,       3.0,
+
+SENT_COMMANDS
+"MoveJoints(0,-60,60,0,0,0)"
+"MoveJoints(0,0,0,0,0,0)"
