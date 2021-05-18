@@ -10,7 +10,7 @@ A python module designed for robot products from Mecademic. The module offers to
 
 ## Prerequisites
 
-Please read the [user programming manual](https://mecademic.com/resources/documentation) to understand concepts necessary for proper usage of the API.
+Please read the [user programming manual](https://mecademic.com/resources/documentation) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
 
 To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is required to use python version 3.7 or higher. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
 
@@ -78,6 +78,7 @@ robot.ResetError()
 For complete and working examples, please refer to the `examples` folder.
 
 ## Features and Additional Information
+
 ### Synchronous vs. Asynchronous Mode
 
 By default the API operates in 'asynchronous mode', which means sending a command to the robot does not block program execution. To illustrate, the following code will be able to successfully print out the changing joint values resulting from the `MoveJoints` command:
@@ -306,9 +307,21 @@ response = response_event.wait_for_data(timeout=10)
 
 Although raw numerical response codes can also be used, it is recommended to use the named aliases provided in `mx_robot_def.py` for clarity.
 
+### API Reference
+
+For a complete list of available methods and further documentation, use the help() function on any class in a python terminal (such as `ipython`).
+
+```python
+>>> import mecademic.robot as mdr
+>>> help(mdr.Robot)
+>>> help(mdr.Message)
+```
+
 ## Getting Help
 
-To get support, you can start an issue on the Mecademic/python_driver issues section or send an email to support@mecademic.com.
+
+
+To get support, you can start an issue on the Mecademic github page, issues section or send an email to support@mecademic.com.
 
 ## License
 

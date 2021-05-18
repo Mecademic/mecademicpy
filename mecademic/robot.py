@@ -1526,6 +1526,20 @@ class Robot:
         self._send_motion_command('SetCartLinVel', [w])
 
     @disconnect_on_exception
+    def GripperOpen(self):
+        """Open the gripper.
+
+        """
+        self._send_motion_command('GripperOpen')
+
+    @disconnect_on_exception
+    def GripperClose(self):
+        """Close the gripper.
+
+        """
+        self._send_motion_command('GripperClose')
+
+    @disconnect_on_exception
     def MoveGripper(self, state=GRIPPER_OPEN):
         """Open or close the gripper.
 
@@ -1538,9 +1552,9 @@ class Robot:
 
         """
         if state:
-            self._send_motion_command('GripperOpen')
+            self.GripperOpen()
         else:
-            self._send_motion_command('GripperClose')
+            self.GripperClose()
 
     @disconnect_on_exception
     def SetGripperForce(self, p):
