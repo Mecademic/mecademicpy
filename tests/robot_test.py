@@ -47,12 +47,10 @@ def robot():
     assert robot is not None
 
     # Yield the robot setup function.
-    try:
-        yield robot
+    yield robot
 
     # Finally disconnect on teardown.
-    finally:
-        robot.Disconnect()
+    robot.Disconnect()
 
 
 # Automates sending the welcome message and responding to the robot serial query. Do not use for monitor_mode=True.
