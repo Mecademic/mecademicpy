@@ -11,6 +11,7 @@ from functools import partial
 import pytest
 from unittest import mock
 
+# Allow the mecademic.robot module to be found using a relative path from this file.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import mecademic.robot as mdr
@@ -20,14 +21,39 @@ MECA500_CONNECTED_RESPONSE = 'Connected to Meca500 R3 v9.0.0'
 MECA500_SERIAL = 'm500-99999999'
 DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
+#####################################################################################
+# Test readme
+#####################################################################################
 
-# Function for exchanging one message with queue.
-def simple_response_handler(queue_in, queue_out, expected_in, desired_out):
-    assert queue_in.get(block=True, timeout=1) == expected_in
-    queue_out.put(desired_out)
+# Use the 'robot' test fixture to automatically instantiate a robot object.
+
+# Using the 'robot' fixure also enables automatically calling robot.Disconnect() at
+# test teardown.
+
+# Use 'connect_robot_helper(robot, args..)' to take care of robot connection.
+
+# Refer to the 'test_start_offline_program()' test case for an example usage that
+# also includes using `simple_response_handler()` to test a message exchange.
+
+#####################################################################################
+# Test fixtures and helper functions
+#####################################################################################
 
 
-# Automates exchanging the welcome message and responding to the robot serial query. Do not use for monitor_mode=True.
+# Fixture for creating robot object and also disconnecting on test teardown.
+@pytest.fixture
+def robot():
+    robot = mdr.Robot()
+    assert robot is not None
+
+    # Yield the robot setup function.
+    yield robot
+
+    # Finally disconnect on teardown.
+    robot.Disconnect()
+
+
+# Automates sending the welcome message and responding to the robot serial query. Do not use for monitor_mode=True.
 def connect_robot_helper(robot, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=False):
     # Prepare connection messages.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
@@ -46,6 +72,14 @@ def connect_robot_helper(robot, offline_mode=True, disconnect_on_exception=False
                   enable_synchronous_mode=enable_synchronous_mode)
 
     fake_robot.join()
+
+    assert robot.WaitConnected(timeout=0)
+
+
+# Function for exchanging one message with queue.
+def simple_response_handler(queue_in, queue_out, expected_in, desired_out):
+    assert queue_in.get(block=True, timeout=1) == expected_in
+    queue_out.put(desired_out)
 
 
 # Server to listen for a connection. Send initial data in data_list on connect, send rest in response to any msg.
@@ -93,9 +127,13 @@ class FakeSocket():
         return self.queue.get()
 
 
+#####################################################################################
+# Test cases
+#####################################################################################
+
+
 # Test that connecting with invalid parameters raises exception.
-def test_setup_invalid_input():
-    robot = mdr.Robot()
+def test_setup_invalid_input(robot):
 
     with pytest.raises(TypeError):
         robot.Connect(2)
@@ -104,10 +142,7 @@ def test_setup_invalid_input():
 
 
 # Test that connecting without robot will raise exception. On failure, first check that virtual robot is not running!
-def test_connection_no_robot():
-    robot = mdr.Robot()
-    assert robot is not None
-
+def test_connection_no_robot(robot):
     robot.default_timeout = 0
 
     with pytest.raises(mdr.CommunicationError):
@@ -115,9 +150,7 @@ def test_connection_no_robot():
 
 
 # Test connection/disconnection cycle with real socket. On failure, first check that virtual robot is not running!
-def test_successful_connection_full_socket():
-    robot = mdr.Robot()
-    assert robot is not None
+def test_successful_connection_full_socket(robot):
 
     command_server_thread = run_fake_server(
         TEST_IP, mdr.MX_ROBOT_TCP_PORT_CONTROL,
@@ -150,6 +183,7 @@ def test_successful_connection_split_response():
     fake_socket = FakeSocket([b'[3', b'00', b'0][Connected to Meca500 R3 v9.0.0]\0', b''])
     rx_queue = queue.Queue()
 
+    # Test the socket handler directly to ensure messages are received across several recv() calls.
     mdr.Robot._handle_socket_rx(fake_socket, rx_queue)
 
     assert rx_queue.qsize() == 1
@@ -159,9 +193,7 @@ def test_successful_connection_split_response():
 
 
 # Ensure user can reconnect to robot after disconnection or failure to connect.
-def test_sequential_connections():
-    robot = mdr.Robot()
-    assert robot is not None
+def test_sequential_connections(robot):
 
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_USER_ALREADY, ''))
     with pytest.raises(Exception):
@@ -179,7 +211,8 @@ def test_sequential_connections():
 
 
 # Test parsing of monitoring port messages, and that robot state is correctly updated.
-def test_monitoring_connection():
+def test_monitoring_connection(robot):
+    connect_robot_helper(robot)
 
     # Helper functions for generating test data. To ensure data is unique in each field, we add the response code to the
     # 'seed' array, with is generated with range().
@@ -195,11 +228,6 @@ def test_monitoring_connection():
     def make_test_message(code, data):
         test_array = make_test_array(code, data)
         return mdr.Message(code, ','.join([str(x) for x in test_array]))
-
-    robot = mdr.Robot()
-    assert robot is not None
-
-    connect_robot_helper(robot)
 
     # Send monitor messages.
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_POS, range(7)))
@@ -250,13 +278,9 @@ def test_monitoring_connection():
     accel_array = make_test_array(mdr.MX_ST_RT_ACCELEROMETER, range(5))
     assert robot._robot_state.accelerometer == {accel_array[1]: mdr.TimestampedData(accel_array[0], accel_array[2:])}
 
-    robot.Disconnect()
 
-
-def test_internal_checkpoints():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that checkpoints created by user are properly sent to robot, waited on, and unblocked.
+def test_user_set_checkpoints(robot):
     connect_robot_helper(robot)
 
     # Validate internal checkpoint waiting.
@@ -271,13 +295,9 @@ def test_internal_checkpoints():
     # Check that wait succeeds if response is sent.
     assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
-    robot.Disconnect()
 
-
-def test_external_checkpoints():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that the user can wait on checkpoints which were set by an external source, like an offline program.
+def test_external_checkpoints(robot):
     connect_robot_helper(robot)
 
     # Validate external checkpoint waiting.
@@ -292,64 +312,65 @@ def test_external_checkpoints():
     # Check that wait succeeds if response is sent.
     assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
-    robot.Disconnect()
 
-
-def test_multiple_checkpoints():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that user-set and external checkpoints work concurrently.
+def test_multiple_checkpoints(robot):
     connect_robot_helper(robot)
 
     # Validate multiple checkpoints, internal and external.
     checkpoint_1 = robot.SetCheckpoint(1)
     checkpoint_2 = robot.SetCheckpoint(2)
     checkpoint_3 = robot.ExpectExternalCheckpoint(3)
-    # Check that wait times out if response has not been sent.
+
+    # All three checkpoints are still pending, check that all three time out.
     assert not checkpoint_1.wait(timeout=0)
     assert not checkpoint_2.wait(timeout=0)
     assert not checkpoint_3.wait(timeout=0)
+
+    # First checkpoint is reached, second two should time out.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
+    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
     assert not checkpoint_2.wait(timeout=0)
     assert not checkpoint_3.wait(timeout=0)
+
+    # First and second checkpoints are reached, last one should time out.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '2'))
+    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
+    assert checkpoint_2.wait(timeout=DEFAULT_TIMEOUT)
     assert not checkpoint_3.wait(timeout=0)
+
+    # All checkpoints are reached.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '3'))
-    # Check that waits succeeds if response is sent.
     assert checkpoint_3.wait(timeout=DEFAULT_TIMEOUT)
     assert checkpoint_2.wait(timeout=DEFAULT_TIMEOUT)
     assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
-    robot.Disconnect()
 
-
-def test_repeated_checkpoints():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that repeated checkpoints are unblocked in the order they are set.
+# Repeated checkpoints are supported but discouraged.
+def test_repeated_checkpoints(robot):
     connect_robot_helper(robot)
 
-    # Repeated checkpoints are discouraged, but supported.
     checkpoint_1_a = robot.SetCheckpoint(1)
     checkpoint_1_b = robot.SetCheckpoint(1)
+
     # Check that wait times out if response has not been sent.
     assert not checkpoint_1_a.wait(timeout=0)
     assert not checkpoint_1_b.wait(timeout=0)
-    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
+
     # Only one checkpoint has been returned, the second should still block.
-    assert not checkpoint_1_b.wait(timeout=0)
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
+    assert not checkpoint_1_b.wait(timeout=0)
+    assert checkpoint_1_a.wait(timeout=DEFAULT_TIMEOUT)
+
     # Check that waits succeeds if response is sent.
+    robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
     assert checkpoint_1_b.wait(timeout=DEFAULT_TIMEOUT)
     assert checkpoint_1_a.wait(timeout=DEFAULT_TIMEOUT)
 
-    robot.Disconnect()
 
-
-def test_special_checkpoints():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test WaitForAnyCheckpoint().
+def test_special_checkpoints(robot):
     connect_robot_helper(robot)
 
     checkpoint_1 = robot.SetCheckpoint(1)
@@ -360,27 +381,20 @@ def test_special_checkpoints():
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
     assert robot.WaitForAnyCheckpoint()
 
-    robot.Disconnect()
 
-
-def test_unaccounted_checkpoints():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that receiving a checkpoint without an associated wait does not raise exception.
+def test_unaccounted_checkpoints(robot):
     connect_robot_helper(robot)
 
     # Send unexpected checkpoint.
     robot._command_rx_queue.put(mdr.Message(mdr.MX_ST_CHECKPOINT_REACHED, '1'))
 
+    # This call will raise an exception if internal states are invalid.
     robot._check_internal_states()
 
-    robot.Disconnect()
 
-
-def test_stranded_checkpoints():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that checkpoints which will never be unblocked raise an exception.
+def test_stranded_checkpoints(robot):
     connect_robot_helper(robot)
 
     checkpoint_1 = robot.SetCheckpoint(1)
@@ -392,10 +406,8 @@ def test_stranded_checkpoints():
         checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
 
-def test_events():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that events can be correctly waited for and set.
+def test_events(robot):
     assert not robot.WaitActivated(timeout=0)
     assert robot.WaitDeactivated()
     assert not robot.WaitConnected(timeout=0)
@@ -464,9 +476,8 @@ def test_events():
     assert robot.WaitDisconnected()
 
 
-def test_disconnect_on_exception():
-    robot = mdr.Robot()
-    assert robot is not None
+# Test that robot disconnects automatically on exception when feature is enabled.
+def test_disconnect_on_exception(robot):
 
     connect_robot_helper(robot, disconnect_on_exception=True)
 
@@ -474,21 +485,16 @@ def test_disconnect_on_exception():
         robot.SetCheckpoint(0)
 
     # Test that disabling the feature avoids the disconnect.
-    robot = mdr.Robot()
-    assert robot is not None
-
+    robot.Disconnect()
     connect_robot_helper(robot, disconnect_on_exception=False)
 
     with pytest.raises(AssertionError):
         robot.SetCheckpoint(0)
 
-    robot.Disconnect()
 
-
-def test_callbacks():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that callbacks can be set and are correctly called. Every callback in the RobotCallbacks class is checked.
+# If a new callback is added, the test must be updated to trigger the callback.
+def test_callbacks(robot):
     # Initialize object which will contain all user-defined callback functions.
     callbacks = mdr.RobotCallbacks()
 
@@ -515,7 +521,6 @@ def test_callbacks():
     callbacks.on_checkpoint_reached = checkpoint_callback
 
     # The two message callbacks are also unique.
-
     def command_message_callback(message):
         called_callbacks.append('on_command_message')
 
@@ -588,6 +593,7 @@ def test_callbacks():
         assert robot._callback_thread == None
 
 
+# Test unblocking InterruptableEvent class with exception.
 def test_event_with_exception():
     # Test successful setting.
     event = mdr.InterruptableEvent()
@@ -605,10 +611,9 @@ def test_event_with_exception():
         exception_event.wait(timeout=0)
 
 
-def test_motion_commands():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test all motion commands except those in skip_list. Skipped commands do not follow standard motion command format, or
+# their arguments cannot be deduced from the function signature.
+def test_motion_commands(robot):
     connect_robot_helper(robot)
 
     skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel']
@@ -636,13 +641,9 @@ def test_motion_commands():
             # Check that the test arguments.
             assert text_command.find(test_args_text) != -1, 'Method {} args do not match text command'.format(name)
 
-    robot.Disconnect()
 
-
-def test_joint_moves():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test that joint-type moves send the correct command and checks input.
+def test_joint_moves(robot):
     connect_robot_helper(robot)
 
     test_args = [1, 2, 3, 4, 5, 6]
@@ -672,13 +673,9 @@ def test_joint_moves():
     with pytest.raises(ValueError):
         robot.MoveJointsVel(1, 2, 3)
 
-    robot.Disconnect()
 
-
-def test_simple_gets():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test get commands with synchronous_update=True.
+def test_synchronous_gets(robot):
     connect_robot_helper(robot)
 
     test_data = [1, 2, 3, 4, 5, 6]
@@ -746,13 +743,9 @@ def test_simple_gets():
     with pytest.raises(TimeoutError):
         robot.GetConfTurn(synchronous_update=True, timeout=0)
 
-    robot.Disconnect()
 
-
-def test_start_offline_program():
-    robot = mdr.Robot()
-    assert robot is not None
-
+# Test initializing offline programs.
+def test_start_offline_program(robot):
     connect_robot_helper(robot, enable_synchronous_mode=True)
 
     expected_command = 'StartProgram(1)'
@@ -780,12 +773,9 @@ def test_start_offline_program():
 
     fake_robot.join(timeout=1)
 
-    robot.Disconnect()
 
-
-def test_monitor_mode():
-    robot = mdr.Robot()
-    assert robot is not None
+# Test monitor-only mode. (No commands can be sent.)
+def test_monitor_mode(robot):
 
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
     robot.Connect(TEST_IP,
@@ -814,22 +804,17 @@ def test_monitor_mode():
     with pytest.raises(mdr.InvalidStateError):
         robot.MoveJoints(1, 2, 3, 4, 5, 6)
 
-    robot.Disconnect()
 
+# Test that get commands correctly return timestamps.
+def test_gets_with_timestamp(robot):
+    connect_robot_helper(robot)
 
-def test_gets_with_timestamp():
+    # Helper functions for generating fake data.
     def fake_data(seed, length=6):
         return [seed] * length
 
     def fake_string(seed, length=6):
         return ','.join([str(x) for x in fake_data(seed, length)])
-
-    robot = mdr.Robot()
-    assert robot is not None
-
-    connect_robot_helper(robot)
-
-    assert robot.WaitConnected(timeout=0)
 
     # Test legacy messages:
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_JOINTS, fake_string(1)))
@@ -921,17 +906,10 @@ def test_gets_with_timestamp():
     assert robot.GetPose(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
     fake_robot.join()
 
-    robot.Disconnect()
-
 
 # Test the sending and receiving of custom commands.
-def test_custom_command():
-    robot = mdr.Robot()
-    assert robot is not None
-
+def test_custom_command(robot):
     connect_robot_helper(robot)
-
-    assert robot.WaitConnected(timeout=0)
 
     expected_command = 'TestCommand'
     robot_response = mdr.Message(8888, 'TestResponse')
@@ -946,11 +924,10 @@ def test_custom_command():
 
     assert len(robot._custom_response_events) == 0
 
-    robot.Disconnect()
-
 
 # Test the ability to log robot state for legacy (non rt monitoring message capable) platforms.
-def test_file_logger(tmp_path):
+def test_file_logger(tmp_path, robot):
+    connect_robot_helper(robot)
 
     # The following two functions are used to mock up data to be logged.
     def fake_data(seed, length=6):
@@ -958,13 +935,6 @@ def test_file_logger(tmp_path):
 
     def fake_string(seed, length=6):
         return ','.join([str(x) for x in fake_data(seed, length)])
-
-    robot = mdr.Robot()
-    assert robot is not None
-
-    connect_robot_helper(robot)
-
-    assert robot.WaitConnected(timeout=0)
 
     # Manually set that the robot is rt-message-capable.
     robot._robot_info.rt_message_capable = True
@@ -1022,7 +992,8 @@ def test_file_logger(tmp_path):
 # Logging with legacy platforms use system time. To ensure consistency across tests, mock system time call to always
 # return the same time (in nanoseconds).
 @mock.patch('time.time_ns', mock.MagicMock(return_value=1621277770487091))
-def test_file_logger_legacy(tmp_path):
+def test_file_logger_legacy(tmp_path, robot):
+    connect_robot_helper(robot)
 
     # The following two functions are used to mock up data to be logged.
     def fake_data(seed, length=6):
@@ -1030,13 +1001,6 @@ def test_file_logger_legacy(tmp_path):
 
     def fake_string(seed, length=6):
         return ','.join([str(x) for x in fake_data(seed, length)])
-
-    robot = mdr.Robot()
-    assert robot is not None
-
-    connect_robot_helper(robot)
-
-    assert robot.WaitConnected(timeout=0)
 
     # This is explicitly set for readability, and is not necessary.
     robot._robot_info.rt_message_capable = False
