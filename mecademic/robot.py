@@ -2134,7 +2134,7 @@ class Robot:
 
         Parameters
         ----------
-        args : list of event IDs
+        events : list of event IDs
             List of event IDs to enable. For instance: events=[MX_ST_RT_NC_JOINT_POS, MX_ST_RT_NC_CART_POS] enables the
             target joint positions and target end effector pose messages. Can also use events='all' to enable all.
 

@@ -35,7 +35,7 @@ In a python shell or script, import the library. Then initialize an instance of 
 ```python
 import mecademic.robot as mdr
 robot = mdr.Robot()
-assert robot.connect(address='192.168.0.100')
+robot.Connect(address='192.168.0.100')
 ```
 
 The connect function returns true if connection is successful.
@@ -86,7 +86,7 @@ By default the API operates in 'asynchronous mode', which means sending a comman
 ```python
 import mecademic.robot as mdr
 robot = mdr.Robot()
-assert robot.Connect(address='192.168.0.100', enable_synchronous_mode=False)
+robot.Connect(address='192.168.0.100', enable_synchronous_mode=False)
 robot.ActivateAndHome()
 
 robot.MoveJoints(0, 0, 0, 0, 0, 0)
@@ -108,7 +108,7 @@ The code block below will only print out the final joint position, since `robot.
 ```python
 import mecademic.robot as mdr
 robot = mdr.Robot()
-assert robot.Connect(address='192.168.0.100', enable_synchronous_mode=True)
+robot.Connect(address='192.168.0.100', enable_synchronous_mode=True)
 robot.ActivateAndHome()
 
 robot.MoveJoints(0, 0, 0, 0, 0, 0)
