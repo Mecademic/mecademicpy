@@ -23,6 +23,7 @@ def disconnect_on_exception(func):
         Function to wrap.
 
     """
+
     @functools.wraps(func)
     def wrap(self, *args, **kwargs):
         try:
@@ -103,6 +104,7 @@ class Robot:
         Default timeout to use for blocking operations.
 
     """
+
     def __init__(self):
         """Constructor for an instance of the Controller class.
 

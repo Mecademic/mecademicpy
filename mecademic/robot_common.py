@@ -61,6 +61,7 @@ class InterruptableEvent:
         If true, event is in an error state.
 
     """
+
     def __init__(self, id=None, data=None):
         self._id = id
         self._data = data
@@ -184,6 +185,7 @@ class TimestampedData:
         Data to be stored.
 
     """
+
     def __init__(self, timestamp, data):
         self.timestamp = timestamp
         self.data = data
@@ -281,6 +283,7 @@ class Message:
         The raw payoad of the message.
 
     """
+
     def __init__(self, id, data):
         self.id = id
         self.data = data
@@ -337,6 +340,7 @@ class RobotInfo:
         Number of joints on the robot.
 
     """
+
     def __init__(self,
                  model=None,
                  revision=None,
@@ -447,6 +451,7 @@ class RobotState:
         True if robot is not moving and motion queue is empty.
 
     """
+
     def __init__(self, num_joints):
         self.target_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
         self.target_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
@@ -535,6 +540,7 @@ class RobotEvents:
         Set if end of block has been reached.
 
     """
+
     def __init__(self):
         self.on_connected = InterruptableEvent()
         self.on_disconnected = InterruptableEvent()
@@ -651,6 +657,7 @@ class RobotCallbacks:
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
     """
+
     def __init__(self):
         self.on_connected = None
         self.on_disconnected = None
@@ -693,6 +700,7 @@ class CallbackQueue():
         Set of names of registered callbacks.
 
     """
+
     def __init__(self, robot_callbacks):
         self._queue = queue.Queue()
         self._registered_callbacks = set()

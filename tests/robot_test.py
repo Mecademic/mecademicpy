@@ -115,6 +115,7 @@ def run_fake_server(address, port, data_list):
 
 # Simulated socket, initialized with list of responses, one response at a time is returned with recv().
 class FakeSocket():
+
     def __init__(self, input):
         self.queue = queue.Queue()
         for x in input:

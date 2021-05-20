@@ -19,6 +19,7 @@ class CSVFileLogger:
         Each numerical element will have this width.
 
     """
+
     def __init__(self, robot_info, robot_state, fields=None, file_path=None, record_time=True):
         """Initialize class.
 
@@ -114,6 +115,7 @@ class CSVFileLogger:
             Information about the robot, such as model name and number of joints.
 
         """
+
         def assemble_with_prefix(field, names):
             return ','.join([field + '_' + str(x) for x in names]) + ','
 
