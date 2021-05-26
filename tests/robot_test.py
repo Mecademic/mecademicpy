@@ -701,7 +701,6 @@ def test_synchronous_gets(robot):
 
     fake_robot.start()
 
-    result_pose = robot.GetPose(synchronous_update=True, timeout=1)
     assert robot.GetPose(synchronous_update=True, timeout=1) == test_data
     fake_robot.join()
 
@@ -882,7 +881,6 @@ def test_gets_with_timestamp(robot):
     assert robot.GetRobotInfo().rt_message_capable
 
     # Test synchronous gets with RT messages.
-    expected_command = 'GetRtTargetJointPos'
     expected_command = 'GetRtTargetJointPos'
     robot_response = mdr.Message(mdr.MX_ST_RT_TARGET_JOINT_POS, fake_string(4, 7))
     fake_robot = threading.Thread(target=simple_response_handler,

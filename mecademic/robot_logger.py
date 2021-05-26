@@ -122,19 +122,18 @@ class CSVFileLogger:
         # Write full name for each field.
         self.file.write(f"{'timestamp':>{self.timestamp_element_width}},")
         for field in self.fields:
-            if (field.endswith('joint_positions') or field.endswith('joint_velocity')
-                    or field.endswith('joint_torque_ratio')):
+            if (field.endswith('joint_pos') or field.endswith('joint_vel') or field.endswith('joint_torque')):
                 # Write field name followed by joint number. For example: "rt_target_joint_pos_1".
                 self.file.write(assemble_with_prefix(field, range(robot_info.num_joints)))
             elif field.endswith('cart_pos'):
                 self.file.write(assemble_with_prefix(field, ['x', 'y', 'z', 'alpha', 'beta', 'gamma']))
-            elif field.endswith('end_effector_velocity'):
+            elif field.endswith('cart_vel'):
                 self.file.write(
                     assemble_with_prefix(field, ['x_dot', 'y_dot', 'z_dot', 'omega_x', 'omega_y', 'omega_z']))
-            elif field.endswith('configurations'):
-                self.file.write(assemble_with_prefix(field, ['shoulder', 'elbow', 'wrist']))
-            elif field.endswith('last_joint_turn'):
+            elif field.endswith('conf_turn'):
                 self.file.write(field + ',')
+            elif field.endswith('conf'):
+                self.file.write(assemble_with_prefix(field, ['shoulder', 'elbow', 'wrist']))
             else:
                 raise ValueError(f'Missing formatting for field: {field}')
         self.file.write('\n')

@@ -700,7 +700,7 @@ class Robot:
         # Variables to hold joint positions and poses while waiting for timestamp.
         rt_joint_pos = None
         rt_cart_pos = None
-        rt_joint_configuration = None
+        rt_conf = None
         rt_conf_turn = None
 
         while True:
@@ -726,7 +726,7 @@ class Robot:
                 elif response.id == MX_ST_GET_POSE and self._robot_info.rt_message_capable:
                     rt_cart_pos = string_to_floats(response.data)
                 elif response.id == MX_ST_GET_CONF and self._robot_info.rt_message_capable:
-                    rt_joint_configuration = string_to_floats(response.data)
+                    rt_conf = string_to_floats(response.data)
                 elif response.id == MX_ST_GET_CONF_TURN and self._robot_info.rt_message_capable:
                     rt_conf_turn = string_to_floats(response.data)
 
@@ -738,13 +738,13 @@ class Robot:
                     # Update the legacy joint and pose messages with timestamps.
                     if rt_joint_pos:
                         self._robot_state.rt_target_joint_pos.update_from_data(timestamp, rt_joint_pos)
-                        joint_positions = None
+                        rt_joint_pos = None
                     if rt_cart_pos:
                         self._robot_state.rt_target_cart_pos.update_from_data(timestamp, rt_cart_pos)
                         rt_cart_pos = None
-                    if rt_joint_configuration:
-                        self._robot_state.rt_target_conf.update_from_data(timestamp, rt_joint_configuration)
-                        rt_joint_configuration = None
+                    if rt_conf:
+                        self._robot_state.rt_target_conf.update_from_data(timestamp, rt_conf)
+                        rt_conf = None
                     if rt_conf_turn:
                         self._robot_state.rt_target_conf_turn.update_from_data(timestamp, rt_conf_turn)
                         rt_conf_turn = None
@@ -2080,9 +2080,9 @@ class Robot:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_state.rt_target_joint_configurations)
+                    return copy.deepcopy(self._robot_state.rt_target_conf)
 
-            return copy.deepcopy(self._robot_state.rt_target_joint_configurations.data)
+            return copy.deepcopy(self._robot_state.rt_target_conf.data)
 
     @disconnect_on_exception
     def GetConfTurn(self, include_timestamp=False, synchronous_update=False, timeout=None):
@@ -2112,9 +2112,9 @@ class Robot:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_state.rt_target_last_joint_turn)
+                    return copy.deepcopy(self._robot_state.rt_target_conf_turn)
 
-            return copy.deepcopy(self._robot_state.rt_target_last_joint_turn.data[0])
+            return copy.deepcopy(self._robot_state.rt_target_conf_turn.data[0])
 
     @disconnect_on_exception
     def SetMonitoringInterval(self, t):
