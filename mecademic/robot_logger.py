@@ -55,11 +55,11 @@ class CSVFileLogger:
 
             if robot_info.rt_message_capable:
                 for attr in vars(robot_state):
-                    if attr.startswith('target') or attr.startswith('drive'):
+                    if attr.startswith('rt_'):
                         fields.append(attr)
             else:
                 # Only the following fields are available if platform is not rt monitoring capable.
-                fields = ['target_joint_positions', 'target_end_effector_pose']
+                fields = ['rt_target_joint_pos', 'rt_target_cart_pos']
 
         # Set attributes.
         self.file = open(file_name, 'w', newline='')
@@ -124,9 +124,9 @@ class CSVFileLogger:
         for field in self.fields:
             if (field.endswith('joint_positions') or field.endswith('joint_velocity')
                     or field.endswith('joint_torque_ratio')):
-                # Write field name followed by joint number. For example: "target_joint_positions_1".
+                # Write field name followed by joint number. For example: "rt_target_joint_pos_1".
                 self.file.write(assemble_with_prefix(field, range(robot_info.num_joints)))
-            elif field.endswith('end_effector_pose'):
+            elif field.endswith('cart_pos'):
                 self.file.write(assemble_with_prefix(field, ['x', 'y', 'z', 'alpha', 'beta', 'gamma']))
             elif field.endswith('end_effector_velocity'):
                 self.file.write(

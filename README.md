@@ -259,30 +259,28 @@ The `FileLogger` context will automatically end logging after either completing 
 
 The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
 
-- target_joint_positions 
-- target_end_effector_pose 
+- rt_target_joint_pos 
+- rt_target_cart_pos 
+- rt_target_joint_vel 
+- rt_target_cart_vel 
+- rt_target_conf 
+- rt_target_conf_turn 
 
-- target_joint_velocity 
-- target_end_effector_velocity 
+- rt_joint_pos 
+- rt_cart_pos
+- rt_joint_vel 
+- rt_joint_torq 
+- rt_cart_vel 
+- rt_conf 
+- rt_conf_turn
 
-- target_joint_configurations 
-- target_last_joint_turn 
+- rt_accelerometer
 
-- drive_joint_positions 
-- drive_end_effector_pose 
-
-- drive_joint_velocity 
-- drive_joint_torque_ratio 
-- drive_end_effector_velocity 
-
-- drive_joint_configurations 
-- drive_last_joint_turn
-
-The following example only logs the `target_joint_positions` and `target_end_effector_pose`.
+The following example only logs the `rt_target_joint_pos` and `rt_target_cart_pos`.
 
 ```python
 robot.WaitIdle()
-with robot.FileLogger(fields=['target_joint_positions', 'target_end_effector_pose']):
+with robot.FileLogger(fields=['rt_target_joint_pos', 'rt_target_cart_pos']):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()

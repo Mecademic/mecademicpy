@@ -698,10 +698,10 @@ class Robot:
 
         """
         # Variables to hold joint positions and poses while waiting for timestamp.
-        joint_positions = None
-        end_effector_pose = None
-        joint_configuration = None
-        last_joint_turn = None
+        rt_joint_pos = None
+        rt_cart_pos = None
+        rt_joint_configuration = None
+        rt_conf_turn = None
 
         while True:
             # Wait for a message in the queue.
@@ -722,13 +722,13 @@ class Robot:
                 # Temporarily save data if rt messages will be availble to add timestamps.
                 # Note that if robot platform isn't RT message capable, the update occurs in _handle_common_messages.
                 if response.id == MX_ST_GET_JOINTS and self._robot_info.rt_message_capable:
-                    joint_positions = string_to_floats(response.data)
+                    rt_joint_pos = string_to_floats(response.data)
                 elif response.id == MX_ST_GET_POSE and self._robot_info.rt_message_capable:
-                    end_effector_pose = string_to_floats(response.data)
+                    rt_cart_pos = string_to_floats(response.data)
                 elif response.id == MX_ST_GET_CONF and self._robot_info.rt_message_capable:
-                    joint_configuration = string_to_floats(response.data)
+                    rt_joint_configuration = string_to_floats(response.data)
                 elif response.id == MX_ST_GET_CONF_TURN and self._robot_info.rt_message_capable:
-                    last_joint_turn = string_to_floats(response.data)
+                    rt_conf_turn = string_to_floats(response.data)
 
                 if response.id == MX_ST_RT_CYCLE_END:
                     if not self._robot_info.rt_message_capable:
@@ -736,18 +736,18 @@ class Robot:
                     timestamp = float(response.data)
 
                     # Update the legacy joint and pose messages with timestamps.
-                    if joint_positions:
-                        self._robot_state.target_joint_positions.update_from_data(timestamp, joint_positions)
+                    if rt_joint_pos:
+                        self._robot_state.rt_target_joint_pos.update_from_data(timestamp, rt_joint_pos)
                         joint_positions = None
-                    if end_effector_pose:
-                        self._robot_state.target_end_effector_pose.update_from_data(timestamp, end_effector_pose)
-                        end_effector_pose = None
-                    if joint_configuration:
-                        self._robot_state.target_joint_configurations.update_from_data(timestamp, joint_configuration)
-                        joint_configuration = None
-                    if last_joint_turn:
-                        self._robot_state.target_last_joint_turn.update_from_data(timestamp, last_joint_turn)
-                        last_joint_turn = None
+                    if rt_cart_pos:
+                        self._robot_state.rt_target_cart_pos.update_from_data(timestamp, rt_cart_pos)
+                        rt_cart_pos = None
+                    if rt_joint_configuration:
+                        self._robot_state.rt_target_conf.update_from_data(timestamp, rt_joint_configuration)
+                        rt_joint_configuration = None
+                    if rt_conf_turn:
+                        self._robot_state.rt_target_conf_turn.update_from_data(timestamp, rt_conf_turn)
+                        rt_conf_turn = None
 
                     # If logging is active, log the current state.
                     if self._file_logger != None:
@@ -838,72 +838,72 @@ class Robot:
 
         # Only update using legacy messages if robot is not capable of rt messages.
         elif response.id == MX_ST_GET_JOINTS and not self._robot_info.rt_message_capable:
-            self._robot_state.target_joint_positions = TimestampedData(0, string_to_floats(response.data))
+            self._robot_state.rt_target_joint_pos = TimestampedData(0, string_to_floats(response.data))
             if is_command_response:
                 self._robot_events.on_joints_updated.set()
 
         elif response.id == MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
-            self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
+            self._robot_state.rt_target_cart_pos = TimestampedData(0, string_to_floats(response.data))
             if is_command_response:
                 self._robot_events.on_pose_updated.set()
 
         elif response.id == MX_ST_GET_CONF and not self._robot_info.rt_message_capable:
-            self._robot_state.target_joint_configurations = TimestampedData(0, string_to_floats(response.data))
+            self._robot_state.rt_target_conf = TimestampedData(0, string_to_floats(response.data))
             if is_command_response:
                 self._robot_events.on_conf_updated.set()
 
         elif response.id == MX_ST_GET_CONF_TURN and not self._robot_info.rt_message_capable:
-            self._robot_state.target_last_joint_turn = TimestampedData(0, string_to_floats(response.data))
+            self._robot_state.rt_target_conf_turn = TimestampedData(0, string_to_floats(response.data))
             if is_command_response:
                 self._robot_events.on_conf_turn_updated.set()
 
-        elif response.id == MX_ST_RT_NC_JOINT_POS:
-            self._robot_state.target_joint_positions.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_TARGET_JOINT_POS:
+            self._robot_state.rt_target_joint_pos.update_from_csv(response.data)
             if is_command_response:
                 self._robot_events.on_joints_updated.set()
 
-        elif response.id == MX_ST_RT_NC_CART_POS:
-            self._robot_state.target_end_effector_pose.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_TARGET_CART_POS:
+            self._robot_state.rt_target_cart_pos.update_from_csv(response.data)
             if is_command_response:
                 self._robot_events.on_pose_updated.set()
 
-        elif response.id == MX_ST_RT_NC_JOINT_POS:
-            self._robot_state.target_joint_positions.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_NC_CART_POS:
-            self._robot_state.target_end_effector_pose.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_NC_JOINT_VEL:
-            self._robot_state.target_joint_velocity.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_NC_CART_VEL:
-            self._robot_state.target_end_effector_velocity.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_TARGET_JOINT_POS:
+            self._robot_state.rt_target_joint_pos.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_TARGET_CART_POS:
+            self._robot_state.rt_target_cart_pos.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_TARGET_JOINT_VEL:
+            self._robot_state.rt_target_joint_vel.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_TARGET_CART_VEL:
+            self._robot_state.rt_target_cart_vel.update_from_csv(response.data)
 
-        elif response.id == MX_ST_RT_NC_CONF:
-            self._robot_state.target_joint_configurations.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_NC_CONF_TURN:
-            self._robot_state.target_last_joint_turn.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_TARGET_CONF:
+            self._robot_state.rt_target_conf.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_TARGET_CONF_TURN:
+            self._robot_state.rt_target_conf_turn.update_from_csv(response.data)
 
-        elif response.id == MX_ST_RT_DRIVE_JOINT_POS:
-            self._robot_state.drive_joint_positions.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_DRIVE_CART_POS:
-            self._robot_state.drive_end_effector_pose.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_DRIVE_JOINT_VEL:
-            self._robot_state.drive_joint_velocity.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_DRIVE_JOINT_TORQ:
-            self._robot_state.drive_joint_torque_ratio.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_DRIVE_CART_VEL:
-            self._robot_state.drive_end_effector_velocity.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_JOINT_POS:
+            self._robot_state.rt_joint_pos.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_CART_POS:
+            self._robot_state.rt_cart_pos.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_JOINT_VEL:
+            self._robot_state.rt_joint_vel.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_JOINT_TORQ:
+            self._robot_state.rt_joint_torq.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_CART_VEL:
+            self._robot_state.rt_cart_vel.update_from_csv(response.data)
 
-        elif response.id == MX_ST_RT_DRIVE_CONF:
-            self._robot_state.drive_joint_configurations.update_from_csv(response.data)
-        elif response.id == MX_ST_RT_DRIVE_CONF_TURN:
-            self._robot_state.drive_last_joint_turn.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_CONF:
+            self._robot_state.rt_conf.update_from_csv(response.data)
+        elif response.id == MX_ST_RT_CONF_TURN:
+            self._robot_state.rt_conf_turn.update_from_csv(response.data)
 
         elif response.id == MX_ST_RT_ACCELEROMETER:
             # The data is stored as [timestamp, index, {measurements...}]
             timestamp, index, *measurements = string_to_floats(response.data)
             # Record accelerometer measurement only if newer.
-            if (index not in self._robot_state.accelerometer
-                    or timestamp > self._robot_state.accelerometer[index].timestamp):
-                self._robot_state.accelerometer[index] = TimestampedData(timestamp, measurements)
+            if (index not in self._robot_state.rt_accelerometer
+                    or timestamp > self._robot_state.rt_accelerometer[index].timestamp):
+                self._robot_state.rt_accelerometer[index] = TimestampedData(timestamp, measurements)
 
     def _handle_robot_status_response(self, response):
         """Parse robot status response and update status fields and events.
@@ -1994,7 +1994,7 @@ class Robot:
                 if self._robot_events.on_joints_updated.is_set():
                     self._robot_events.on_joints_updated.clear()
                     if self._robot_info.rt_message_capable:
-                        self._send_command('GetRtJointPos')
+                        self._send_command('GetRtTargetJointPos')
                     else:
                         self._send_command('GetJoints')
 
@@ -2006,9 +2006,9 @@ class Robot:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_state.target_joint_positions)
+                    return copy.deepcopy(self._robot_state.rt_target_joint_pos)
 
-            return copy.deepcopy(self._robot_state.target_joint_positions.data)
+            return copy.deepcopy(self._robot_state.rt_target_joint_pos.data)
 
     @disconnect_on_exception
     def GetPose(self, include_timestamp=False, synchronous_update=False, timeout=None):
@@ -2036,7 +2036,7 @@ class Robot:
                 if self._robot_events.on_pose_updated.is_set():
                     self._robot_events.on_pose_updated.clear()
                     if self._robot_info.rt_message_capable:
-                        self._send_command('GetRtCartPos')
+                        self._send_command('GetRtTargetCartPos')
                     else:
                         self._send_command('GetPose')
 
@@ -2048,9 +2048,9 @@ class Robot:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_state.target_end_effector_pose)
+                    return copy.deepcopy(self._robot_state.rt_target_cart_pos)
 
-            return copy.deepcopy(self._robot_state.target_end_effector_pose.data)
+            return copy.deepcopy(self._robot_state.rt_target_cart_pos.data)
 
     @disconnect_on_exception
     def GetConf(self, include_timestamp=False, synchronous_update=False, timeout=None):
@@ -2068,7 +2068,7 @@ class Robot:
                 if self._robot_events.on_conf_updated.is_set():
                     self._robot_events.on_conf_updated.clear()
                     if self._robot_info.rt_message_capable:
-                        self._send_command('GetRtConf')
+                        self._send_command('GetRtTargetConf')
                     else:
                         self._send_command('GetConf')
 
@@ -2080,9 +2080,9 @@ class Robot:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_state.target_joint_configurations)
+                    return copy.deepcopy(self._robot_state.rt_target_joint_configurations)
 
-            return copy.deepcopy(self._robot_state.target_joint_configurations.data)
+            return copy.deepcopy(self._robot_state.rt_target_joint_configurations.data)
 
     @disconnect_on_exception
     def GetConfTurn(self, include_timestamp=False, synchronous_update=False, timeout=None):
@@ -2100,7 +2100,7 @@ class Robot:
                 if self._robot_events.on_conf_turn_updated.is_set():
                     self._robot_events.on_conf_turn_updated.clear()
                     if self._robot_info.rt_message_capable:
-                        self._send_command('GetRtConfTurn')
+                        self._send_command('GetRtTargetConfTurn')
                     else:
                         self._send_command('GetConfTurn')
 
@@ -2112,9 +2112,9 @@ class Robot:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_state.target_last_joint_turn)
+                    return copy.deepcopy(self._robot_state.rt_target_last_joint_turn)
 
-            return copy.deepcopy(self._robot_state.target_last_joint_turn.data[0])
+            return copy.deepcopy(self._robot_state.rt_target_last_joint_turn.data[0])
 
     @disconnect_on_exception
     def SetMonitoringInterval(self, t):
@@ -2137,7 +2137,7 @@ class Robot:
         Parameters
         ----------
         args : list of event IDs
-            List of event IDs to enable. For instance: events=[MX_ST_RT_NC_JOINT_POS, MX_ST_RT_NC_CART_POS] enables the
+            List of event IDs to enable. For instance: events=[MX_ST_RT_TARGET_JOINT_POS, MX_ST_RT_TARGET_CART_POS] enables the
             target joint positions and target end effector pose messages. Can also use events='all' to enable all.
 
         """
