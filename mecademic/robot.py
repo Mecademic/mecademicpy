@@ -313,8 +313,8 @@ class Robot:
                 return
 
             callback_function = callbacks.__dict__[callback_name]
-            if callback_function != None:
-                if data != None:
+            if callback_function is not None:
+                if data is not None:
                     callback_function(data)
                 else:
                     callback_function()
@@ -719,7 +719,7 @@ class Robot:
 
             with self._main_lock:
 
-                # Temporarily save data if rt messages will be availble to add timestamps.
+                # Temporarily save data if rt messages will be available to add timestamps.
                 # Note that if robot platform isn't RT message capable, the update occurs in _handle_common_messages.
                 if response.id == MX_ST_GET_JOINTS and self._robot_info.rt_message_capable:
                     rt_joint_pos = string_to_floats(response.data)
@@ -750,7 +750,7 @@ class Robot:
                         rt_conf_turn = None
 
                     # If logging is active, log the current state.
-                    if self._file_logger != None:
+                    if self._file_logger is not None:
                         self._file_logger.write_fields(timestamp, self._robot_state)
 
                 else:
@@ -759,7 +759,7 @@ class Robot:
                     # On non-rt monitoring capable platforms, no CYCLE_END event is sent, so use system time.
                     # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotState when GET_POSE is received.
                     if response.id == MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
-                        if self._file_logger != None:
+                        if self._file_logger is not None:
                             # Log time in microseconds to be consistent with real-time logging timestamp.
                             self._file_logger.write_fields(time.time_ns() / 1000, self._robot_state)
 
@@ -1008,7 +1008,7 @@ class Robot:
             if '*' in self._internal_checkpoints and self._internal_checkpoints['*']:
                 for event in self._internal_checkpoints.pop('*'):
                     event.set()
-            # Enque the on_checkpoint_reached callback.
+            # Enqueue the on_checkpoint_reached callback.
             self._callback_queue.put('on_checkpoint_reached', checkpoint_id)
 
         # Check internal checkpoints.
@@ -1024,7 +1024,7 @@ class Robot:
     # Public methods = Pascal case is used to maintain consistency with text and c++ API.
     #####################################################################################
 
-    ### General management functions.
+    # General management functions.
 
     def RegisterCallbacks(self, callbacks, run_callbacks_in_separate_thread):
         """Register callback functions to be executed.
@@ -1079,7 +1079,7 @@ class Robot:
         # Setting timeout=0 means we don't block on an empty queue.
         self._handle_callbacks(self.logger, self._callback_queue, self._robot_callbacks, timeout=0)
 
-    ### Robot control functions.
+    # Robot control functions.
 
     def Connect(
         self,
@@ -1446,7 +1446,7 @@ class Robot:
         Parameters
         ----------
         e : boolean
-            If true, robot will automatically choose the best configuation for the desired pose.
+            If true, robot will automatically choose the best configuration for the desired pose.
 
         """
         self._send_motion_command('SetAutoConf', [int(e)])
@@ -1470,7 +1470,7 @@ class Robot:
         Parameters
         ----------
         e : boolean
-            If true, robot will automatically choose the best configuation for the desired pose.
+            If true, robot will automatically choose the best configuration for the desired pose.
 
         """
         self._send_motion_command('SetAutoConfTurn', [int(e)])
@@ -1918,7 +1918,7 @@ class Robot:
         command : str
             Desired custom command.
 
-        expected_responses : None or list of ints.
+        expected_responses : None or list of integers.
             If not none, wait for and return one of the expected responses.
 
         Return
@@ -1965,7 +1965,7 @@ class Robot:
             except InterruptException:
                 raise InvalidStateError('Offline program start not confirmed. Does program {} exist?'.format(n))
 
-    ### Non-motion commands.
+    # Non-motion commands.
 
     @disconnect_on_exception
     def GetJoints(self, include_timestamp=False, synchronous_update=False, timeout=None):
@@ -2058,7 +2058,7 @@ class Robot:
 
         Returns
         -------
-        list of ints (timestmap optional)
+        list of integers (timestmap optional)
             Configuration status of robot.
 
         """
@@ -2137,8 +2137,9 @@ class Robot:
         Parameters
         ----------
         args : list of event IDs
-            List of event IDs to enable. For instance: events=[MX_ST_RT_TARGET_JOINT_POS, MX_ST_RT_TARGET_CART_POS] enables the
-            target joint positions and target end effector pose messages. Can also use events='all' to enable all.
+            List of event IDs to enable. For instance: events=[MX_ST_RT_TARGET_JOINT_POS, MX_ST_RT_TARGET_CART_POS]
+            enables the target joint positions and target end effector pose messages.
+            Can also use events='all' to enable all.
 
         """
         with self._main_lock:
@@ -2248,7 +2249,7 @@ class Robot:
             If true, current date and time will be recorded in file.
 
         """
-        if self._file_logger != None:
+        if self._file_logger is not None:
             raise InvalidStateError('Another file logging operation is in progress.')
 
         self._file_logger = CSVFileLogger(self._robot_info,
@@ -2261,7 +2262,7 @@ class Robot:
         """Stop logging robot state to file.
 
         """
-        if self._file_logger == None:
+        if self._file_logger is None:
             raise InvalidStateError('No existing logger to stop.')
 
         self._file_logger.end_log()

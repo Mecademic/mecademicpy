@@ -27,7 +27,7 @@ DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
 # Use the 'robot' test fixture to automatically instantiate a robot object.
 
-# Using the 'robot' fixure also enables automatically calling robot.Disconnect() at
+# Using the 'robot' fixture also enables automatically calling robot.Disconnect() at
 # test teardown.
 
 # Use 'connect_robot_helper(robot, args..)' to take care of robot connection.
@@ -165,7 +165,7 @@ def test_successful_connection_full_socket(robot):
 
     assert robot.GetRobotInfo().model == 'Meca500'
     assert robot.GetRobotInfo().revision == 3
-    assert robot.GetRobotInfo().is_virtual == True
+    assert robot.GetRobotInfo().is_virtual is True
     assert robot.GetRobotInfo().fw_major_rev == 9
     assert robot.GetRobotInfo().fw_minor_rev == 1
     assert robot.GetRobotInfo().fw_patch_num == 0
@@ -589,7 +589,7 @@ def test_callbacks(robot):
 
         assert checkpoint_id in called_callbacks
 
-        assert robot._callback_thread == None
+        assert robot._callback_thread is None
 
 
 # Test unblocking InterruptableEvent class with exception.

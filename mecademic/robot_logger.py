@@ -50,7 +50,7 @@ class CSVFileLogger:
             file_name = os.path.join(file_path, file_name)
 
         # If fields argument is None, log all compatible fields.
-        if fields == None:
+        if fields is None:
             fields = []
 
             if robot_info.rt_message_capable:
@@ -72,7 +72,7 @@ class CSVFileLogger:
         self.file.write('ROBOT_INFORMATION\n')
         for attr in ['model', 'revision', 'fw_major_rev', 'fw_minor_rev', 'fw_patch_num']:
             self.file.write(f'{attr}, {getattr(robot_info, attr)}\n')
-        if robot_info.serial != None:
+        if robot_info.serial is not None:
             self.file.write(f'serial_number, {robot_info.serial}\n')
         if record_time:
             self.file.write(f'time_recorded, {current_date_time}\n')

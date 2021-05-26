@@ -362,7 +362,7 @@ class RobotInfo:
             self.num_joints = 6
         elif self.mode == 'scara':
             self.num_joints = 4
-        elif self.model == None:
+        elif self.model is None:
             self.num_joints = 1
         else:
             raise ValueError('Invalid robot model: {}'.format(self.model))
@@ -384,7 +384,7 @@ class RobotInfo:
             matches = robot_info_regex.match(input_string).groups()
             return cls(model=matches[0],
                        revision=int(matches[1]),
-                       is_virtual=(matches[2] != None),
+                       is_virtual=(matches[2] is not None),
                        fw_major_rev=int(matches[3]),
                        fw_minor_rev=int(matches[4]),
                        fw_patch_num=int(matches[5]))
@@ -699,7 +699,7 @@ class CallbackQueue():
         self._registered_callbacks = set()
 
         for attr in robot_callbacks.__dict__:
-            if robot_callbacks.__dict__[attr] != None:
+            if robot_callbacks.__dict__[attr] is not None:
                 self._registered_callbacks.add(attr)
 
     def qsize(self):
