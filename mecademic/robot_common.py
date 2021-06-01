@@ -280,7 +280,7 @@ class Message:
     id : integer
         The id of the message, representing the type of message.
     data : string
-        The raw payoad of the message.
+        The raw payload of the message.
 
     """
 
