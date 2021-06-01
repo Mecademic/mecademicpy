@@ -197,14 +197,14 @@ class TimestampedData:
             Comma-separated string. First value is timestamp, rest is data.
 
         """
-        floats = string_to_floats(input_string)
+        numbs = string_to_numbers(input_string)
 
-        if (len(floats) - 1) != len(self.data):
+        if (len(numbs) - 1) != len(self.data):
             raise ValueError('Cannot update TimestampedData with incompatible data.')
 
-        if floats[0] > self.timestamp:
-            self.timestamp = floats[0]
-            self.data = floats[1:]
+        if numbs[0] > self.timestamp:
+            self.timestamp = numbs[0]
+            self.data = numbs[1:]
 
     def update_from_data(self, timestamp, data):
         """Update with data if timestamp is newer.
@@ -533,6 +533,8 @@ class RobotEvents:
         Set if there has been a change in the offline program state.
     on_end_of_block : event
         Set if end of block has been reached.
+    on_end_of_cycle: event
+        Set if end of cycle has been reached
 
     """
     def __init__(self):
@@ -569,6 +571,7 @@ class RobotEvents:
         self.on_offline_program_started = InterruptableEvent()
 
         self.on_end_of_block = InterruptableEvent()
+        self.on_end_of_cycle = InterruptableEvent()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
@@ -650,6 +653,8 @@ class RobotCallbacks:
             Function to be called each time a monitor response is received.
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
+        on_end_of_cycle : fucntion object
+            Function to be called each time end of cycle is reached
     """
     def __init__(self):
         self.on_connected = None
@@ -680,6 +685,8 @@ class RobotCallbacks:
         self.on_monitor_message = None
 
         self.on_offline_program_state = None
+
+        self.on_end_of_cycle = None
 
 
 class CallbackQueue():
@@ -739,8 +746,8 @@ class CallbackQueue():
         return self._queue.get(block=block, timeout=timeout)
 
 
-def string_to_floats(input_string):
-    """Convert comma-separated floats in string form to list of floats.
+def string_to_numbers(input_string):
+    """Convert comma-separated floats in string form to relevant type.
 
     Parameters
     ----------
@@ -749,8 +756,9 @@ def string_to_floats(input_string):
 
     Returns
     -------
-    list of floats
-        Returns converted list of floats.
+    list of numbers
+        Returns converted list of floats or integers, depending on nature of element in 'input_string'.
 
     """
-    return [float(x) for x in input_string.split(',')]
+
+    return [ ( float(x) if ('.' in x) else int(x) ) for x in input_string.split(',') ]

@@ -71,10 +71,15 @@ class Robot:
     _main_lock : recursive lock object
         Used to protect internal state of the robot object.
 
+    _robot_info: RobotInfo object
+        Store information concerning robot (ex.: serial number)
     _robot_state : RobotState object
         Stores most current robot state.
     _robot_events : RobotEvents object
         Stores events related to the robot state.
+
+    _file_logger : CSVFileLogger object
+        Collects RobotInformation, all Robotsates and SentCommands during dertemined period
 
     _robot_callbacks : RobotCallbacks instance
         Stores user-defined callback functions.
@@ -720,18 +725,22 @@ class Robot:
                 # Temporarily save data if rt messages will be availble to add timestamps.
                 # Note that if robot platform isn't RT message capable, the update occurs in _handle_common_messages.
                 if response.id == MX_ST_GET_JOINTS and self._robot_info.rt_message_capable:
-                    joint_positions = string_to_floats(response.data)
+                    joint_positions = string_to_numbers(response.data)
                 elif response.id == MX_ST_GET_POSE and self._robot_info.rt_message_capable:
-                    end_effector_pose = string_to_floats(response.data)
+                    end_effector_pose = string_to_numbers(response.data)
                 elif response.id == MX_ST_GET_CONF and self._robot_info.rt_message_capable:
-                    joint_configuration = string_to_floats(response.data)
+                    joint_configuration = string_to_numbers(response.data)
                 elif response.id == MX_ST_GET_CONF_TURN and self._robot_info.rt_message_capable:
-                    last_joint_turn = string_to_floats(response.data)
+                    last_joint_turn = string_to_numbers(response.data)
 
                 if response.id == MX_ST_RT_CYCLE_END:
                     if not self._robot_info.rt_message_capable:
                         self._robot_info.rt_message_capable = True
-                    timestamp = float(response.data)
+                    timestamp = int(response.data)
+
+                    # Useful to detect end of cycle for logging, to start logging on more consistent moment
+                    self._robot_events.on_end_of_cycle.set()
+                    self._callback_queue.put('on_end_of_cycle')
 
                     # Update the legacy joint and pose messages with timestamps.
                     if joint_positions:
@@ -748,7 +757,7 @@ class Robot:
                         last_joint_turn = None
 
                     # If logging is active, log the current state.
-                    if self._file_logger != None:
+                    if self._file_logger:
                         self._file_logger.write_fields(timestamp, self._robot_state)
 
                 else:
@@ -760,6 +769,10 @@ class Robot:
                         if self._file_logger != None:
                             # Log time in microseconds to be consistent with real-time logging timestamp.
                             self._file_logger.write_fields(time.time_ns() / 1000, self._robot_state)
+
+                        # On non rt_monitoring platforms, we will consider this moment to be the end of cycle
+                        self._robot_events.on_end_of_cycle.set()
+                        self._callback_queue.put('on_end_of_cycle')
 
     def _command_response_handler(self):
         """Handle received messages on the command socket.
@@ -836,22 +849,22 @@ class Robot:
 
         # Only update using legacy messages if robot is not capable of rt messages.
         elif response.id == MX_ST_GET_JOINTS and not self._robot_info.rt_message_capable:
-            self._robot_state.target_joint_positions = TimestampedData(0, string_to_floats(response.data))
+            self._robot_state.target_joint_positions = TimestampedData(0, string_to_numbers(response.data))
             if is_command_response:
                 self._robot_events.on_joints_updated.set()
 
         elif response.id == MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
-            self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_floats(response.data))
+            self._robot_state.target_end_effector_pose = TimestampedData(0, string_to_numbers(response.data))
             if is_command_response:
                 self._robot_events.on_pose_updated.set()
 
         elif response.id == MX_ST_GET_CONF and not self._robot_info.rt_message_capable:
-            self._robot_state.target_joint_configurations = TimestampedData(0, string_to_floats(response.data))
+            self._robot_state.target_joint_configurations = TimestampedData(0, string_to_numbers(response.data))
             if is_command_response:
                 self._robot_events.on_conf_updated.set()
 
         elif response.id == MX_ST_GET_CONF_TURN and not self._robot_info.rt_message_capable:
-            self._robot_state.target_last_joint_turn = TimestampedData(0, string_to_floats(response.data))
+            self._robot_state.target_last_joint_turn = TimestampedData(0, string_to_numbers(response.data))
             if is_command_response:
                 self._robot_events.on_conf_turn_updated.set()
 
@@ -897,7 +910,7 @@ class Robot:
 
         elif response.id == MX_ST_RT_ACCELEROMETER:
             # The data is stored as [timestamp, index, {measurements...}]
-            timestamp, index, *measurements = string_to_floats(response.data)
+            timestamp, index, *measurements = string_to_numbers(response.data)
             # Record accelerometer measurement only if newer.
             if (index not in self._robot_state.accelerometer
                     or timestamp > self._robot_state.accelerometer[index].timestamp):
@@ -1834,6 +1847,26 @@ class Robot:
         return self._robot_events.on_motion_cleared.wait(timeout=timeout)
 
     @disconnect_on_exception
+    def WaitEndOfCycle(self, timeout=None):
+        """Pause program execution until all messages in a message cycle are received
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
+        if self._robot_events.on_end_of_cycle.is_set():
+            self._robot_events.on_end_of_cycle.clear()
+
+        return self._robot_events.on_end_of_cycle.wait(timeout=timeout)
+
+    @disconnect_on_exception
     def WaitIdle(self, timeout=None):
         """Pause program execution until robot is idle.
 
@@ -2228,7 +2261,7 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_state)
 
-    def StartLogging(self, file_path=None, fields=None, record_time=True):
+    def StartLogging(self, monitoringInterval, file_path=None, fields=None, record_time=True):
         """Start logging robot state to file.
 
         Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
@@ -2236,6 +2269,9 @@ class Robot:
 
         Parameters
         ----------
+        monitoring_interval: float
+            Indicates rate at which state from robot is received on monitor port. Unit: seconds
+
         file_path : string or None
             File path to saved log.
 
@@ -2245,15 +2281,21 @@ class Robot:
         record_time : bool
             If true, current date and time will be recorded in file.
 
+
+
         """
         if self._file_logger != None:
             raise InvalidStateError('Another file logging operation is in progress.')
+
+        self.SetMonitoringInterval(monitoringInterval)
+
 
         self._file_logger = CSVFileLogger(self._robot_info,
                                           self._robot_state,
                                           fields,
                                           file_path,
-                                          record_time=record_time)
+                                          record_time=record_time,
+                                          monitoring_interval=monitoringInterval)
 
     def EndLogging(self):
         """Stop logging robot state to file.
@@ -2266,11 +2308,14 @@ class Robot:
         self._file_logger = None
 
     @contextlib.contextmanager
-    def FileLogger(self, file_path=None, fields=None, record_time=True):
+    def FileLogger(self, monitoringInterval, file_path=None, fields=None, record_time=True, want_to_correlate=False):
         """Contextmanager interface for file logger.
 
         Parameters
         ----------
+        monitoring_interval: float
+            Indicates rate at which state from robot is received on monitor port. Unit: seconds
+
         file_path : string or None
             File path to saved log.
 
@@ -2281,7 +2326,10 @@ class Robot:
             If true, current date and time will be recorded in file.
 
         """
-        self.StartLogging(file_path=file_path, fields=fields, record_time=record_time)
+        self.StartLogging(monitoringInterval,
+                            file_path=file_path,
+                            fields=fields,
+                            record_time=record_time,)
         try:
             yield
         finally:

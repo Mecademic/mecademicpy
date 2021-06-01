@@ -19,7 +19,13 @@ class CSVFileLogger:
         Each numerical element will have this width.
 
     """
-    def __init__(self, robot_info, robot_state, fields=None, file_path=None, record_time=True):
+    def __init__(self,
+                robot_info,
+                robot_state,
+                fields=None,
+                file_path=None,
+                record_time=True,
+                monitoring_interval=None):
         """Initialize class.
 
         Parameters
@@ -34,6 +40,8 @@ class CSVFileLogger:
             If not provided, file will be saved in working directory.
         record_time : bool
             If true, current time will also be recorded in the text file. (Time is also available in filename.)
+        monitoring_interval: float
+            Indicates rate at which state from robot is received on monitor port. Unit: seconds
 
         """
         current_date_time = time.strftime('%Y-%m-%d-%H-%M-%S')
@@ -41,12 +49,12 @@ class CSVFileLogger:
         serial_number_or_blank = ('_serial_' + robot_info.serial) if robot_info.serial else ""
 
         # Add unique name to file path.
-        file_name = (f"{robot_info.model}_R{robot_info.revision}_"
+        self.file_name = (f"{robot_info.model}_R{robot_info.revision}_"
                      f"v{robot_info.fw_major_rev}_{robot_info.fw_minor_rev}_{robot_info.fw_patch_num}_"
                      f"log_{current_date_time}{serial_number_or_blank}.csv")
 
         if file_path:
-            file_name = os.path.join(file_path, file_name)
+            self.file_name = os.path.join(file_path, self.file_name)
 
         # If fields argument is None, log all compatible fields.
         if fields == None:
@@ -61,7 +69,7 @@ class CSVFileLogger:
                 fields = ['target_joint_positions', 'target_end_effector_pose']
 
         # Set attributes.
-        self.file = open(file_name, 'w', newline='')
+        self.file = open(self.file_name, 'w', newline='')
         self.fields = fields
         self.command_queue = queue.Queue()
         self.element_width = 10
@@ -75,6 +83,8 @@ class CSVFileLogger:
             self.file.write(f'serial_number, {robot_info.serial}\n')
         if record_time:
             self.file.write(f'time_recorded, {current_date_time}\n')
+        if monitoring_interval:
+            self.file.write(f'monitoring_interval, {monitoring_interval}\n')
 
         # Write headers for logged data.
         self.file.write('\nLOGGED_DATA\n')
@@ -137,7 +147,7 @@ class CSVFileLogger:
                 raise ValueError(f'Missing formatting for field: {field}')
         self.file.write('\n')
 
-    def write_fields(self, timestamp, robot_state):
+    def write_fields(self, timestamp, robot_state, write_once = False):
         """Write fields to file.
 
         Parameters
@@ -152,20 +162,38 @@ class CSVFileLogger:
             return
 
         # First write the timestamp
-        self.file.write(f'{timestamp:{self.timestamp_element_width}},')
+        formatted_tim = f'{timestamp:{self.timestamp_element_width}},'
+        if write_once:
+            self.padding = ''.join([self.padding, formatted_tim])
+        else:
+            self.file.write(formatted_tim)
 
         for field in self.fields:
             # For each field, write each value with appropriate spacing.
-            self.file.write(','.join([f'{x:{self.element_width}}' for x in getattr(robot_state, field).data]))
-            self.file.write(',')
+            field_result = ','.join([f'{x:{self.element_width}}' for x in getattr(robot_state, field).data])
+            if write_once:
+                self.padding = ''.join([self.padding, field_result, ','])
+            else:
+                self.file.write(field_result)
+                self.file.write(',')
 
         # End line with newline.
-        self.file.write('\n')
+        if write_once:
+            self.padding = ''.join([self.padding, '\n'])
+        else:
+            self.file.write('\n')
 
     def end_log(self, ignore_checkpoints=True):
         """Write all accumulated sent commands and close file.
 
+        Return
+        --------
+
+        string
+            Filename where logged info can be found
+
         """
+
         # Write all sent commands.
         self.file.write('\nSENT_COMMANDS\n')
         while not self.command_queue.empty():
@@ -177,3 +205,5 @@ class CSVFileLogger:
             self.file.write(f'"{command}"\n')
 
         self.file.close()
+
+        return self.file_name
