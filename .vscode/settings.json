@@ -1,6 +1,32 @@
 {
     "python.linting.enabled": true,
     "cSpell.words": [
+        "ARDY",
+        "DEACT",
+        "INET",
+        "MOVELINRELTRF",
+        "MOVELINRELWRF",
+        "MOVELINVELTRF",
+        "MOVELINVELWRF",
+        "PSTOP",
+        "RDWR",
+        "REUSEADDR",
+        "SCARA",
+        "SETDBG",
+        "SETTORQUELIMITSCFG",
+        "SETTRF",
+        "SETWRF",
+        "TORQ",
+        "Unregister",
+        "deque",
+        "f'Logging",
+        "filecmp",
+        "heapq",
+        "ipaddress",
+        "ipython",
+        "mutex",
+        "pytest",
+        "qsize"
     ],
     "python.linting.pycodestyleArgs": [
         "--max-line-length=120"

@@ -27,7 +27,7 @@ DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
 # Use the 'robot' test fixture to automatically instantiate a robot object.
 
-# Using the 'robot' fixure also enables automatically calling robot.Disconnect() at
+# Using the 'robot' fixture also enables automatically calling robot.Disconnect() at
 # test teardown.
 
 # Use 'connect_robot_helper(robot, args..)' to take care of robot connection.
@@ -115,6 +115,7 @@ def run_fake_server(address, port, data_list):
 
 # Simulated socket, initialized with list of responses, one response at a time is returned with recv().
 class FakeSocket():
+
     def __init__(self, input):
         self.queue = queue.Queue()
         for x in input:
@@ -164,7 +165,7 @@ def test_successful_connection_full_socket(robot):
 
     assert robot.GetRobotInfo().model == 'Meca500'
     assert robot.GetRobotInfo().revision == 3
-    assert robot.GetRobotInfo().is_virtual == True
+    assert robot.GetRobotInfo().is_virtual is True
     assert robot.GetRobotInfo().fw_major_rev == 9
     assert robot.GetRobotInfo().fw_minor_rev == 1
     assert robot.GetRobotInfo().fw_patch_num == 0
@@ -230,22 +231,22 @@ def test_monitoring_connection(robot):
         return mdr.Message(code, ','.join([str(x) for x in test_array]))
 
     # Send monitor messages.
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_POS, range(7)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CART_POS, range(7)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_JOINT_VEL, range(7)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CART_VEL, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_TARGET_JOINT_POS, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_TARGET_CART_POS, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_TARGET_JOINT_VEL, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_TARGET_CART_VEL, range(7)))
 
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CONF, range(4)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_NC_CONF_TURN, range(2)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_TARGET_CONF, range(4)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_TARGET_CONF_TURN, range(2)))
 
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_POS, range(7)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CART_POS, range(7)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_VEL, range(7)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, range(7)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CART_VEL, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_JOINT_POS, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_CART_POS, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_JOINT_VEL, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_JOINT_TORQ, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_CART_VEL, range(7)))
 
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CONF, range(4)))
-    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_DRIVE_CONF_TURN, range(2)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_CONF, range(4)))
+    robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_CONF_TURN, range(2)))
 
     robot._monitor_rx_queue.put(make_test_message(mdr.MX_ST_RT_ACCELEROMETER, range(5)))
 
@@ -256,27 +257,25 @@ def test_monitoring_connection(robot):
     robot._initialize_monitoring_connection()
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
-    assert robot._robot_state.target_joint_positions == make_test_data(mdr.MX_ST_RT_NC_JOINT_POS, range(7))
-    assert robot._robot_state.target_end_effector_pose == make_test_data(mdr.MX_ST_RT_NC_CART_POS, range(7))
-    assert robot._robot_state.target_joint_velocity == make_test_data(mdr.MX_ST_RT_NC_JOINT_VEL, range(7))
-    assert robot._robot_state.target_end_effector_velocity == make_test_data(mdr.MX_ST_RT_NC_CART_VEL, range(7))
+    assert robot._robot_state.rt_target_joint_pos == make_test_data(mdr.MX_ST_RT_TARGET_JOINT_POS, range(7))
+    assert robot._robot_state.rt_target_cart_pos == make_test_data(mdr.MX_ST_RT_TARGET_CART_POS, range(7))
+    assert robot._robot_state.rt_target_joint_vel == make_test_data(mdr.MX_ST_RT_TARGET_JOINT_VEL, range(7))
+    assert robot._robot_state.rt_target_cart_vel == make_test_data(mdr.MX_ST_RT_TARGET_CART_VEL, range(7))
+    assert robot._robot_state.rt_target_conf == make_test_data(mdr.MX_ST_RT_TARGET_CONF, range(4))
+    assert robot._robot_state.rt_target_conf_turn == make_test_data(mdr.MX_ST_RT_TARGET_CONF_TURN, range(2))
 
-    assert robot._robot_state.target_joint_configurations == make_test_data(mdr.MX_ST_RT_NC_CONF, range(4))
-    assert robot._robot_state.target_last_joint_turn == make_test_data(mdr.MX_ST_RT_NC_CONF_TURN, range(2))
-
-    assert robot._robot_state.drive_joint_positions == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_POS, range(7))
-    assert robot._robot_state.drive_end_effector_pose == make_test_data(mdr.MX_ST_RT_DRIVE_CART_POS, range(7))
-    assert robot._robot_state.drive_joint_velocity == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_VEL, range(7))
-    assert robot._robot_state.drive_joint_torque_ratio == make_test_data(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, range(7))
-    assert robot._robot_state.drive_end_effector_velocity == make_test_data(mdr.MX_ST_RT_DRIVE_CART_VEL, range(7))
-
-    assert robot._robot_state.drive_joint_configurations == make_test_data(mdr.MX_ST_RT_DRIVE_CONF, range(4))
-    assert robot._robot_state.drive_last_joint_turn == make_test_data(mdr.MX_ST_RT_DRIVE_CONF_TURN, range(2))
+    assert robot._robot_state.rt_joint_pos == make_test_data(mdr.MX_ST_RT_JOINT_POS, range(7))
+    assert robot._robot_state.rt_cart_pos == make_test_data(mdr.MX_ST_RT_CART_POS, range(7))
+    assert robot._robot_state.rt_joint_vel == make_test_data(mdr.MX_ST_RT_JOINT_VEL, range(7))
+    assert robot._robot_state.rt_joint_torq == make_test_data(mdr.MX_ST_RT_JOINT_TORQ, range(7))
+    assert robot._robot_state.rt_cart_vel == make_test_data(mdr.MX_ST_RT_CART_VEL, range(7))
+    assert robot._robot_state.rt_conf == make_test_data(mdr.MX_ST_RT_CONF, range(4))
+    assert robot._robot_state.rt_conf_turn == make_test_data(mdr.MX_ST_RT_CONF_TURN, range(2))
 
     # The data is sent as [timestamp, accelerometer_id, {measurements...}].
     # We convert it to a dictionary which maps the accelerometer_id to a TimestampedData object.
     accel_array = make_test_array(mdr.MX_ST_RT_ACCELEROMETER, range(5))
-    assert robot._robot_state.accelerometer == {accel_array[1]: mdr.TimestampedData(accel_array[0], accel_array[2:])}
+    assert robot._robot_state.rt_accelerometer == {accel_array[1]: mdr.TimestampedData(accel_array[0], accel_array[2:])}
 
 
 # Test that checkpoints created by user are properly sent to robot, waited on, and unblocked.
@@ -590,7 +589,7 @@ def test_callbacks(robot):
 
         assert checkpoint_id in called_callbacks
 
-        assert robot._callback_thread == None
+        assert robot._callback_thread is None
 
 
 # Test unblocking InterruptableEvent class with exception.
@@ -882,8 +881,8 @@ def test_gets_with_timestamp(robot):
     assert robot.GetRobotInfo().rt_message_capable
 
     # Test synchronous gets with RT messages.
-    expected_command = 'GetRtJointPos'
-    robot_response = mdr.Message(mdr.MX_ST_RT_NC_JOINT_POS, fake_string(4, 7))
+    expected_command = 'GetRtTargetJointPos'
+    robot_response = mdr.Message(mdr.MX_ST_RT_TARGET_JOINT_POS, fake_string(4, 7))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
@@ -894,8 +893,8 @@ def test_gets_with_timestamp(robot):
     assert robot.GetJoints(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
     fake_robot.join()
 
-    expected_command = 'GetRtCartPos'
-    robot_response = mdr.Message(mdr.MX_ST_RT_NC_CART_POS, fake_string(4, 7))
+    expected_command = 'GetRtTargetCartPos'
+    robot_response = mdr.Message(mdr.MX_ST_RT_TARGET_CART_POS, fake_string(4, 7))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
@@ -951,19 +950,19 @@ def test_file_logger(tmp_path, robot):
             robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_CONF, fake_string(3, 3)))
             robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_CONF_TURN, fake_string(4, 2)))
 
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_JOINT_VEL, fake_string(5, 7)))
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CART_VEL, fake_string(6, 7)))
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CONF, fake_string(7, 4)))
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_NC_CONF_TURN, fake_string(8, 2)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_TARGET_JOINT_VEL, fake_string(5, 7)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_TARGET_CART_VEL, fake_string(6, 7)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_TARGET_CONF, fake_string(7, 4)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_TARGET_CONF_TURN, fake_string(8, 2)))
 
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_JOINT_POS, fake_string(9, 7)))
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CART_POS, fake_string(10, 7)))
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_JOINT_VEL, fake_string(11, 7)))
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_JOINT_TORQ, fake_string(12, 7)))
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CART_VEL, fake_string(13, 7)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_JOINT_POS, fake_string(9, 7)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CART_POS, fake_string(10, 7)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_JOINT_VEL, fake_string(11, 7)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_JOINT_TORQ, fake_string(12, 7)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CART_VEL, fake_string(13, 7)))
 
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CONF, fake_string(14, 4)))
-            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_DRIVE_CONF_TURN, fake_string(15, 2)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CONF, fake_string(14, 4)))
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CONF_TURN, fake_string(15, 2)))
             robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, str(i)))
 
         # Terminate queue and wait for thread to exit to ensure messages are processed.
@@ -1008,9 +1007,7 @@ def test_file_logger_legacy(tmp_path, robot):
     robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,1'))
 
     # Start logging with context manager version of logger. Only log the two available fields.
-    with robot.FileLogger(file_path=tmp_path,
-                          fields=['target_joint_positions', 'target_end_effector_pose'],
-                          record_time=False):
+    with robot.FileLogger(file_path=tmp_path, fields=['rt_target_joint_pos', 'rt_target_cart_pos'], record_time=False):
         robot.MoveJoints(0, -60, 60, 0, 0, 0)
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
         for i in range(1, 4):

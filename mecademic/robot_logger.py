@@ -57,16 +57,16 @@ class CSVFileLogger:
             self.file_name = os.path.join(file_path, self.file_name)
 
         # If fields argument is None, log all compatible fields.
-        if fields == None:
+        if fields is None:
             fields = []
 
             if robot_info.rt_message_capable:
                 for attr in vars(robot_state):
-                    if attr.startswith('target') or attr.startswith('drive'):
+                    if attr.startswith('rt_'):
                         fields.append(attr)
             else:
                 # Only the following fields are available if platform is not rt monitoring capable.
-                fields = ['target_joint_positions', 'target_end_effector_pose']
+                fields = ['rt_target_joint_pos', 'rt_target_cart_pos']
 
         # Set attributes.
         self.file = open(self.file_name, 'w', newline='')
@@ -79,7 +79,7 @@ class CSVFileLogger:
         self.file.write('ROBOT_INFORMATION\n')
         for attr in ['model', 'revision', 'fw_major_rev', 'fw_minor_rev', 'fw_patch_num']:
             self.file.write(f'{attr}, {getattr(robot_info, attr)}\n')
-        if robot_info.serial != None:
+        if robot_info.serial is not None:
             self.file.write(f'serial_number, {robot_info.serial}\n')
         if record_time:
             self.file.write(f'time_recorded, {current_date_time}\n')
@@ -124,25 +124,25 @@ class CSVFileLogger:
             Information about the robot, such as model name and number of joints.
 
         """
+
         def assemble_with_prefix(field, names):
             return ','.join([field + '_' + str(x) for x in names]) + ','
 
         # Write full name for each field.
         self.file.write(f"{'timestamp':>{self.timestamp_element_width}},")
         for field in self.fields:
-            if (field.endswith('joint_positions') or field.endswith('joint_velocity')
-                    or field.endswith('joint_torque_ratio')):
-                # Write field name followed by joint number. For example: "target_joint_positions_1".
+            if (field.endswith('joint_pos') or field.endswith('joint_vel') or field.endswith('joint_torque')):
+                # Write field name followed by joint number. For example: "rt_target_joint_pos_1".
                 self.file.write(assemble_with_prefix(field, range(robot_info.num_joints)))
-            elif field.endswith('end_effector_pose'):
+            elif field.endswith('cart_pos'):
                 self.file.write(assemble_with_prefix(field, ['x', 'y', 'z', 'alpha', 'beta', 'gamma']))
-            elif field.endswith('end_effector_velocity'):
+            elif field.endswith('cart_vel'):
                 self.file.write(
                     assemble_with_prefix(field, ['x_dot', 'y_dot', 'z_dot', 'omega_x', 'omega_y', 'omega_z']))
-            elif field.endswith('configurations'):
-                self.file.write(assemble_with_prefix(field, ['shoulder', 'elbow', 'wrist']))
-            elif field.endswith('last_joint_turn'):
+            elif field.endswith('conf_turn'):
                 self.file.write(field + ',')
+            elif field.endswith('conf'):
+                self.file.write(assemble_with_prefix(field, ['shoulder', 'elbow', 'wrist']))
             else:
                 raise ValueError(f'Missing formatting for field: {field}')
         self.file.write('\n')

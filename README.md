@@ -20,7 +20,7 @@ This library is compatible with Windows, Linux, and Mac.
 
 ## Downloading the package
 
-To install the package through pip, Mecadmic Github repository url must be given. Pip will download and install the package on your machine and place it in the python local packages directory. This is done by running the following command:
+To install the package through pip, Mecademic Github repository url must be given. Pip will download and install the package on your machine and place it in the python local packages directory. This is done by running the following command:
 
 ```
 pip install git+https://github.com/mecademic/mecademic
@@ -127,7 +127,7 @@ One disadvantage of using synchronous mode is that blending between motions is n
 
 By default, if any unrecoverable error occurs during usage of the Robot class, the class will automatically disconnect from the robot to avoid possible issues. Disconnection also causes the robot to pause its motion.
 
-However, disconnecting on exeptions may be undesired when using an interactive terminal or Jupyter notebook, as an accidental mal-formed function call may cause disconnection. As such, this feature can be disabled by setting `disconnect_on_exception=False` when attempting the connection:
+However, disconnecting on exceptions may be undesired when using an interactive terminal or Jupyter notebook, as an accidental mal-formed function call may cause disconnection. As such, this feature can be disabled by setting `disconnect_on_exception=False` when attempting the connection:
 
 ```python
 robot.Connect(address='192.168.0.100', disconnect_on_exception=False)
@@ -259,30 +259,28 @@ The `FileLogger` context will automatically end logging after either completing 
 
 The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
 
-- target_joint_positions 
-- target_end_effector_pose 
+- rt_target_joint_pos 
+- rt_target_cart_pos 
+- rt_target_joint_vel 
+- rt_target_cart_vel 
+- rt_target_conf 
+- rt_target_conf_turn 
 
-- target_joint_velocity 
-- target_end_effector_velocity 
+- rt_joint_pos 
+- rt_cart_pos
+- rt_joint_vel 
+- rt_joint_torq 
+- rt_cart_vel 
+- rt_conf 
+- rt_conf_turn
 
-- target_joint_configurations 
-- target_last_joint_turn 
+- rt_accelerometer
 
-- drive_joint_positions 
-- drive_end_effector_pose 
-
-- drive_joint_velocity 
-- drive_joint_torque_ratio 
-- drive_end_effector_velocity 
-
-- drive_joint_configurations 
-- drive_last_joint_turn
-
-The following example only logs the `target_joint_positions` and `target_end_effector_pose`.
+The following example only logs the `rt_target_joint_pos` and `rt_target_cart_pos`.
 
 ```python
 robot.WaitIdle()
-with robot.FileLogger(fields=['target_joint_positions', 'target_end_effector_pose']):
+with robot.FileLogger(fields=['rt_target_joint_pos', 'rt_target_cart_pos']):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()

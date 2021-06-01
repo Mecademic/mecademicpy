@@ -61,6 +61,7 @@ class InterruptableEvent:
         If true, event is in an error state.
 
     """
+
     def __init__(self, id=None, data=None):
         self._id = id
         self._data = data
@@ -184,6 +185,7 @@ class TimestampedData:
         Data to be stored.
 
     """
+
     def __init__(self, timestamp, data):
         self.timestamp = timestamp
         self.data = data
@@ -281,6 +283,7 @@ class Message:
         The raw payoad of the message.
 
     """
+
     def __init__(self, id, data):
         self.id = id
         self.data = data
@@ -337,6 +340,7 @@ class RobotInfo:
         Number of joints on the robot.
 
     """
+
     def __init__(self,
                  model=None,
                  revision=None,
@@ -358,7 +362,7 @@ class RobotInfo:
             self.num_joints = 6
         elif self.mode == 'scara':
             self.num_joints = 4
-        elif self.model == None:
+        elif self.model is None:
             self.num_joints = 1
         else:
             raise ValueError('Invalid robot model: {}'.format(self.model))
@@ -380,7 +384,7 @@ class RobotInfo:
             matches = robot_info_regex.match(input_string).groups()
             return cls(model=matches[0],
                        revision=int(matches[1]),
-                       is_virtual=(matches[2] != None),
+                       is_virtual=(matches[2] is not None),
                        fw_major_rev=int(matches[3]),
                        fw_minor_rev=int(matches[4]),
                        fw_patch_num=int(matches[5]))
@@ -397,40 +401,37 @@ class RobotState:
 
     Attributes
     ----------
-    target_joint_positions : TimestampedData
+    rt_target_joint_pos : TimestampedData
         Controller desired joint positions in degrees [theta_1...6], includes timestamp.
-    target_end_effector_pose : TimestampedData
+    rt_target_cart_pos : TimestampedData
         Controller desired end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
-
-    target_joint_velocity : TimestampedData
+    rt_target_joint_vel : TimestampedData
         Controller desired joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
-    target_end_effector_velocity : TimestampedData
+    rt_target_cart_vel : TimestampedData
         Controller desired end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
         [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]
-    target_joint_configurations : TimestampedData
+    rt_target_conf : TimestampedData
         Controller joint configuration that corresponds to desired joint positions.
-    target_last_joint_turn : TimestampedData
+    rt_target_conf_turn : TimestampedData
         Controller last joint turn number that corresponds to desired joint positions.
 
-    drive_joint_positions : TimestampedData
+    rt_joint_pos : TimestampedData
         Drive-measured joint positions in degrees [theta_1...6], includes timestamp.
-    drive_end_effector_pose : TimestampedData
+    rt_cart_pos : TimestampedData
         Drive-measured end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
-
-    drive_joint_velocity : TimestampedData
+    rt_joint_vel : TimestampedData
         Drive-measured joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
-    drive_joint_torque_ratio : TimestampedData
+    rt_joint_torq : TimestampedData
         Drive-measured torque ratio as a percent of maximum [torque_1...6], includes timestamp.
-    drive_end_effector_velocity : TimestampedData
+    rt_cart_vel : TimestampedData
         Drive-measured end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
         [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]
-
-    drive_joint_configurations : TimestampedData
+    rt_conf : TimestampedData
         Controller joint configuration that corresponds to drives-measured joint positions.
-    drive_last_joint_turn : TimestampedData
+    rt_conf_turn : TimestampedData
         Controller last joint turn number that corresponds to drives-measured joint positions.
 
-    accelerometer : TimestampedData
+    rt_accelerometer : TimestampedData
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
 
     activation_state : boolean
@@ -447,29 +448,26 @@ class RobotState:
         True if robot is not moving and motion queue is empty.
 
     """
+
     def __init__(self, num_joints):
-        self.target_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.target_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+        self.rt_target_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_target_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
+        self.rt_target_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
+        self.rt_target_conf = TimestampedData.zeros(3)
+        self.rt_target_conf_turn = TimestampedData.zeros(1)
 
-        self.target_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.target_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
-
-        self.target_joint_configurations = TimestampedData.zeros(3)
-        self.target_last_joint_turn = TimestampedData.zeros(1)
-
-        self.drive_joint_positions = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.drive_end_effector_pose = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
-
-        self.drive_joint_velocity = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.drive_joint_torque_ratio = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.drive_end_effector_velocity = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
-
-        self.drive_joint_configurations = TimestampedData.zeros(3)
-        self.drive_last_joint_turn = TimestampedData.zeros(1)
+        self.rt_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+        self.rt_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
+        self.rt_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
+        self.rt_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
+        self.rt_conf = TimestampedData.zeros(3)
+        self.rt_conf_turn = TimestampedData.zeros(1)
 
         # Contains dictionary of accelerometers stored in the robot indexed by joint number.
         # For example, Meca500 currently only reports the accelerometer in joint 5.
-        self.accelerometer = dict()  # 16000 = 1g
+        self.rt_accelerometer = dict()  # 16000 = 1g
 
         self.max_queue_size = 0
 
@@ -537,6 +535,7 @@ class RobotEvents:
         Set if end of cycle has been reached
 
     """
+
     def __init__(self):
         self.on_connected = InterruptableEvent()
         self.on_disconnected = InterruptableEvent()
@@ -656,6 +655,7 @@ class RobotCallbacks:
         on_end_of_cycle : fucntion object
             Function to be called each time end of cycle is reached
     """
+
     def __init__(self):
         self.on_connected = None
         self.on_disconnected = None
@@ -700,12 +700,13 @@ class CallbackQueue():
         Set of names of registered callbacks.
 
     """
+
     def __init__(self, robot_callbacks):
         self._queue = queue.Queue()
         self._registered_callbacks = set()
 
         for attr in robot_callbacks.__dict__:
-            if robot_callbacks.__dict__[attr] != None:
+            if robot_callbacks.__dict__[attr] is not None:
                 self._registered_callbacks.add(attr)
 
     def qsize(self):
