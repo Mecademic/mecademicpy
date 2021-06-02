@@ -48,7 +48,7 @@ try:
         robot.MoveJoints(30, 25, 20, 15, 10, 5)
         robot.MoveJoints(-30, -25, -20, -15, -10, -5)
 
-        # Wait until robot is idle (above commands finished execuing) before stopping logging.
+        # Wait until robot is idle (above commands finished executing) before stopping logging.
         robot.WaitIdle(60)
         # Exiting the "FileLogger" scope automatically stops logging
 
