@@ -44,7 +44,7 @@ try:
     # (here we log target and current joint positions)
     print('Start running test script while logging to csv file...', flush=True)
     with robot.FileLogger(fields=["rt_target_joint_pos", "rt_joint_pos"]):
-        # Send motion commands to have the robot draw out a square.
+        # Perform 2 simple joint moves
         robot.MoveJoints(30, 25, 20, 15, 10, 5)
         robot.MoveJoints(-30, -25, -20, -15, -10, -5)
 
