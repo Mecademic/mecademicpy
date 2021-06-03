@@ -4,13 +4,14 @@ import sys
 
 import mecademic.robot as mdr
 
-robot = mdr.Robot()
-
 
 # Define a callback function to print test progress based on reached checkpoints
 def on_checkpoint_reached(id):
     print(f'Loop {id}...')
 
+
+# Instantiate a robot instance (to control one robot)
+robot = mdr.Robot()
 
 # Attach callback functions
 callbacks = mdr.RobotCallbacks()
@@ -73,7 +74,9 @@ except Exception as exception:
         robot.ResetError()
         robot.ResumeMotion()
     else:
+        robot = None  # Properly destroy the robot object before exiting script
         raise
 
 print('Disconnecting from robot.', flush=True)
 robot.Disconnect()
+robot = None  # Properly destroy the robot object before exiting script

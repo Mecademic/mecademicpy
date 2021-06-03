@@ -15,15 +15,13 @@ except mdr.CommunicationError as e:
 
 try:
     # Send the commands to get the robot ready for operation.
+    print('Activating and homing robot...', flush=True)
     robot.ActivateRobot()
     robot.Home()
 
     # Pause execution until robot is homed.
-    print('Waiting for robot to be homed.', flush=True)
     robot.WaitHomed(timeout=60)  # Add a timeout of 60 seconds in case something fails.
     print('Robot is homed and ready.', flush=True)
-
-    robot.Delay(1)
 
     # Send motion commands to have the robot draw out a square.
     robot.MovePose(200, 0, 300, 0, 90, 0)
@@ -34,6 +32,7 @@ try:
     robot.MovePose(200, 0, 300, 0, 90, 0)
     print('Commands for drawing a square sent.', flush=True)
 
+    # Insert a delay in robot's motion queue between drawing square and moving back
     robot.Delay(1)
 
     # Return the robot to folded position.
@@ -52,9 +51,11 @@ except Exception as exception:
         robot.ResetError()
         robot.ResumeMotion()
     else:
+        robot = None  # Properly destroy the robot object before exiting script
         raise
 
 # Deactivate and disconnect from the robot.
 robot.DeactivateRobot()
 robot.Disconnect()
 print('Robot is deactivated and disconnected.', flush=True)
+robot = None  # Properly destroy the robot object before exiting script
