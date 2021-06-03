@@ -388,7 +388,7 @@ class RobotInfo:
                        fw_major_rev=int(matches[3]),
                        fw_minor_rev=int(matches[4]),
                        fw_patch_num=int(matches[5]))
-        except:
+        except Exception as exception:
             raise ValueError('Could not parse robot info string {}'.format(input_string))
 
 

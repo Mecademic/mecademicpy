@@ -278,7 +278,7 @@ class Robot:
         new_socket.settimeout(0.1)  # 100ms
         try:
             new_socket.connect((address, port))
-        except:
+        except Exception as exception:
             logger.error('Unable to connect to %s:%s.', address, port)
             return None
 
@@ -451,7 +451,7 @@ class Robot:
             self._command_tx_thread = self._launch_thread(target=self._handle_socket_tx,
                                                           args=(self._command_socket, self._command_tx_queue))
 
-        except:
+        except Exception as exception:
             # Clean up threads and connections on error.
             self.Disconnect()
             raise
@@ -476,7 +476,7 @@ class Robot:
             self._monitor_rx_thread = self._launch_thread(target=self._handle_socket_rx,
                                                           args=(self._monitor_socket, self._monitor_rx_queue))
 
-        except:
+        except Exception as exception:
             # Clean up threads and connections on error.
             self.Disconnect()
             raise
