@@ -6,6 +6,17 @@ import mecademic.robot as mdr
 
 robot = mdr.Robot()
 
+
+# Define a callback function to print test progress based on reached checkpoints
+def on_checkpoint_reached(id):
+    print(f'Loop {id}...')
+
+
+# Attach callback functions
+callbacks = mdr.RobotCallbacks()
+callbacks.on_checkpoint_reached = on_checkpoint_reached
+robot.RegisterCallbacks(callbacks=callbacks, run_callbacks_in_separate_thread=True)
+
 # CHECK THAT IP ADDRESS IS CORRECT! #
 try:
     robot.Connect(address='192.168.0.100')
@@ -29,7 +40,6 @@ try:
     robot.SetBlending(50)
 
     # Configure monitoring interval and required events to capture
-    # (here we ask for target and current joint positions)
     robot.SetMonitoringInterval(0.001)
     robot.SetRealTimeMonitoring(events=["TargetJointPos", "JointPos"])
 
@@ -41,12 +51,13 @@ try:
     robot.WaitIdle()
 
     # Start running a test script while logging robot data to a csv file
-    # (here we log target and current joint positions)
     print('Start running test script while logging to csv file...', flush=True)
     with robot.FileLogger(fields=["rt_target_joint_pos", "rt_joint_pos"]):
-        # Perform 2 simple joint moves
-        robot.MoveJoints(30, 25, 20, 15, 10, 5)
-        robot.MoveJoints(-30, -25, -20, -15, -10, -5)
+        # Perform 2 simple joint moves, few loops
+        for i in range(1, 11):
+            robot.SetCheckpoint(i)
+            robot.MoveJoints(30, 25, 20, 15, 10, 5)
+            robot.MoveJoints(-30, -25, -20, -15, -10, -5)
 
         # Wait until robot is idle (above commands finished executing) before stopping logging.
         robot.WaitIdle(60)
