@@ -11,72 +11,71 @@ def on_checkpoint_reached(id):
 
 
 # Instantiate a robot instance (to control one robot)
-robot = mdr.Robot()
+# (use "with" block to ensure proper disconnection at end of block)
+with mdr.Robot() as robot:
+    # Attach callback functions
+    callbacks = mdr.RobotCallbacks()
+    callbacks.on_checkpoint_reached = on_checkpoint_reached
+    robot.RegisterCallbacks(callbacks=callbacks, run_callbacks_in_separate_thread=True)
 
-# Attach callback functions
-callbacks = mdr.RobotCallbacks()
-callbacks.on_checkpoint_reached = on_checkpoint_reached
-robot.RegisterCallbacks(callbacks=callbacks, run_callbacks_in_separate_thread=True)
+    # CHECK THAT IP ADDRESS IS CORRECT! #
+    try:
+        robot.Connect(address='192.168.0.100')
+        print('Connected to robot')
+    except mdr.CommunicationError as e:
+        print(f'Robot failed to connect. Is the IP address correct? {e}')
+        raise e
 
-# CHECK THAT IP ADDRESS IS CORRECT! #
-try:
-    robot.Connect(address='192.168.0.100')
-except mdr.CommunicationError as e:
-    print(f'Robot failed to connect. Is the IP address correct? {e}')
-    raise e
+    try:
+        # Send the commands to get the robot ready for operation.
+        print('Activating and homing robot...')
+        robot.ActivateRobot()
+        robot.Home()
 
-try:
-    # Send the commands to get the robot ready for operation.
-    print('Activating and homing robot...', flush=True)
-    robot.ActivateRobot()
-    robot.Home()
+        # Wait until robot is homed.
+        robot.WaitHomed(timeout=60)  # Add a timeout of 60 seconds in case something fails.
 
-    # Wait until robot is homed.
-    robot.WaitHomed(timeout=60)  # Add a timeout of 60 seconds in case something fails.
+        # Configure robot's behavior to desired speed/accel/etc
+        print('Configuring robot\'s behavior...')
+        robot.SetJointVel(50)
+        robot.SetJointAcc(50)
+        robot.SetBlending(50)
 
-    # Configure robot's behavior to desired speed/accel/etc
-    print('Configuring robot\'s behavior...', flush=True)
-    robot.SetJointVel(50)
-    robot.SetJointAcc(50)
-    robot.SetBlending(50)
+        # Configure monitoring interval and required events to capture
+        robot.SetMonitoringInterval(0.001)
+        robot.SetRealTimeMonitoring(events=["TargetJointPos", "JointPos"])
 
-    # Configure monitoring interval and required events to capture
-    robot.SetMonitoringInterval(0.001)
-    robot.SetRealTimeMonitoring(events=["TargetJointPos", "JointPos"])
+        # Move to starting position
+        print('Moving to a well-known starting position...')
+        robot.MoveJoints(0, 0, 0, 0, 0, 0)
 
-    # Move to starting position
-    print('Moving to a well-known starting position...', flush=True)
-    robot.MoveJoints(0, 0, 0, 0, 0, 0)
+        # Wait until robot is idle (reached starting position)
+        robot.WaitIdle()
 
-    # Wait until robot is idle (reached starting position)
-    robot.WaitIdle()
+        # Start running a test script while logging robot data to a csv file
+        print('Start running test script while logging to csv file...')
+        with robot.FileLogger(fields=["rt_target_joint_pos", "rt_joint_pos"]):
+            # Perform 2 simple joint moves, few loops
+            for i in range(0, 2):
+                robot.SetCheckpoint(i + 1)
+                robot.MoveJoints(30, 25, 20, 15, 10, 5)
+                robot.MoveJoints(-30, -25, -20, -15, -10, -5)
 
-    # Start running a test script while logging robot data to a csv file
-    print('Start running test script while logging to csv file...', flush=True)
-    with robot.FileLogger(fields=["rt_target_joint_pos", "rt_joint_pos"]):
-        # Perform 2 simple joint moves, few loops
-        for i in range(1, 11):
-            robot.SetCheckpoint(i)
-            robot.MoveJoints(30, 25, 20, 15, 10, 5)
-            robot.MoveJoints(-30, -25, -20, -15, -10, -5)
+            # Wait until robot is idle (above commands finished executing) before stopping logging.
+            robot.WaitIdle(60)
+            # Exiting the "FileLogger" scope automatically stops logging
 
-        # Wait until robot is idle (above commands finished executing) before stopping logging.
-        robot.WaitIdle(60)
-        # Exiting the "FileLogger" scope automatically stops logging
+        print('Done!')
 
-    print('Done!', flush=True)
+    except Exception as exception:
+        # Attempt to clear error if robot is in error.
+        if robot.GetRobotState().error_status:
+            print(exception)
+            print('Robot has encountered an error, attempting to clear...')
+            robot.ResetError()
+            robot.ResumeMotion()
+        else:
+            raise
 
-except Exception as exception:
-    # Attempt to clear error if robot is in error.
-    if robot.GetRobotState().error_status:
-        print(exception)
-        print('Robot has encountered an error, attempting to clear...', flush=True)
-        robot.ResetError()
-        robot.ResumeMotion()
-    else:
-        robot = None  # Properly destroy the robot object before exiting script
-        raise
-
-print('Disconnecting from robot.', flush=True)
-robot.Disconnect()
-robot = None  # Properly destroy the robot object before exiting script
+# At the end of the "with" block, robot is automatically disconnected
+print('Now disconnected from the robot.')
