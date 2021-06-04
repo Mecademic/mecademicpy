@@ -106,10 +106,50 @@ class Robot:
     """
 
     def __init__(self):
-        """Constructor for an instance of the Controller class.
-
+        """Constructor for an instance of the Robot class.
         """
+        # Initialize member variables that are NOT reset by "with" block (i.e. by __enter__ and __exit__)
         self._is_initialized = False
+        # (callbacks remain registered after "with" block
+        self._robot_callbacks = RobotCallbacks()
+        self._run_callbacks_in_separate_thread = False
+        self._reset()
+
+    def __del__(self):
+        """Destructor for an instance of the Robot class.
+           WARNING: In python, the  destructor is called by garbage collector, it may not be called when Robot object
+                 instance is released so make sure to explicitly Disconnect from the robot, or use "with" block if you
+                 need to control when the disconnection with robot occurs.
+        """
+        self._reset()
+        self.UnregisterCallbacks()
+
+    def __enter__(self):
+        """Function called when entering "with" block with a Robot object instance.
+           This simply validates that the robot is not already connection (must not be by design)
+        """
+        # Don't allow entering a "with" statement when robot is already connected
+        # (since the goal of "with" is to disconnect)
+        if self._monitor_handler_thread is not None:
+            raise InvalidStateError('Robot cannot be connected when entering \'with\' block')
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        """Function called when exiting "with" block with a Robot object instance.
+           This forces disconnection with the robot and reset of all states, except registered callbacks
+           which remain attached in case the same Robot object is reconnected later.
+        """
+        self._reset()
+
+    def _reset(self):
+        """ Reset the Robot class (disconnects, stop threads, clears queues, etc).
+            (this code is common to constructor, destructor and __exit__ implicit functions)
+            Only thing that is not reset are registered callbacks.
+        """
+        if self._is_initialized:
+            self.Disconnect()
+            # Note: Don't unregister callbacks, we allow them to remain valid after a "with" block
+            # self.UnregisterCallbacks()
 
         self._address = None
 
@@ -125,7 +165,7 @@ class Robot:
 
         self._main_lock = threading.RLock()
 
-        self._robot_callbacks = RobotCallbacks()
+        # self._robot_callbacks = RobotCallbacks() -> Not reset here, only upon UnregisterCallback
         self._callback_queue = CallbackQueue(self._robot_callbacks)
         self._callback_thread = None
 
@@ -147,12 +187,6 @@ class Robot:
         self.default_timeout = 10
 
         self._is_initialized = True
-
-    def __del__(self):
-        # Only attempt to disconnect if the object was initialized.
-        if self._is_initialized:
-            self.Disconnect()
-            self.UnregisterCallbacks()
 
     def _reset_disconnect_attributes(self):
         self._command_rx_queue = queue.Queue()
@@ -424,6 +458,7 @@ class Robot:
             self._command_socket,
             *args,
         ))
+        thread.setDaemon(True)  # Make sure thread does not prevent application from quitting
         thread.start()
         return thread
 
@@ -1046,25 +1081,18 @@ class Robot:
 
         self._callback_queue = CallbackQueue(callbacks)
 
+        # Remember user provided callbacks. Callback thread will actually be started upon Connect.
         self._robot_callbacks = callbacks
-        if run_callbacks_in_separate_thread:
-            self._callback_thread = threading.Thread(target=self._handle_callbacks,
-                                                     args=(
-                                                         self.logger,
-                                                         self._callback_queue,
-                                                         self._robot_callbacks,
-                                                     ))
-            self._callback_thread.start()
+        self._run_callbacks_in_separate_thread = run_callbacks_in_separate_thread
 
     def UnregisterCallbacks(self):
         """Unregister callback functions and terminate callback handler thread if applicable.
 
         """
-        if self._callback_thread:
-            self._callback_queue.put(TERMINATE)
-            self._callback_thread.join(timeout=self.default_timeout)
+        self._stop_callback_thread()
 
         self._robot_callbacks = RobotCallbacks()
+        self._run_callbacks_in_separate_thread = False
         self._callback_queue = CallbackQueue(self._robot_callbacks)
         self._callback_thread = None
 
@@ -1078,6 +1106,23 @@ class Robot:
 
         # Setting timeout=0 means we don't block on an empty queue.
         self._handle_callbacks(self.logger, self._callback_queue, self._robot_callbacks, timeout=0)
+
+    def _start_callback_thread(self):
+        if self._run_callbacks_in_separate_thread and self._callback_thread is None:
+            self._callback_thread = threading.Thread(target=self._handle_callbacks,
+                                                     args=(
+                                                         self.logger,
+                                                         self._callback_queue,
+                                                         self._robot_callbacks,
+                                                     ))
+            self._callback_thread.setDaemon(True)  # Make sure thread does not prevent application from quitting
+            self._callback_thread.start()
+
+    def _stop_callback_thread(self):
+        if self._callback_thread:
+            self._callback_queue.put(TERMINATE)
+            self._callback_thread.join(timeout=self.default_timeout)
+            self._callback_thread = None
 
     # Robot control functions.
 
@@ -1143,6 +1188,9 @@ class Robot:
             self._robot_events.on_connected.set()
             self._callback_queue.put('on_connected')
 
+            # Start callback thread if necessary
+            self._start_callback_thread()
+
         # Fetching the serial number must occur outside main_lock.
         if not self._monitor_mode:
             serial_response = self.SendCustomCommand('GetRobotSerial', expected_responses=[MX_ST_GET_ROBOT_SERIAL])
@@ -1186,6 +1234,9 @@ class Robot:
             self._callback_queue.put('on_disconnected')
 
             self._robot_events.abort_all_except_on_connected()
+
+        # Now that we're disconnected and posted 'on_disconnected' callback we can stop the callback thread
+        self._stop_callback_thread()
 
     @disconnect_on_exception
     def ActivateRobot(self):

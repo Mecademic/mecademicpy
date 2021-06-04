@@ -13,7 +13,7 @@
         }
         ,
         {
-            "name": "Python: simple_example",
+            "name": "Python: example",
             "type": "python",
             "request": "launch",
             "program": "${file}",
