@@ -2292,7 +2292,6 @@ class Robot:
 
         self.SetMonitoringInterval(monitoringInterval)
 
-
         self._file_logger = CSVFileLogger(self._robot_info,
                                           self._robot_state,
                                           fields,
@@ -2329,10 +2328,12 @@ class Robot:
             If true, current date and time will be recorded in file.
 
         """
-        self.StartLogging(monitoringInterval,
-                            file_path=file_path,
-                            fields=fields,
-                            record_time=record_time,)
+        self.StartLogging(
+            monitoringInterval,
+            file_path=file_path,
+            fields=fields,
+            record_time=record_time,
+        )
         try:
             yield
         finally:

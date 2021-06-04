@@ -762,4 +762,4 @@ def string_to_numbers(input_string):
 
     """
 
-    return [ ( float(x) if ('.' in x) else int(x) ) for x in input_string.split(',') ]
+    return [(float(x) if ('.' in x) else int(x)) for x in input_string.split(',')]
