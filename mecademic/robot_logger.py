@@ -32,7 +32,9 @@ class CSVFileLogger:
         robot_state : RobotState
             Contains state of robot.
         file_path : string or None
-            If not provided, file will be saved in working directory.
+            Path to save the csv file that contains logged data.
+            If not provided, file will be saved in working directory. File name will be built with date/time
+            and robot information (robot type, serial, version).
         record_time : bool
             If true, current time will also be recorded in the text file. (Time is also available in filename.)
 

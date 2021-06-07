@@ -2196,7 +2196,7 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             if isinstance(events, list):
-                self._send_command('SetRealTimeMonitoring', events)
+            self._send_command('SetRealTimeMonitoring', events)
             else:
                 self._send_command('SetRealTimeMonitoring', [events])
 
@@ -2291,7 +2291,9 @@ class Robot:
         Parameters
         ----------
         file_path : string or None
-            File path to saved log.
+            Path to save the csv file that contains logged data.
+            If not provided, file will be saved in working directory. File name will be built with date/time
+            and robot information (robot type, serial, version).
 
         fields : list of strings or None
             List of fields to log. Taken from RobotState attributes. None means log all compatible fields.
@@ -2326,7 +2328,9 @@ class Robot:
         Parameters
         ----------
         file_path : string or None
-            File path to saved log.
+            Path to save the csv file that contains logged data.
+            If not provided, file will be saved in working directory. File name will be built with date/time
+            and robot information (robot type, serial, version).
 
         fields : list of strings or None
             List of fields to log. Taken from RobotState attributes. None means log all compatible fields.
