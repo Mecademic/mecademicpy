@@ -43,7 +43,7 @@ with mdr.Robot() as robot:
 
         # Configure monitoring interval and required events to capture
         robot.SetMonitoringInterval(0.001)
-        robot.SetRealTimeMonitoring(events=["TargetJointPos", "JointPos"])
+        robot.SetRealTimeMonitoring("TargetJointPos", "JointPos")
 
         # Move to starting position
         print('Moving to a well-known starting position...')

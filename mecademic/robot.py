@@ -2182,7 +2182,7 @@ class Robot:
             self._send_command('SetMonitoringInterval', [t])
 
     @disconnect_on_exception
-    def SetRealTimeMonitoring(self, events):
+    def SetRealTimeMonitoring(self, *events):
         """Configure which real-time monitoring events to enable.
 
         Parameters
@@ -2195,10 +2195,9 @@ class Robot:
         """
         with self._main_lock:
             self._check_internal_states()
-            if isinstance(events, list):
+            if isinstance(events, tuple):
+                events = list(events)
             self._send_command('SetRealTimeMonitoring', events)
-            else:
-                self._send_command('SetRealTimeMonitoring', [events])
 
     @disconnect_on_exception
     def SetRTC(self, t):
