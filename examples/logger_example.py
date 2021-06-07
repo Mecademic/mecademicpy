@@ -33,7 +33,7 @@ with mdr.Robot() as robot:
         robot.Home()
 
         # Wait until robot is homed.
-        robot.WaitHomed(timeout=60)  # Add a timeout of 60 seconds in case something fails.
+        robot.WaitHomed()
 
         # Configure robot's behavior to desired speed/accel/etc
         print('Configuring robot\'s behavior...')

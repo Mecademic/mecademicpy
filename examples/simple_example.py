@@ -21,7 +21,7 @@ with mdr.Robot() as robot:
         robot.Home()
 
         # Pause execution until robot is homed.
-        robot.WaitHomed(timeout=60)  # Add a timeout of 60 seconds in case something fails.
+        robot.WaitHomed()
         print('Robot is homed and ready.')
 
         # Send motion commands to have the robot draw out a square.
