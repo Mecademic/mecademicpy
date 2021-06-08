@@ -3,8 +3,10 @@ import os
 import queue
 import time
 
+from .robot_files import *
 
-class CSVFileLogger:
+
+class RobotDataLogger:
     """Class to handle logging robot state to file.
 
     Attributes
@@ -191,7 +193,7 @@ class CSVFileLogger:
             self.file.write('\n')
 
     def end_log(self, ignore_checkpoints=True):
-        """Write all accumulated sent commands and close file.
+        """ Write all accumulated sent commands and close file.
 
         Return
         --------

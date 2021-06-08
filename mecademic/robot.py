@@ -79,7 +79,7 @@ class Robot:
     _robot_events : RobotEvents object
         Stores events related to the robot state.
 
-    _file_logger : CSVFileLogger object
+    _file_logger : RobotDataLogger object
         Collects RobotInformation, all Robotsates and SentCommands during dertemined period
 
     _robot_callbacks : RobotCallbacks instance
@@ -2292,12 +2292,12 @@ class Robot:
 
         self.SetMonitoringInterval(monitoringInterval)
 
-        self._file_logger = CSVFileLogger(self._robot_info,
-                                          self._robot_state,
-                                          fields,
-                                          file_path,
-                                          record_time=record_time,
-                                          monitoring_interval=monitoringInterval)
+        self._file_logger = RobotDataLogger(self._robot_info,
+                                            self._robot_state,
+                                            fields,
+                                            file_path,
+                                            record_time=record_time,
+                                            monitoring_interval=monitoringInterval)
 
     def EndLogging(self):
         """Stop logging robot state to file.
