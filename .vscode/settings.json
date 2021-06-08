@@ -18,6 +18,7 @@
         "SETWRF",
         "TORQ",
         "Unregister",
+        "atexit",
         "deque",
         "f'Logging",
         "filecmp",
