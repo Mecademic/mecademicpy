@@ -39,7 +39,9 @@ class CSVFileLogger:
         robot_state : RobotState
             Contains state of robot.
         file_path : string or None
-            If not provided, file will be saved in working directory.
+            Path to save the csv file that contains logged data.
+            If not provided, file will be saved in working directory. File name will be built with date/time
+            and robot information (robot type, serial, version).
         record_time : bool
             If true, current time will also be recorded in the text file. (Time is also available in filename.)
         monitoring_interval: float
@@ -98,6 +100,27 @@ class CSVFileLogger:
         self.write_field_headers(robot_state)
         self.write_field_and_element_headers(robot_info)
 
+    def get_timestamp_data(self, robot_state, field):
+        """ Return timestamp data object associated with the specific field (or None).
+
+        Parameters
+        ----------
+        robot_state : RobotState
+            Current state of robot to get timestamp_data from
+        field : String
+            Name of the field to get timestamp_data for.
+
+        """
+        if field == 'rt_accelerometer':
+            index = 5  # For now, only index 5 supported (joint 5's accelerometer)
+            accel_dict = getattr(robot_state, field)
+            if index not in accel_dict:
+                return None
+            field_attr = accel_dict[index]
+        else:
+            field_attr = getattr(robot_state, field)
+        return field_attr
+
     def write_field_headers(self, robot_state):
         """For a field with multiple elements, write field name in first column, empty spaces for rest.
 
@@ -111,8 +134,12 @@ class CSVFileLogger:
         """
         self.file.write(f"{'timestamp':>{self.timestamp_element_width}},")
         for field in self.fields:
+            # Get the corresponding TimestampData object
+            ts_data = self.get_timestamp_data(robot_state, field)
+            if ts_data is None:
+                continue
             # Get number of elements in each field.
-            num_elements = len(getattr(robot_state, field).data)
+            num_elements = len(ts_data.data)
 
             # Add appropriate number of commas to align columns.
             commas = ',' * (num_elements - 1)
@@ -138,7 +165,7 @@ class CSVFileLogger:
         # Write full name for each field.
         self.file.write(f"{'timestamp':>{self.timestamp_element_width}},")
         for field in self.fields:
-            if (field.endswith('joint_pos') or field.endswith('joint_vel') or field.endswith('joint_torque')):
+            if (field.endswith('joint_pos') or field.endswith('joint_vel') or field.endswith('joint_torq')):
                 # Write field name followed by joint number. For example: "rt_target_joint_pos_1".
                 self.file.write(assemble_with_prefix(field, range(robot_info.num_joints)))
             elif field.endswith('cart_pos'):
@@ -146,6 +173,8 @@ class CSVFileLogger:
             elif field.endswith('cart_vel'):
                 self.file.write(
                     assemble_with_prefix(field, ['x_dot', 'y_dot', 'z_dot', 'omega_x', 'omega_y', 'omega_z']))
+            elif field.endswith('rt_accelerometer'):
+                self.file.write(assemble_with_prefix(field, ['x', 'y', 'z']))
             elif field.endswith('conf_turn'):
                 self.file.write(field + ',')
             elif field.endswith('conf'):
@@ -177,7 +206,10 @@ class CSVFileLogger:
 
         for field in self.fields:
             # For each field, write each value with appropriate spacing.
-            field_result = ','.join([f'{x:{self.element_width}}' for x in getattr(robot_state, field).data])
+            ts_data = self.get_timestamp_data(robot_state, field)
+            if ts_data is None:
+                continue
+            field_result = ','.join([f'{x:{self.element_width}}' for x in ts_data.data])
             if self.write_once:
                 self.robot_state_lines = ''.join([self.robot_state_lines, field_result, ','])
             else:

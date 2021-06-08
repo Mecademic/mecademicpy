@@ -2,10 +2,11 @@
 
 import sys
 import os
+import pathlib
+import re
 import socket
 import threading
 import queue
-import filecmp
 from functools import partial
 
 import pytest
@@ -209,6 +210,69 @@ def test_sequential_connections(robot):
 
     connect_robot_helper(robot)
     robot.Disconnect()
+
+
+# Ensure user can wrap robot object within "with" block.
+def test_with_block(robot):
+    called_callbacks = []
+
+    def on_connected_test():
+        called_callbacks.append('on_connected_test')
+
+    def on_disconnected_test():
+        called_callbacks.append('on_disconnected_test')
+
+    with mdr.Robot() as robot2:
+        callbacks = mdr.RobotCallbacks()
+        callbacks.on_connected = on_connected_test
+        callbacks.on_disconnected = on_disconnected_test
+        robot2.RegisterCallbacks(callbacks, run_callbacks_in_separate_thread=True)
+
+        # Simulate a connection
+        connect_robot_helper(robot2)
+
+    # Test that connection occurred, and disconnection too (at end of "with" block)
+    assert called_callbacks == ['on_connected_test', 'on_disconnected_test']
+
+
+# Ensure user can wrap robot object within "with" block on an already existing robot
+def test_with_block_twice(robot):
+    called_callbacks = []
+
+    def on_connected_test():
+        called_callbacks.append('on_connected_test')
+
+    def on_disconnected_test():
+        called_callbacks.append('on_disconnected_test')
+
+    # Create robot and attach callbacks
+    robot2 = mdr.Robot()
+    callbacks = mdr.RobotCallbacks()
+    callbacks.on_connected = on_connected_test
+    callbacks.on_disconnected = on_disconnected_test
+    robot2.RegisterCallbacks(callbacks, run_callbacks_in_separate_thread=True)
+
+    # Connect within 'with' block -> Should disconnect but keep callbacks attached
+    with robot2:
+        connect_robot_helper(robot2)
+
+    # Connect again 'with' block -> Should disconnect but keep callbacks attached
+    with robot2:
+        connect_robot_helper(robot2)
+
+    # Test that connection occurred, and disconnection too (at end of "with" block)
+    assert called_callbacks == [
+        'on_connected_test', 'on_disconnected_test', 'on_connected_test', 'on_disconnected_test'
+    ]
+
+
+# Ensure robot must not yet be connected when entering "with" block.
+def test_with_pre_connected(robot):
+    robot2 = mdr.Robot()
+    connect_robot_helper(robot2)
+    with pytest.raises(mdr.InvalidStateError):
+        with robot2:
+            robot2.Disconnect()
 
 
 # Test parsing of monitoring port messages, and that robot state is correctly updated.
@@ -924,6 +988,19 @@ def test_custom_command(robot):
     assert len(robot._custom_response_events) == 0
 
 
+# Returns a copy of the string with all whitespaces removed
+def remove_all_whitespaces(string):
+    return re.sub(r"\s+", "", string)
+
+
+# Compare 2 CSV files (ignoring whitespaces)
+# Returns true if equal
+def csv_files_identical(file_path_1, file_path_2):
+    file_1 = remove_all_whitespaces(pathlib.Path(file_path_1).read_text())
+    file_2 = remove_all_whitespaces(pathlib.Path(file_path_2).read_text())
+    return file_1 == file_2
+
+
 # Test the ability to log robot state for legacy (non rt monitoring message capable) platforms.
 def test_file_logger(tmp_path, robot):
     connect_robot_helper(robot)
@@ -963,6 +1040,9 @@ def test_file_logger(tmp_path, robot):
 
             robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CONF, fake_string(14, 4)))
             robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CONF_TURN, fake_string(15, 2)))
+
+            robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(16000, 3)))
+
             robot._monitor_rx_queue.put(mdr.Message(mdr.MX_ST_RT_CYCLE_END, str(i)))
 
         # Terminate queue and wait for thread to exit to ensure messages are processed.
@@ -982,7 +1062,7 @@ def test_file_logger(tmp_path, robot):
     reference_file_path = os.path.join(os.path.dirname(__file__), 'log_file_reference.csv')
 
     # Check that the logger output matches the reference file.
-    assert filecmp.cmp(log_file_path, reference_file_path)
+    assert csv_files_identical(log_file_path, reference_file_path)
 
     robot.Disconnect()
 
@@ -1031,6 +1111,6 @@ def test_file_logger_legacy(tmp_path, robot):
     reference_file_path = os.path.join(os.path.dirname(__file__), 'legacy_log_file_reference.csv')
 
     # Check that the logger output matches the reference file.
-    assert filecmp.cmp(log_file_path, reference_file_path)
+    assert csv_files_identical(log_file_path, reference_file_path)
 
     robot.Disconnect()
