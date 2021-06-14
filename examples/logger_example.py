@@ -53,7 +53,7 @@ with mdr.Robot() as robot:
 
         # Start running a test script while logging robot data to a csv file
         print('Start running test script while logging to csv file...')
-        # Configure monitoring interval and required fields to capture in file, and start logging 
+        # Configure monitoring interval and required fields to capture in file, and start logging
         # These fields have a one to one correspondance to those in 'SetRealTimeMonitoring'
         with robot.FileLogger(0.001, fields=["rt_target_joint_pos", "rt_joint_pos"]):
             # Perform 2 simple joint moves, few loops
