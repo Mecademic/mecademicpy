@@ -11,7 +11,7 @@ import contextlib
 
 from .mx_robot_def import *
 from .robot_common import *
-from .robot_logger import *
+from .robot_data_logger import *
 
 
 def disconnect_on_exception(func):
@@ -2343,6 +2343,7 @@ class Robot:
             raise InvalidStateError('Another file logging operation is in progress.')
 
         self.SetMonitoringInterval(monitoringInterval)
+        self.SetRealTimeMonitoring(fields)
 
         self._file_logger = RobotDataLogger(self._robot_info,
                                             self._robot_state,

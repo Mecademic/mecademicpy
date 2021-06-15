@@ -41,21 +41,20 @@ with mdr.Robot() as robot:
         robot.SetJointAcc(50)
         robot.SetBlending(50)
 
-        # Configure required events to capture
-        robot.SetRealTimeMonitoring("TargetJointPos", "JointPos")
-
         # Move to starting position
         print('Moving to a well-known starting position...')
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
 
         # Wait until robot is idle (reached starting position)
         robot.WaitIdle()
+        # Wait until end of one monitoring cycle before logging (data more consistent this way)
+        robot.WaitEndOfCycle()
 
         # Start running a test script while logging robot data to a csv file
         print('Start running test script while logging to csv file...')
-        # Configure monitoring interval and required fields to capture in file, and start logging 
-        # These fields have a one to one correspondance to those in 'SetRealTimeMonitoring'
-        with robot.FileLogger(0.001, fields=["rt_target_joint_pos", "rt_joint_pos"]):
+        # Configure monitoring interval and required fields to capture in file
+        with robot.FileLogger(0.001, fields=["TargetJointPos", "JointPos"]):
+
             # Perform 2 simple joint moves, few loops
             for i in range(0, 2):
                 robot.SetCheckpoint(i + 1)
@@ -64,6 +63,7 @@ with mdr.Robot() as robot:
 
             # Wait until robot is idle (above commands finished executing) before stopping logging.
             robot.WaitIdle(60)
+            robot.WaitEndOfCycle()
             # Exiting the "FileLogger" scope automatically stops logging
 
         print('Done!')

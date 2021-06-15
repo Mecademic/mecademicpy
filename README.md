@@ -232,27 +232,31 @@ An example usage of `StartLogging` and `EngLogging`:
 
 ```python
 robot.WaitIdle()
-robot.StartLogging()
+robot.WaitEndOfCycle()
+robot.StartLogging(0.001)
 try:
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()
+    robot.WaitEndOfCycle()
 except BaseException as e:
     print(f'Logging unsuccessful, exception encountered: {e}')
 finally:
     robot.EndLogging()
 ```
 
-Note that the user should wait for the robot to be idle before starting to log, and also wait for idle before ending the log. This is to ensure the log correctly captures the movements of interest.
+Note that the user should wait for the robot to be idle before starting to log, and also wait for idle before ending the log. This is to ensure the log correctly captures the movements of interest. It is also recommended to wait for the end of a monitoring cycle before and after logging, as the logger will thus produce more consistently sized files.
 
 The user can also use the `FileLogger` context:
 
 ```python
 robot.WaitIdle()
-with robot.FileLogger():
+robot.WaitEndOfCycle()
+with robot.FileLogger(0.001):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()
+    robot.WaitEndOfCycle()
 ```
 
 The `FileLogger` context will automatically end logging after either completing the `with` block or encountering an exception.
@@ -276,17 +280,41 @@ The user can select which fields to log using the `fields` parameter in `StartLo
 
 - rt_accelerometer
 
-The following example only logs the `rt_target_joint_pos` and `rt_target_cart_pos`.
+These fields, attributes of `RobotState` class, are selected respectively using the following strings:
+
+- TargetJointPos 
+- TargetCartPos 
+- TargetJointVel 
+- TargetCartVel 
+- TargetConf 
+- TargetConfTurn 
+
+- JointPos 
+- CartPos
+- JointVel 
+- JointTorq 
+- CartVel 
+- Conf 
+- ConfTurn
+
+- Accel
+
+
+These strings should be placed into the list given to the `fields` parameter.
+
+The following example only logs the `TargetJointPos` and `JointPos`.
 
 ```python
 robot.WaitIdle()
-with robot.FileLogger(fields=['rt_target_joint_pos', 'rt_target_cart_pos']):
+robot.WaitEndOfCycle()
+with robot.FileLogger(0.001, fields=['TargetJointPos', 'JointPos']):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()
+    robot.WaitEndOfCycle()
 ```
 
-Note that the `SetRealTimeMonitoring` command must be used to enable all the real-time monitoring events which are logged. Otherwise, the robot state will be zeroed. The user can also use `SetMonitoringInterval` to choose the monitoring interval.
+Note that the `SetRealTimeMonitoring` command is used by in `StartLogging` or `FileLogger` to enable all the real-time monitoring events which are logged. These methods also use `SetMonitoringInterval` to choose the monitoring interval, given as the first parameter to both.
 
 ### Sending Custom Commands
 
