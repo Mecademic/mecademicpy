@@ -2,10 +2,12 @@
 import os
 import queue
 import time
+
 import pandas as pd
 
-from .robot_files import ZipFileLogger, RobotCurves
 import mecademic.mx_robot_def as mx_def
+
+from .robot_files import RobotTrajectories, ZipFileLogger
 
 # 2nd values of this dict are taken directly from controler.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
@@ -31,7 +33,7 @@ robot_kinetics_to_real_time_monit = {
 }
 
 
-class _RobotDataLogger:
+class _RobotTrajectoryLogger:
     """Class to handle logging robot state to file.
 
     Attributes
@@ -53,7 +55,7 @@ class _RobotDataLogger:
         Elements of 'fields', but expanded to have a name for each sub-element of corresponding robot states
     data_dict:
         Keys: timestamps. Values: robot state stored at moment corresponding to timestamp
-    robot_curves: RobotCurves object
+    robot_trajectories: RobotTrajectories object
         Contains robot states logged data and information about the robot used during logging
     """
 
@@ -122,19 +124,19 @@ class _RobotDataLogger:
         self.done_logging = False
         self.expanded_fields = []
         self.data_dict = dict()  # Key: timestamp, Value: List of all corresponding robot_kinetics values
-        self.robot_curves = RobotCurves()
+        self.robot_trajectories = RobotTrajectories()
 
         # Write robot information.
-        # Maybe robot information could be stored as a RobotInfo object in robot_curves?
-        self.robot_curves.robot_context.robot_information.append(dict())
+        # Maybe robot information could be stored as a RobotInfo object in robot_trajectories?
+        self.robot_trajectories.robot_context.robot_information.append(dict())
         for attr in ['model', 'revision', 'fw_major_rev', 'fw_minor_rev', 'fw_patch_num']:
-            self.robot_curves.robot_context.robot_information[0][attr] = f'{getattr(robot_info, attr)}'
+            self.robot_trajectories.robot_context.robot_information[0][attr] = f'{getattr(robot_info, attr)}'
         if robot_info.serial is not None:
-            self.robot_curves.robot_context.robot_information[0]['serial_number'] = f'{robot_info.serial}'
+            self.robot_trajectories.robot_context.robot_information[0]['serial_number'] = f'{robot_info.serial}'
         if record_time:
-            self.robot_curves.robot_context.robot_information[0]['time_recorded'] = f'{current_date_time}'
+            self.robot_trajectories.robot_context.robot_information[0]['time_recorded'] = f'{current_date_time}'
         if monitoring_interval:
-            self.robot_curves.robot_context.robot_information[0]['monitoring_interval'] = f'{monitoring_interval}'
+            self.robot_trajectories.robot_context.robot_information[0]['monitoring_interval'] = f'{monitoring_interval}'
 
         # Write headers for logged data
         self.write_field_and_element_headers(robot_info)
@@ -228,7 +230,7 @@ class _RobotDataLogger:
 
         self.done_logging = True
 
-        self.robot_curves.robot_df_hist.output_dfs.append(
+        self.robot_trajectories.robot_df_hist.output_dfs.append(
             pd.DataFrame.from_dict(self.data_dict, orient='index', columns=self.expanded_fields))
 
         # Write all sent commands.
@@ -236,9 +238,9 @@ class _RobotDataLogger:
             command = self.command_queue.get()
             if ignore_checkpoints and command.startswith('SetCheckpoint'):
                 continue
-            self.robot_curves.robot_context.sent_commands.append(command)
+            self.robot_trajectories.robot_context.sent_commands.append(command)
 
-        ZipFileLogger.create_and_zip_files(self.robot_curves, self.file_name, file_path=self.file_path)
+        ZipFileLogger.create_and_zip_files(self.robot_trajectories, self.file_name, file_path=self.file_path)
 
         if self.file_path:
             return os.path.join(self.file_path, self.file_name)

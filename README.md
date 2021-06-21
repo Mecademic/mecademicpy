@@ -204,7 +204,7 @@ If non-trivial computation and high-frequency monitoring are both necessary, the
 
 ### Handling Robot Errors
 
-If the robot encounters an error during use, the robot will go into error mode. In this mode, the module will block any command to the robot unless the error is reset. If the robot is in an error state, `GetRobotState().error_status` will return `True`. To properly reset errors on the robot, the following function must be run:
+If the robot encounters an error during use, the robot will go into error mode. In this mode, the module will block any command to the robot unless the error is reset. If the robot is in an error state, `GetRobotStatus().error_status` will return `True`. To properly reset errors on the robot, the following function must be run:
 
 ```python
 robot.ResetError()

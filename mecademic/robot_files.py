@@ -1,24 +1,24 @@
 """Classes in this file are used to store raw or manipulated data about Mecademic robots.
 
-Correct usage would be to build a RobotCurves object, and give it to ZipFileLogger.create_and_zip_files() to store data
+Correct usage would be to build a RobotTrajectories object, and give it to ZipFileLogger.create_and_zip_files() to store data
 in a file.
 
-Robotcurves objects can then be reconstructed from those files using ZipFileLogger.unzip_and_open_files().
+RobotTrajectories objects can then be reconstructed from those files using ZipFileLogger.unzip_and_open_files().
 
-Raw data should be stored in a Robotcurves object using only robot_df_hist.output_dfs attribute (for data) and
+Raw data should be stored in a RobotTrajectories object using only robot_df_hist.output_dfs attribute (for data) and
 robot_context.robot_information and robot_context.sent_commands (for info on how data was logged)
 
-Manipulated or processed data will use all attributes of RobotCurves, stroring intermediate data in
+Manipulated or processed data will use all attributes of RobotTrajectories, stroring intermediate data in
 robot_df_hist.mid_dfs, statistics in robot_context.test_results and info on how statistics where produced in
 robot_context.test_context
 """
-from dataclasses import dataclass, field
-import pandas as pd
 import shutil
-from dataclasses_json import dataclass_json
-from pathlib import PurePath, Path
+from dataclasses import dataclass, field
+from pathlib import Path, PurePath
+from typing import Dict, List
 
-from typing import List, Dict
+import pandas as pd
+from dataclasses_json import dataclass_json
 
 
 @dataclass_json
@@ -221,7 +221,7 @@ class RobotDfHist:
 
 @dataclass_json
 @dataclass
-class RobotCurves:
+class RobotTrajectories:
     """Robot movement through time and context in which those kinetics where produced
 
     Attributes
@@ -246,12 +246,12 @@ class ZipFileLogger:
     """
 
     @staticmethod
-    def create_and_zip_files(robot_curves, filename, file_path=None):
+    def create_and_zip_files(robot_trajectories, filename, file_path=None):
         """ Creates a zipped directory in which robot context and asscociated data is stored in many files
 
         Parameters
         ----------
-        robot_curves: RobotCurves object
+        robot_trajectories: RobotTrajectories object
             Data and context to store in zipped directory, in many files
         filename: string
             Name given to the zipped directory in which info is stored. '.zip' is added here
@@ -267,9 +267,9 @@ class ZipFileLogger:
 
         # os.chdir(root_dir)
 
-        JSONFileLogger.create_file(robot_curves.robot_context, PurePath.joinpath(root_dir, filename))
+        JSONFileLogger.create_file(robot_trajectories.robot_context, PurePath.joinpath(root_dir, filename))
 
-        for key, df in robot_curves.robot_df_hist.make_dict().items():
+        for key, df in robot_trajectories.robot_df_hist.make_dict().items():
             CSVFileLogger.create_file(df, PurePath.joinpath(root_dir, '_'.join([filename, key])))
 
         # os.chdir(current_dir)
@@ -297,7 +297,7 @@ class ZipFileLogger:
 
         shutil.unpack_archive(filepath, extract_dir=base_dir)
 
-        robot_curves = RobotCurves()
+        robot_trajectories = RobotTrajectories()
 
         base = PurePath(filepath).name
         base_name = base.split('.')[0]
@@ -313,15 +313,15 @@ class ZipFileLogger:
                 base_name_file = base_name_file.removeprefix(base_name + '_')
                 df_dict[base_name_file] = CSVFileLogger.open_file(PurePath.joinpath(base_dir, file))
             elif file.name.endswith('.json'):
-                robot_curves.robot_context = JSONFileLogger.open_file(PurePath.joinpath(base_dir, file))
+                robot_trajectories.robot_context = JSONFileLogger.open_file(PurePath.joinpath(base_dir, file))
             else:
-                raise ValueError("Unsupported extension. Cannot open and parse this file to retrieve RobotCurves")
+                raise ValueError("Unsupported extension. Cannot open and parse this file to retrieve RobotTrajectories")
 
-        robot_curves.robot_df_hist.build_from_dict(df_dict)
+        robot_trajectories.robot_df_hist.build_from_dict(df_dict)
 
         shutil.rmtree(base_dir)
 
-        return robot_curves
+        return robot_trajectories
 
 
 class JSONFileLogger:

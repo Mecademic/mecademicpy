@@ -69,7 +69,7 @@ with mdr.Robot() as robot:
 
     except Exception as exception:
         # Attempt to clear error if robot is in error.
-        if robot.GetRobotState().error_status:
+        if robot.GetRobotStatus().error_status:
             print(exception)
             print('Robot has encountered an error, attempting to clear...')
             robot.ResetError()
