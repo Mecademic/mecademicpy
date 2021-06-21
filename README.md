@@ -263,25 +263,6 @@ The `FileLogger` context will automatically end logging after either completing 
 
 The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
 
-- rt_target_joint_pos 
-- rt_target_cart_pos 
-- rt_target_joint_vel 
-- rt_target_cart_vel 
-- rt_target_conf 
-- rt_target_conf_turn 
-
-- rt_joint_pos 
-- rt_cart_pos
-- rt_joint_vel 
-- rt_joint_torq 
-- rt_cart_vel 
-- rt_conf 
-- rt_conf_turn
-
-- rt_accelerometer
-
-These fields, attributes of `RobotState` class, are selected respectively using the following strings:
-
 - TargetJointPos 
 - TargetCartPos 
 - TargetJointVel 
