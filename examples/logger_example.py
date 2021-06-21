@@ -35,7 +35,7 @@ with mdr.Robot() as robot:
         # Wait until robot is homed.
         robot.WaitHomed()
 
-        # Configure robot's behavior to desired speed/accel/etc
+        # Configure robot's behavior to desired speed/accel/etc.
         print('Configuring robot\'s behavior...')
         robot.SetJointVel(50)
         robot.SetJointAcc(50)
@@ -63,7 +63,6 @@ with mdr.Robot() as robot:
 
             # Wait until robot is idle (above commands finished executing) before stopping logging.
             robot.WaitIdle(60)
-            robot.WaitEndOfCycle()
             # Exiting the "FileLogger" scope automatically stops logging
 
         print('Done!')

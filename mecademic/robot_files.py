@@ -1,4 +1,17 @@
-import os
+"""Classes in this file are used to store raw or manipulated data about Mecademic robots.
+
+Correct usage would be to build a RobotCurves object, and give it to ZipFileLogger.create_and_zip_files() to store data
+in a file.
+
+Robotcurves objects can then be reconstructed from those files using ZipFileLogger.unzip_and_open_files().
+
+Raw data should be stored in a Robotcurves object using only robot_df_hist.output_dfs attribute (for data) and
+robot_context.robot_information and robot_context.sent_commands (for info on how data was logged)
+
+Manipulated or processed data will use all attributes of RobotCurves, stroring intermediate data in
+robot_df_hist.mid_dfs, statistics in robot_context.test_results and info on how statistics where produced in
+robot_context.test_context
+"""
 from dataclasses import dataclass, field
 import pandas as pd
 import shutil
@@ -11,7 +24,7 @@ from typing import List, Dict
 @dataclass_json
 @dataclass
 class TestContext:
-    """ Context in which robot states logs where produced, specifically those made by tests, and in which test
+    """ Context in which robot kinetics logs where produced, specifically those made by tests, and in which test
     were produced
 
     Attributes
@@ -38,21 +51,21 @@ class TestContext:
 @dataclass_json
 @dataclass
 class RobotContext:
-    """ Context in which robot states logs where produced
+    """ Context in which robot kinetics logs where produced
 
     Attributes
     ----------
     robot_information: list of dicts
         This list, when produced by the logger, will contain one dict filled with information about a robot. Could
-        contain more dicts after test on robot states from many robots
+        contain more dicts after test on robot kinetics from many robots
     sent_commands: list or strings
         This list, produced by the logger, should contain the commands from which the robot movement was produced.
-        Tests should only compare robot states that came from same set of commands
+        Tests should only compare robot kinetics that came from same set of commands
     test_context: dict
-        This dict should contain context on tests made on robot states after data was logged. This will not be filled by
+        This dict should contain context on tests made on robot kinetics after data was logged. This will not be filled by
         the logger
     test_results: dict
-        This dict should contain results of tests made on robot states after data was logged. This will not be filled by
+        This dict should contain results of tests made on robot kinetics after data was logged. This will not be filled by
         the logger.
     """
     robot_information: List[Dict[str, str]] = field(default_factory=list)
@@ -64,7 +77,7 @@ class RobotContext:
 @dataclass_json
 @dataclass
 class RobotDfHist:
-    """This class contains all robot state dataframes produced by a function, wheter they were produced at the
+    """This class contains all robot kinetics dataframes produced by a function, whether they were produced at the
     beginning, during or at the end of the function.
 
     Attributes
@@ -209,17 +222,17 @@ class RobotDfHist:
 @dataclass_json
 @dataclass
 class RobotCurves:
-    """ States of robot movement through time and context in which those states where produced
+    """Robot movement through time and context in which those kinetics where produced
 
     Attributes
     ----------
     robot_context: RobotContext object
         Explains how and where dfs where produced
-    dfs: dict of Pandas dataframes
-        This dict, when produced by the logger, should contain only one dataframe, associating timestamps to robot
-        states through time
+    robot_df_hist: RobotDfHist object
+        This object, when produced by the logger, should contain only one dataframe, in the output_dfs list, associating
+        timestamps to robot kinetics through time
 
-        All other dataframes in this dict could be produced by subsequent tests and manipulations made on the data from
+        All other dataframes in this object could be produced by subsequent tests and manipulations made on the data from
         the first dataframe
     """
     robot_context: RobotContext = field(default_factory=RobotContext)
@@ -228,7 +241,7 @@ class RobotCurves:
 
 class ZipFileLogger:
     """ Stores all files about robot
-        Decides how files are oragnized in a directory before zipping,
+        Decides how files are organized in a directory before zipping,
         and knows how they are organized after unzipping
     """
 
@@ -269,7 +282,7 @@ class ZipFileLogger:
 
     @staticmethod
     def unzip_and_open_files(filepath):
-        """ Finds robot contexte and state data in a zip file
+        """ Finds robot context and kinetics data in a zip file
 
         Parameters
         ----------
@@ -312,7 +325,7 @@ class ZipFileLogger:
 
 
 class JSONFileLogger:
-    """ Stores information about context in which robot states were produced in a json file
+    """ Stores information about context in which robot kinetics were produced in a json file
         Can also retrieve information from such a produced file
     """
 
@@ -351,7 +364,7 @@ class JSONFileLogger:
 
 
 class CSVFileLogger:
-    """ Stores data about robot states in a csv file
+    """ Stores data about robot kinetics in a csv file
         Can also retrieve data from such a produced file
     """
 
@@ -370,7 +383,7 @@ class CSVFileLogger:
 
     @staticmethod
     def open_file(filepath):
-        """ Finds robot state data in a csv file
+        """ Finds robot kinetics data in a csv file
 
         Parameters
         ----------

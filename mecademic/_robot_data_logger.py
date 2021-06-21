@@ -2,35 +2,36 @@
 import os
 import queue
 import time
+import pandas as pd
 
-from .robot_files import *
-from .mx_robot_def import *
+from .robot_files import ZipFileLogger, RobotCurves
+import mecademic.mx_robot_def as mx_def
 
 # 2nd values of this dict are taken directly from controler.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
 # values)
-robot_state_to_real_time_monit = {
-    'rt_target_joint_pos': (MX_ST_RT_TARGET_JOINT_POS, 'TargetJointPos'),
-    'rt_target_cart_pos': (MX_ST_RT_TARGET_CART_POS, 'TargetCartPos'),
-    'rt_target_joint_vel': (MX_ST_RT_TARGET_JOINT_VEL, 'TargetJointVel'),
-    'rt_target_joint_torq': (MX_ST_RT_TARGET_JOINT_TORQ, 'TargetJointTorq'),  # Doesn't exist in RobotState right now
-    'rt_target_cart_vel': (MX_ST_RT_TARGET_CART_VEL, 'TargetCartVel'),
-    'rt_target_conf': (MX_ST_RT_TARGET_CONF, 'TargetConf'),
-    'rt_target_conf_turn': (MX_ST_RT_TARGET_CONF_TURN, 'TargetConfTurn'),
-    'rt_joint_pos': (MX_ST_RT_JOINT_POS, 'JointPos'),
-    'rt_cart_pos': (MX_ST_RT_CART_POS, 'CartPos'),
-    'rt_joint_vel': (MX_ST_RT_JOINT_VEL, 'JointVel'),
-    'rt_joint_torq': (MX_ST_RT_JOINT_TORQ, 'JointTorq'),
-    'rt_cart_vel': (MX_ST_RT_CART_VEL, 'CartVel'),
-    'rt_conf': (MX_ST_RT_CONF, 'Conf'),
-    'rt_conf_turn': (MX_ST_RT_CONF_TURN, 'ConfTurn'),
-    'rt_accelerometer': (MX_ST_RT_ACCELEROMETER, 'Accel'),
-    'rt_gripper_torq': (MX_ST_RT_GRIPPER_TORQ, 'GripperTorq'),  # Doesn't exist in RobotState right now
-    '': (MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
+robot_kinetics_to_real_time_monit = {
+    'rt_target_joint_pos': (mx_def.MX_ST_RT_TARGET_JOINT_POS, 'TargetJointPos'),
+    'rt_target_cart_pos': (mx_def.MX_ST_RT_TARGET_CART_POS, 'TargetCartPos'),
+    'rt_target_joint_vel': (mx_def.MX_ST_RT_TARGET_JOINT_VEL, 'TargetJointVel'),
+    'rt_target_joint_torq': (mx_def.MX_ST_RT_TARGET_JOINT_TORQ, 'TargetJointTorq'),  # Unused in RobotState right now
+    'rt_target_cart_vel': (mx_def.MX_ST_RT_TARGET_CART_VEL, 'TargetCartVel'),
+    'rt_target_conf': (mx_def.MX_ST_RT_TARGET_CONF, 'TargetConf'),
+    'rt_target_conf_turn': (mx_def.MX_ST_RT_TARGET_CONF_TURN, 'TargetConfTurn'),
+    'rt_joint_pos': (mx_def.MX_ST_RT_JOINT_POS, 'JointPos'),
+    'rt_cart_pos': (mx_def.MX_ST_RT_CART_POS, 'CartPos'),
+    'rt_joint_vel': (mx_def.MX_ST_RT_JOINT_VEL, 'JointVel'),
+    'rt_joint_torq': (mx_def.MX_ST_RT_JOINT_TORQ, 'JointTorq'),
+    'rt_cart_vel': (mx_def.MX_ST_RT_CART_VEL, 'CartVel'),
+    'rt_conf': (mx_def.MX_ST_RT_CONF, 'Conf'),
+    'rt_conf_turn': (mx_def.MX_ST_RT_CONF_TURN, 'ConfTurn'),
+    'rt_accelerometer': (mx_def.MX_ST_RT_ACCELEROMETER, 'Accel'),
+    'rt_gripper_torq': (mx_def.MX_ST_RT_GRIPPER_TORQ, 'GripperTorq'),  # Unused in RobotState right now
+    '': (mx_def.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
 }
 
 
-class RobotDataLogger:
+class _RobotDataLogger:
     """Class to handle logging robot state to file.
 
     Attributes
@@ -38,8 +39,8 @@ class RobotDataLogger:
     file_name : str
         Name of file produced by logger
     fields : dict of strings
-        Fields to be logged. Key: attribute name in 'RobotState'. Value: Equivalent UpperCamelCase string used in
-        'SetRealTimeMonitoring'
+        Fields to be logged. Key: attribute name in 'RobotState'. Value: Equivalent UpperCamelCase string or enum value
+        used in 'SetRealTimeMonitoring'
     command_queue : queue
         Queue to store sent commands.
     element_width : int
@@ -58,7 +59,7 @@ class RobotDataLogger:
 
     def __init__(self,
                  robot_info,
-                 robot_state,
+                 robot_kinetics,
                  fields=None,
                  file_path=None,
                  record_time=True,
@@ -71,10 +72,10 @@ class RobotDataLogger:
             Contains robot information.
         fields : list of strings
             List of fields to be logged.
-        robot_state : RobotState
+        robot_kinetics : RobotKinetics object
             Contains state of robot.
         file_path : string or None
-            Path to save the csv file that contains logged data.
+            Path to save the zipped file that contains logged data + robot info in, respectively, csv and json file.
             If not provided, file will be saved in working directory. File name will be built with date/time
             and robot information (robot type, serial, version).
         record_time : bool
@@ -98,18 +99,18 @@ class RobotDataLogger:
         if fields is None:
 
             if robot_info.rt_message_capable:
-                for attr in vars(robot_state):
+                for attr in vars(robot_kinetics):
                     if attr.startswith('rt_'):
-                        self.fields[attr] = robot_state_to_real_time_monit[attr][1]
+                        self.fields[attr] = robot_kinetics_to_real_time_monit[attr][1]
             else:
                 # Only the following fields are available if platform is not rt monitoring capable.
                 self.fields = {
-                    'rt_target_joint_pos': robot_state_to_real_time_monit['rt_target_joint_pos'][1],
-                    'rt_target_cart_pos': robot_state_to_real_time_monit['rt_target_cart_pos'][1]
+                    'rt_target_joint_pos': robot_kinetics_to_real_time_monit['rt_target_joint_pos'][1],
+                    'rt_target_cart_pos': robot_kinetics_to_real_time_monit['rt_target_cart_pos'][1]
                 }
         else:
             for field in fields:
-                for key, val in robot_state_to_real_time_monit.items():
+                for key, val in robot_kinetics_to_real_time_monit.items():
                     if (isinstance(field, str) and field.lower() == val[1].lower()) or field == val[0]:
                         self.fields[key] = val[1]
                         break
@@ -120,7 +121,7 @@ class RobotDataLogger:
         self.timestamp_element_width = 15
         self.done_logging = False
         self.expanded_fields = []
-        self.data_dict = dict()  # Key: timestamp, Value: List of all corresponding robot_state values
+        self.data_dict = dict()  # Key: timestamp, Value: List of all corresponding robot_kinetics values
         self.robot_curves = RobotCurves()
 
         # Write robot information.
@@ -138,12 +139,12 @@ class RobotDataLogger:
         # Write headers for logged data
         self.write_field_and_element_headers(robot_info)
 
-    def get_timestamp_data(self, robot_state, field):
+    def get_timestamp_data(self, robot_kinetics, field):
         """ Return timestamp data object associated with the specific field (or None).
 
         Parameters
         ----------
-        robot_state : RobotState
+        robot_kinetics : RobotKinetics object
             Current state of robot to get timestamp_data from
         field : String
             Name of the field to get timestamp_data for.
@@ -151,12 +152,12 @@ class RobotDataLogger:
         """
         if field == 'rt_accelerometer':
             index = 5  # For now, only index 5 supported (joint 5's accelerometer)
-            accel_dict = getattr(robot_state, field)
+            accel_dict = getattr(robot_kinetics, field)
             if index not in accel_dict:
                 return None
             field_attr = accel_dict[index]
         else:
-            field_attr = getattr(robot_state, field)
+            field_attr = getattr(robot_kinetics, field)
         return field_attr
 
     def write_field_and_element_headers(self, robot_info):
@@ -191,14 +192,14 @@ class RobotDataLogger:
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
-    def write_fields(self, timestamp, robot_state):
+    def write_fields(self, timestamp, robot_kinetics):
         """Write fields to file.
 
         Parameters
         ----------
         timestamp : numeric
             The timestamp of the current data.
-        robot_state : RobotState
+        robot_kinetics : RobotKinetics object
             This object contains the current robot state.
 
         """
@@ -210,7 +211,7 @@ class RobotDataLogger:
         self.data_dict[formatted_tim] = []
         for field in self.fields:
             # For each field, write each value with appropriate spacing.
-            ts_data = self.get_timestamp_data(robot_state, field)
+            ts_data = self.get_timestamp_data(robot_kinetics, field)
             if ts_data is None:
                 continue
             self.data_dict[formatted_tim].extend([f'{x:{self.element_width}}' for x in ts_data.data])

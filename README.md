@@ -238,7 +238,6 @@ try:
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()
-    robot.WaitEndOfCycle()
 except BaseException as e:
     print(f'Logging unsuccessful, exception encountered: {e}')
 finally:
@@ -246,6 +245,8 @@ finally:
 ```
 
 Note that the user should wait for the robot to be idle before starting to log, and also wait for idle before ending the log. This is to ensure the log correctly captures the movements of interest. It is also recommended to wait for the end of a monitoring cycle before and after logging, as the logger will thus produce more consistently sized files.
+
+It should also be noted that it is mandatory to give a monitoring interval, in seconds, to `StartLogging`, to specify at which rate data should be logged. In the example above, the monitoring interval is set at 0.001 seconds, or 1 ms. It is the minimum monitoring interval that can be set using `SetMonitoringInterval`, which is the robot command used by `StartLogging` to choose the monitoring interval.
 
 The user can also use the `FileLogger` context:
 
@@ -256,7 +257,6 @@ with robot.FileLogger(0.001):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()
-    robot.WaitEndOfCycle()
 ```
 
 The `FileLogger` context will automatically end logging after either completing the `with` block or encountering an exception.
@@ -311,10 +311,9 @@ with robot.FileLogger(0.001, fields=['TargetJointPos', 'JointPos']):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()
-    robot.WaitEndOfCycle()
 ```
 
-Note that the `SetRealTimeMonitoring` command is used by in `StartLogging` or `FileLogger` to enable all the real-time monitoring events which are logged. These methods also use `SetMonitoringInterval` to choose the monitoring interval, given as the first parameter to both.
+Note that the `SetRealTimeMonitoring` command is used by in `StartLogging` or `FileLogger` to enable all the real-time monitoring events which are logged.
 
 ### Sending Custom Commands
 
