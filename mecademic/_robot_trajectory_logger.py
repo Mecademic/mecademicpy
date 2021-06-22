@@ -7,7 +7,7 @@ import pandas as pd
 
 import mecademic.mx_robot_def as mx_def
 
-from .robot_files import RobotTrajectories, ZipFileLogger
+from .robot_trajectory_files import RobotTrajectories, ZipFileLogger
 
 # 2nd values of this dict are taken directly from controler.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
