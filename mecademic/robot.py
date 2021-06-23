@@ -192,16 +192,19 @@ class Robot:
 
     def __del__(self):
         """Destructor for an instance of the Robot class.
-           WARNING: In python, the  destructor is called by garbage collector, it may not be called when Robot object
-                 instance is released so make sure to explicitly Disconnect from the robot, or use "with" block if you
-                 need to control when the disconnection with robot occurs.
+
+        Warnings
+        --------
+        In python, the  destructor is called by garbage collector, it may not be called when Robot object
+        instance is released so make sure to explicitly Disconnect from the robot, or use "with" block if you
+        need to control when the disconnection with robot occurs.
         """
         self._reset()
         self.UnregisterCallbacks()
 
     def __enter__(self):
         """Function called when entering "with" block with a Robot object instance.
-           This simply validates that the robot is not already connection (must not be by design)
+        This simply validates that the robot is not already connection (must not be by design)
         """
         # Don't allow entering a "with" statement when robot is already connected
         # (since the goal of "with" is to disconnect)
@@ -211,15 +214,15 @@ class Robot:
 
     def __exit__(self, exc_type, exc_value, traceback):
         """Function called when exiting "with" block with a Robot object instance.
-           This forces disconnection with the robot and reset of all states, except registered callbacks
-           which remain attached in case the same Robot object is reconnected later.
+        This forces disconnection with the robot and reset of all states, except registered callbacks
+        which remain attached in case the same Robot object is reconnected later.
         """
         self._reset()
 
     def _reset(self):
         """ Reset the Robot class (disconnects, stop threads, clears queues, etc).
-            (this code is common to constructor, destructor and __exit__ implicit functions)
-            Only thing that is not reset are registered callbacks.
+        (this code is common to constructor, destructor and __exit__ implicit functions)
+        Only thing that is not reset are registered callbacks.
         """
         if self._is_initialized:
             self.Disconnect()
@@ -600,7 +603,6 @@ class Robot:
         ----------
         message_queue : queue
             The welcome message will be fetched from this queue.
-
         """
 
         try:

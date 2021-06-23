@@ -267,10 +267,10 @@ class ZipFileLogger:
 
         # os.chdir(root_dir)
 
-        JSONFileLogger.create_file(robot_trajectories.robot_context, PurePath.joinpath(root_dir, filename))
+        JsonFileLogger.create_file(robot_trajectories.robot_context, PurePath.joinpath(root_dir, filename))
 
         for key, df in robot_trajectories.robot_df_hist.make_dict().items():
-            CSVFileLogger.create_file(df, PurePath.joinpath(root_dir, '_'.join([filename, key])))
+            CsvFileLogger.create_file(df, PurePath.joinpath(root_dir, '_'.join([filename, key])))
 
         # os.chdir(current_dir)
 
@@ -311,9 +311,9 @@ class ZipFileLogger:
                 base_file = file.name  # .name from PurePath
                 base_name_file = base_file.split('.')[0]
                 base_name_file = base_name_file.removeprefix(base_name + '_')
-                df_dict[base_name_file] = CSVFileLogger.open_file(PurePath.joinpath(base_dir, file))
+                df_dict[base_name_file] = CsvFileLogger.open_file(PurePath.joinpath(base_dir, file))
             elif file.name.endswith('.json'):
-                robot_trajectories.robot_context = JSONFileLogger.open_file(PurePath.joinpath(base_dir, file))
+                robot_trajectories.robot_context = JsonFileLogger.open_file(PurePath.joinpath(base_dir, file))
             else:
                 raise ValueError("Unsupported extension. Cannot open and parse this file to retrieve RobotTrajectories")
 
@@ -324,7 +324,7 @@ class ZipFileLogger:
         return robot_trajectories
 
 
-class JSONFileLogger:
+class JsonFileLogger:
     """ Stores information about context in which robot kinetics were produced in a json file
         Can also retrieve information from such a produced file
     """
@@ -363,7 +363,7 @@ class JSONFileLogger:
         return robot_context
 
 
-class CSVFileLogger:
+class CsvFileLogger:
     """ Stores data about robot kinetics in a csv file
         Can also retrieve data from such a produced file
     """
