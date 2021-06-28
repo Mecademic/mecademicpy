@@ -966,22 +966,22 @@ class Robot:
 
         # Only update using legacy messages if robot is not capable of rt messages.
         elif response.id == mx_def.MX_ST_GET_JOINTS and not self._robot_info.rt_message_capable:
-            self._robot_kinetics.rt_target_joint_pos = _TimestampedData(0, _string_to_numbers(response.data))
+            self._robot_kinetics.rt_target_joint_pos = TimestampedData(0, _string_to_numbers(response.data))
             if is_command_response:
                 self._robot_events.on_joints_updated.set()
 
         elif response.id == mx_def.MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
-            self._robot_kinetics.rt_target_cart_pos = _TimestampedData(0, _string_to_numbers(response.data))
+            self._robot_kinetics.rt_target_cart_pos = TimestampedData(0, _string_to_numbers(response.data))
             if is_command_response:
                 self._robot_events.on_pose_updated.set()
 
         elif response.id == mx_def.MX_ST_GET_CONF and not self._robot_info.rt_message_capable:
-            self._robot_kinetics.rt_target_conf = _TimestampedData(0, _string_to_numbers(response.data))
+            self._robot_kinetics.rt_target_conf = TimestampedData(0, _string_to_numbers(response.data))
             if is_command_response:
                 self._robot_events.on_conf_updated.set()
 
         elif response.id == mx_def.MX_ST_GET_CONF_TURN and not self._robot_info.rt_message_capable:
-            self._robot_kinetics.rt_target_conf_turn = _TimestampedData(0, _string_to_numbers(response.data))
+            self._robot_kinetics.rt_target_conf_turn = TimestampedData(0, _string_to_numbers(response.data))
             if is_command_response:
                 self._robot_events.on_conf_turn_updated.set()
 
@@ -1033,7 +1033,7 @@ class Robot:
             # Record accelerometer measurement only if newer.
             if (index not in self._robot_kinetics.rt_accelerometer
                     or timestamp > self._robot_kinetics.rt_accelerometer[index].timestamp):
-                self._robot_kinetics.rt_accelerometer[index] = _TimestampedData(timestamp, measurements)
+                self._robot_kinetics.rt_accelerometer[index] = TimestampedData(timestamp, measurements)
 
     def _handle_robot_status_response(self, response):
         """Parse robot status response and update status fields and events.
@@ -2573,7 +2573,7 @@ class RobotCallbacks:
         self.on_end_of_cycle = None
 
 
-class _TimestampedData:
+class TimestampedData:
     """ Class for storing timestamped data.
 
     Attributes
@@ -2715,21 +2715,21 @@ class RobotKinetics:
     """
 
     def __init__(self, num_joints):
-        self.rt_target_joint_pos = _TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.rt_target_cart_pos = _TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
-        self.rt_target_joint_vel = _TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.rt_target_joint_torq = _TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.rt_target_cart_vel = _TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
-        self.rt_target_conf = _TimestampedData.zeros(3)
-        self.rt_target_conf_turn = _TimestampedData.zeros(1)
+        self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+        self.rt_target_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_target_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
+        self.rt_target_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
+        self.rt_target_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
+        self.rt_target_conf = TimestampedData.zeros(3)
+        self.rt_target_conf_turn = TimestampedData.zeros(1)
 
-        self.rt_joint_pos = _TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.rt_cart_pos = _TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
-        self.rt_joint_vel = _TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.rt_joint_torq = _TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.rt_cart_vel = _TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
-        self.rt_conf = _TimestampedData.zeros(3)
-        self.rt_conf_turn = _TimestampedData.zeros(1)
+        self.rt_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+        self.rt_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
+        self.rt_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
+        self.rt_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
+        self.rt_conf = TimestampedData.zeros(3)
+        self.rt_conf_turn = TimestampedData.zeros(1)
 
         # Contains dictionary of accelerometers stored in the robot indexed by joint number.
         # For example, Meca500 currently only reports the accelerometer in joint 5.

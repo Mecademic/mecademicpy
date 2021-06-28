@@ -187,9 +187,9 @@ class _RobotTrajectoryLogger:
                     assemble_with_prefix(value, ['X_Dot', 'Y_Dot', 'Z_Dot', 'Omega_X', 'Omega_Y', 'Omega_Z']))
             elif key.endswith('rt_accelerometer'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['X', 'Y', 'Z']))
-            elif key.endswith('Conf_Turn'):
+            elif key.endswith('conf_turn'):
                 self.expanded_fields.append(value)
-            elif key.endswith('Conf'):
+            elif key.endswith('conf'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['Shoulder', 'Elbow', 'Wrist']))
             else:
                 raise ValueError(f'Missing formatting for field: {key}')

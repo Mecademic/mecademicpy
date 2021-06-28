@@ -218,6 +218,18 @@ class RobotDfHist:
         """
         return 'output_df'
 
+    def __eq__(self, other) -> bool:
+        for index, df in enumerate(self.input_dfs):
+            if not df.equals(other.input_dfs[index]):
+                return False
+        for key, df in self.mid_dfs.items():
+            if not df.equals(other.mid_dfs[key]):
+                return False
+        for index, df in enumerate(self.output_dfs):
+            if not df.equals(other.output_dfs[index]):
+                return False
+        return True
+
 
 @dataclass_json
 @dataclass
@@ -278,7 +290,8 @@ class ZipFileLogger:
 
         shutil.rmtree(root_dir)
         if file_path:
-            shutil.move(PurePath.joinpath(root_dir, filename + '.zip'), PurePath.joinpath(file_path, filename + '.zip'))
+            shutil.move(PurePath.joinpath(current_dir, filename + '.zip'),
+                        PurePath.joinpath(file_path, filename + '.zip'))
 
     @staticmethod
     def unzip_and_open_files(filepath):
