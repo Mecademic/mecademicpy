@@ -25,4 +25,5 @@ setuptools.setup(name='mecademic',
                      'console_scripts': [
                          'FirmwareUpdate = FirmwareUpdate:main',
                      ],
-                 })
+                 },
+                 install_requires=['dataclasses_json'])
