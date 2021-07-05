@@ -74,7 +74,7 @@ class RobotContext:
     test_context: TestContext = field(default_factory=TestContext)
     test_results: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
-    def create_file(self, filename):
+    def to_file(self, filename):
         """ Creates a json file in which is stored relevant context
 
         Parameters
@@ -91,13 +91,18 @@ class RobotContext:
             file.write(context_json)
 
     @staticmethod
-    def open_file(filepath):
+    def from_file(filepath):
         """ Finds robot context in a json file
 
         Parameters
         ----------
         filepath: string
             Complete path to the relevant file, including its name, but excluding '.json' extension
+
+        Returns
+        -------
+        robot_context: RobotContext object
+            Context info built from json file
         """
 
         with open(filepath) as file:
@@ -107,7 +112,6 @@ class RobotContext:
         return robot_context
 
 
-@dataclass_json
 @dataclass
 class RobotDfHist:
     """This class contains all robot kinetics dataframes produced by a function, whether they were produced at the
@@ -172,6 +176,12 @@ class RobotDfHist:
         -------
         dict of Pandas dataframes
             Contains all dataframes in 'input_dfs', 'mid_dfs', 'output_dfs'
+
+        Returns
+        -------
+        out_dict: dict of Pandas dataframes
+            Dataframes stored in all atributes of this object, with special names from dataframes from input_dfs and
+            output_dfs
         """
         out_dict = dict()
         out_dict.update(self.mid_dfs)
@@ -252,6 +262,18 @@ class RobotDfHist:
         return 'output_df'
 
     def __eq__(self, other) -> bool:
+        """Returns true if both RobotDfHsit objects contain same dataframes, in same position of each attribute
+
+        Parameters
+        ----------
+        other : RobotDfHsit object
+            Object comapred to self
+
+        Returns
+        -------
+        bool
+            True if all dataframes in both objects are the same
+        """
         for index, df in enumerate(self.input_dfs):
             if not df.equals(other.input_dfs[index]):
                 return False
@@ -264,7 +286,7 @@ class RobotDfHist:
         return True
 
     @staticmethod
-    def create_file(df, filename):
+    def to_file(df, filename):
         """ Creates a csv file in which is stored relevant data
 
         Parameters
@@ -277,13 +299,18 @@ class RobotDfHist:
         df.to_csv(f'{filename}.csv', index_label='timestamp')
 
     @staticmethod
-    def open_file(filepath):
+    def from_file(filepath):
         """ Finds robot kinetics data in a csv file
 
         Parameters
         ----------
         filepath: string
             Complete path to the relevant file, including its name
+
+        Returns
+        -------
+        df: Pandas dataframe
+            Data stored in csv file
         """
 
         df = pd.read_csv(filepath, index_col='timestamp')
@@ -291,7 +318,6 @@ class RobotDfHist:
         return df
 
 
-@dataclass_json
 @dataclass
 class RobotTrajectories:
     """Robot movement through time and context in which those kinetics where produced
@@ -310,7 +336,7 @@ class RobotTrajectories:
     robot_context: RobotContext = field(default_factory=RobotContext)
     robot_df_hist: RobotDfHist = field(default_factory=RobotDfHist)
 
-    def create_and_zip_files(self, filename, file_path=None):
+    def to_file(self, filename, file_path=None):
         """ Creates a zipped directory in which robot context and associated data is stored in many files
 
         Parameters
@@ -327,10 +353,10 @@ class RobotTrajectories:
 
         with TemporaryDirectory(dir=current_dir) as root_dir:
 
-            self.robot_context.create_file(PurePath.joinpath(PurePath(root_dir), filename))
+            self.robot_context.to_file(PurePath.joinpath(PurePath(root_dir), filename))
 
             for key, df in self.robot_df_hist.make_dict().items():
-                RobotDfHist.create_file(df, PurePath.joinpath(PurePath(root_dir), '_'.join([filename, key])))
+                RobotDfHist.to_file(df, PurePath.joinpath(PurePath(root_dir), '_'.join([filename, key])))
 
             shutil.make_archive(base_name=filename, format='zip', root_dir=root_dir)
 
@@ -339,13 +365,18 @@ class RobotTrajectories:
                         PurePath.joinpath(file_path, filename + '.zip'))
 
     @staticmethod
-    def unzip_and_open_files(filepath):
+    def from_file(filepath):
         """ Finds robot context and kinetics data in a zip file
 
         Parameters
         ----------
         filepath: string
             Complete path to the relevant zipped file, including its name, with the '.zip' extension
+
+        Returns
+        -------
+        robot_trajectories: RobotTrajectories object
+            Trajectory object built from content of zipped file
         """
         current_dir = Path.cwd()
 
@@ -367,9 +398,9 @@ class RobotTrajectories:
                     base_file = file.name  # .name from PurePath
                     base_name_file = base_file.split('.')[0]
                     base_name_file = base_name_file.removeprefix(base_name + '_')
-                    df_dict[base_name_file] = RobotDfHist.open_file(PurePath.joinpath(PurePath(base_dir), file))
+                    df_dict[base_name_file] = RobotDfHist.from_file(PurePath.joinpath(PurePath(base_dir), file))
                 elif file.name.endswith('.json'):
-                    robot_trajectories.robot_context = RobotContext.open_file(
+                    robot_trajectories.robot_context = RobotContext.from_file(
                         PurePath.joinpath(PurePath(base_dir), file))
                 else:
                     raise ValueError(

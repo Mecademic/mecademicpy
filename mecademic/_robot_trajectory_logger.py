@@ -240,7 +240,7 @@ class _RobotTrajectoryLogger:
                 continue
             self.robot_trajectories.robot_context.sent_commands.append(command)
 
-        self.robot_trajectories.create_and_zip_files(self.file_name, file_path=self.file_path)
+        self.robot_trajectories.to_file(self.file_name, file_path=self.file_path)
 
         if self.file_path:
             return os.path.join(self.file_path, self.file_name)
