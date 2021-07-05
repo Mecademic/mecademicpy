@@ -674,10 +674,10 @@ def test_callbacks(robot):
         assert robot._callback_thread is None
 
 
-# Test unblocking _InterruptableEvent class with exception.
+# Test unblocking InterruptableEvent class with exception.
 def test_event_with_exception():
     # Test successful setting.
-    event = mdr._InterruptableEvent()
+    event = mdr.InterruptableEvent()
     event.set()
     assert event.wait(timeout=0)
 
@@ -686,7 +686,7 @@ def test_event_with_exception():
     assert not event.wait(timeout=0)
 
     # Test event throwing exception.
-    exception_event = mdr._InterruptableEvent()
+    exception_event = mdr.InterruptableEvent()
     exception_event.abort()
     with pytest.raises(mdr.InterruptException):
         exception_event.wait(timeout=0)
@@ -1014,8 +1014,8 @@ def remove_all_whitespaces(string):
 # Compare 2 CSV files (ignoring whitespaces)
 # Returns true if equal
 def robot_trajectory_files_identical(file_path_1, file_path_2):
-    robot_traj_1 = robot_files.ZipFileLogger.unzip_and_open_files(file_path_1)
-    robot_traj_2 = robot_files.ZipFileLogger.unzip_and_open_files(file_path_2)
+    robot_traj_1 = robot_files.RobotTrajectories.unzip_and_open_files(file_path_1)
+    robot_traj_2 = robot_files.RobotTrajectories.unzip_and_open_files(file_path_2)
 
     return robot_traj_1 == robot_traj_2
 

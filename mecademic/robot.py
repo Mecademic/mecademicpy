@@ -1123,7 +1123,7 @@ class Robot:
             self._check_internal_states()
             if '*' not in self._internal_checkpoints:
                 self._internal_checkpoints['*'] = list()
-            event = _InterruptableEvent()
+            event = InterruptableEvent()
             self._internal_checkpoints['*'].append(event)
 
         return event.wait(timeout=timeout)
@@ -1381,7 +1381,7 @@ class Robot:
             self._check_internal_states()
 
             if expected_responses:
-                event_with_data = _InterruptableEvent(data=expected_responses)
+                event_with_data = InterruptableEvent(data=expected_responses)
                 self._custom_response_events.append(event_with_data)
 
             self._send_command(command)
@@ -2109,7 +2109,7 @@ class Robot:
 
             if n not in checkpoints_dict:
                 checkpoints_dict[n] = list()
-            event = _InterruptableEvent(n)
+            event = InterruptableEvent(n)
             checkpoints_dict[n].append(event)
 
             if send_to_robot:
@@ -2849,7 +2849,7 @@ class RobotInfo:
             raise ValueError('Could not parse robot info string {}'.format(input_string))
 
 
-class _InterruptableEvent:
+class InterruptableEvent:
     """Extend default event class to also be able to unblock and raise an exception.
 
     Attributes
@@ -3077,40 +3077,40 @@ class _RobotEvents:
     """
 
     def __init__(self):
-        self.on_connected = _InterruptableEvent()
-        self.on_disconnected = _InterruptableEvent()
+        self.on_connected = InterruptableEvent()
+        self.on_disconnected = InterruptableEvent()
 
-        self.on_status_updated = _InterruptableEvent()
+        self.on_status_updated = InterruptableEvent()
 
-        self.on_activated = _InterruptableEvent()
-        self.on_deactivated = _InterruptableEvent()
+        self.on_activated = InterruptableEvent()
+        self.on_deactivated = InterruptableEvent()
 
-        self.on_homed = _InterruptableEvent()
+        self.on_homed = InterruptableEvent()
 
-        self.on_error = _InterruptableEvent()
-        self.on_error_reset = _InterruptableEvent()
-        self.on_p_stop = _InterruptableEvent()
-        self.on_p_stop_reset = _InterruptableEvent()
+        self.on_error = InterruptableEvent()
+        self.on_error_reset = InterruptableEvent()
+        self.on_p_stop = InterruptableEvent()
+        self.on_p_stop_reset = InterruptableEvent()
 
-        self.on_motion_paused = _InterruptableEvent()
-        self.on_motion_resumed = _InterruptableEvent()
-        self.on_motion_cleared = _InterruptableEvent()
+        self.on_motion_paused = InterruptableEvent()
+        self.on_motion_resumed = InterruptableEvent()
+        self.on_motion_cleared = InterruptableEvent()
 
-        self.on_activate_sim = _InterruptableEvent()
-        self.on_deactivate_sim = _InterruptableEvent()
+        self.on_activate_sim = InterruptableEvent()
+        self.on_deactivate_sim = InterruptableEvent()
 
-        self.on_conf_updated = _InterruptableEvent()
-        self.on_conf_turn_updated = _InterruptableEvent()
-        self.on_joints_updated = _InterruptableEvent()
-        self.on_pose_updated = _InterruptableEvent()
+        self.on_conf_updated = InterruptableEvent()
+        self.on_conf_turn_updated = InterruptableEvent()
+        self.on_joints_updated = InterruptableEvent()
+        self.on_pose_updated = InterruptableEvent()
 
-        self.on_brakes_activated = _InterruptableEvent()
-        self.on_brakes_deactivated = _InterruptableEvent()
+        self.on_brakes_activated = InterruptableEvent()
+        self.on_brakes_deactivated = InterruptableEvent()
 
-        self.on_offline_program_started = _InterruptableEvent()
+        self.on_offline_program_started = InterruptableEvent()
 
-        self.on_end_of_block = _InterruptableEvent()
-        self.on_end_of_cycle = _InterruptableEvent()
+        self.on_end_of_block = InterruptableEvent()
+        self.on_end_of_cycle = InterruptableEvent()
 
         self.on_disconnected.set()
         self.on_deactivated.set()

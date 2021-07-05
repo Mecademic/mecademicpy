@@ -7,7 +7,7 @@ import pandas as pd
 
 import mecademic.mx_robot_def as mx_def
 
-from .robot_trajectory_files import RobotTrajectories, ZipFileLogger
+from .robot_trajectory_files import RobotTrajectories
 
 # 2nd values of this dict are taken directly from controler.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
@@ -240,7 +240,7 @@ class _RobotTrajectoryLogger:
                 continue
             self.robot_trajectories.robot_context.sent_commands.append(command)
 
-        ZipFileLogger.create_and_zip_files(self.robot_trajectories, self.file_name, file_path=self.file_path)
+        self.robot_trajectories.create_and_zip_files(self.file_name, file_path=self.file_path)
 
         if self.file_path:
             return os.path.join(self.file_path, self.file_name)

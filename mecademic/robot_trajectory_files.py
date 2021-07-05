@@ -15,6 +15,7 @@ robot_context.test_context
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
+from tempfile import TemporaryDirectory
 from typing import Dict, List
 
 import pandas as pd
@@ -72,6 +73,38 @@ class RobotContext:
     sent_commands: List[str] = field(default_factory=list)
     test_context: TestContext = field(default_factory=TestContext)
     test_results: Dict[str, Dict[str, str]] = field(default_factory=dict)
+
+    def create_file(self, filename):
+        """ Creates a json file in which is stored relevant context
+
+        Parameters
+        ----------
+        robot_context: Robot_Context object
+            Context to store in json file
+        filename: string
+            Name given to the file in which info is stored. '.json' is added here
+        """
+
+        context_json = self.to_json(indent=4)
+
+        with open(f'{filename}.json', 'w') as file:
+            file.write(context_json)
+
+    @staticmethod
+    def open_file(filepath):
+        """ Finds robot context in a json file
+
+        Parameters
+        ----------
+        filepath: string
+            Complete path to the relevant file, including its name, but excluding '.json' extension
+        """
+
+        with open(filepath) as file:
+            file_content = file.read()  # .strip().replace('\n', '')
+            robot_context = RobotContext.from_json(file_content)
+
+        return robot_context
 
 
 @dataclass_json
@@ -230,157 +263,6 @@ class RobotDfHist:
                 return False
         return True
 
-
-@dataclass_json
-@dataclass
-class RobotTrajectories:
-    """Robot movement through time and context in which those kinetics where produced
-
-    Attributes
-    ----------
-    robot_context: RobotContext object
-        Explains how and where dfs where produced
-    robot_df_hist: RobotDfHist object
-        This object, when produced by the logger, should contain only one dataframe, in the output_dfs list, associating
-        timestamps to robot kinetics through time
-
-        All other dataframes in this object could be produced by subsequent tests and manipulations made on the data from
-        the first dataframe
-    """
-    robot_context: RobotContext = field(default_factory=RobotContext)
-    robot_df_hist: RobotDfHist = field(default_factory=RobotDfHist)
-
-
-class ZipFileLogger:
-    """ Stores all files about robot
-        Decides how files are organized in a directory before zipping,
-        and knows how they are organized after unzipping
-    """
-
-    @staticmethod
-    def create_and_zip_files(robot_trajectories, filename, file_path=None):
-        """ Creates a zipped directory in which robot context and asscociated data is stored in many files
-
-        Parameters
-        ----------
-        robot_trajectories: RobotTrajectories object
-            Data and context to store in zipped directory, in many files
-        filename: string
-            Name given to the zipped directory in which info is stored. '.zip' is added here
-        filepath: string
-            Directory in which to save zipped file
-        """
-
-        current_dir = Path.cwd()
-
-        root_dir = PurePath.joinpath(current_dir, 'temp')
-
-        Path.mkdir(root_dir)
-
-        # os.chdir(root_dir)
-
-        JsonFileLogger.create_file(robot_trajectories.robot_context, PurePath.joinpath(root_dir, filename))
-
-        for key, df in robot_trajectories.robot_df_hist.make_dict().items():
-            CsvFileLogger.create_file(df, PurePath.joinpath(root_dir, '_'.join([filename, key])))
-
-        # os.chdir(current_dir)
-
-        shutil.make_archive(base_name=filename, format='zip', root_dir=root_dir)
-
-        shutil.rmtree(root_dir)
-        if file_path:
-            shutil.move(PurePath.joinpath(current_dir, filename + '.zip'),
-                        PurePath.joinpath(file_path, filename + '.zip'))
-
-    @staticmethod
-    def unzip_and_open_files(filepath):
-        """ Finds robot context and kinetics data in a zip file
-
-        Parameters
-        ----------
-        filepath: string
-            Complete path to the relevant zipped file, including its name, with the '.zip' extension
-        """
-        current_dir = Path.cwd()
-
-        base_dir = PurePath.joinpath(current_dir, 'temp')
-
-        Path.mkdir(base_dir)
-
-        shutil.unpack_archive(filepath, extract_dir=base_dir)
-
-        robot_trajectories = RobotTrajectories()
-
-        base = PurePath(filepath).name
-        base_name = base.split('.')[0]
-
-        files = base_dir.glob('*')  # .glob from Path
-
-        df_dict = dict()
-
-        for file in files:
-            if file.name.endswith('.csv'):
-                base_file = file.name  # .name from PurePath
-                base_name_file = base_file.split('.')[0]
-                base_name_file = base_name_file.removeprefix(base_name + '_')
-                df_dict[base_name_file] = CsvFileLogger.open_file(PurePath.joinpath(base_dir, file))
-            elif file.name.endswith('.json'):
-                robot_trajectories.robot_context = JsonFileLogger.open_file(PurePath.joinpath(base_dir, file))
-            else:
-                raise ValueError("Unsupported extension. Cannot open and parse this file to retrieve RobotTrajectories")
-
-        robot_trajectories.robot_df_hist.build_from_dict(df_dict)
-
-        shutil.rmtree(base_dir)
-
-        return robot_trajectories
-
-
-class JsonFileLogger:
-    """ Stores information about context in which robot kinetics were produced in a json file
-        Can also retrieve information from such a produced file
-    """
-
-    @staticmethod
-    def create_file(robot_context, filename):
-        """ Creates a json file in which is stored relevant context
-
-        Parameters
-        ----------
-        robot_context: Robot_Context object
-            Context to store in json file
-        filename: string
-            Name given to the file in which info is stored. '.json' is added here
-        """
-
-        context_json = robot_context.to_json(indent=4)
-
-        with open(f'{filename}.json', 'w') as file:
-            file.write(context_json)
-
-    @staticmethod
-    def open_file(filepath):
-        """ Finds robot context in a json file
-
-        Parameters
-        ----------
-        filepath: string
-            Complete path to the relevant file, including its name, but excluding '.json' extension
-        """
-
-        with open(filepath) as file:
-            file_content = file.read()  # .strip().replace('\n', '')
-            robot_context = RobotContext.from_json(file_content)
-
-        return robot_context
-
-
-class CsvFileLogger:
-    """ Stores data about robot kinetics in a csv file
-        Can also retrieve data from such a produced file
-    """
-
     @staticmethod
     def create_file(df, filename):
         """ Creates a csv file in which is stored relevant data
@@ -407,3 +289,92 @@ class CsvFileLogger:
         df = pd.read_csv(filepath, index_col='timestamp')
 
         return df
+
+
+@dataclass_json
+@dataclass
+class RobotTrajectories:
+    """Robot movement through time and context in which those kinetics where produced
+
+    Attributes
+    ----------
+    robot_context: RobotContext object
+        Explains how and where dfs where produced
+    robot_df_hist: RobotDfHist object
+        This object, when produced by the logger, should contain only one dataframe, in the output_dfs list, associating
+        timestamps to robot kinetics through time
+
+        All other dataframes in this object could be produced by subsequent tests and manipulations made on the data from
+        the first dataframe
+    """
+    robot_context: RobotContext = field(default_factory=RobotContext)
+    robot_df_hist: RobotDfHist = field(default_factory=RobotDfHist)
+
+    def create_and_zip_files(self, filename, file_path=None):
+        """ Creates a zipped directory in which robot context and associated data is stored in many files
+
+        Parameters
+        ----------
+        robot_trajectories: RobotTrajectories object
+            Data and context to store in zipped directory, in many files
+        filename: string
+            Name given to the zipped directory in which info is stored. '.zip' is added here
+        filepath: string
+            Directory in which to save zipped file
+        """
+
+        current_dir = Path.cwd()
+
+        with TemporaryDirectory(dir=current_dir) as root_dir:
+
+            self.robot_context.create_file(PurePath.joinpath(PurePath(root_dir), filename))
+
+            for key, df in self.robot_df_hist.make_dict().items():
+                RobotDfHist.create_file(df, PurePath.joinpath(PurePath(root_dir), '_'.join([filename, key])))
+
+            shutil.make_archive(base_name=filename, format='zip', root_dir=root_dir)
+
+        if file_path:
+            shutil.move(PurePath.joinpath(current_dir, filename + '.zip'),
+                        PurePath.joinpath(file_path, filename + '.zip'))
+
+    @staticmethod
+    def unzip_and_open_files(filepath):
+        """ Finds robot context and kinetics data in a zip file
+
+        Parameters
+        ----------
+        filepath: string
+            Complete path to the relevant zipped file, including its name, with the '.zip' extension
+        """
+        current_dir = Path.cwd()
+
+        with TemporaryDirectory(dir=current_dir) as base_dir:
+
+            shutil.unpack_archive(filepath, extract_dir=base_dir)
+
+            robot_trajectories = RobotTrajectories()
+
+            base = PurePath(filepath).name
+            base_name = base.split('.')[0]
+
+            files = Path(base_dir).glob('*')  # .glob from Path
+
+            df_dict = dict()
+
+            for file in files:
+                if file.name.endswith('.csv'):
+                    base_file = file.name  # .name from PurePath
+                    base_name_file = base_file.split('.')[0]
+                    base_name_file = base_name_file.removeprefix(base_name + '_')
+                    df_dict[base_name_file] = RobotDfHist.open_file(PurePath.joinpath(PurePath(base_dir), file))
+                elif file.name.endswith('.json'):
+                    robot_trajectories.robot_context = RobotContext.open_file(
+                        PurePath.joinpath(PurePath(base_dir), file))
+                else:
+                    raise ValueError(
+                        "Unsupported extension. Cannot open and parse this file to retrieve RobotTrajectories")
+
+            robot_trajectories.robot_df_hist.build_from_dict(df_dict)
+
+        return robot_trajectories
