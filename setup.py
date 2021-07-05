@@ -26,4 +26,4 @@ setuptools.setup(name='mecademic',
                          'FirmwareUpdate = FirmwareUpdate:main',
                      ],
                  },
-                 install_requires=['dataclasses_json'])
+                 install_requires=['dataclasses_json>=0.5.4'])
