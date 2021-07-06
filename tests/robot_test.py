@@ -1014,8 +1014,8 @@ def remove_all_whitespaces(string):
 # Compare 2 CSV files (ignoring whitespaces)
 # Returns true if equal
 def robot_trajectory_files_identical(file_path_1, file_path_2):
-    robot_traj_1 = robot_files.RobotTrajectories.unzip_and_open_files(file_path_1)
-    robot_traj_2 = robot_files.RobotTrajectories.unzip_and_open_files(file_path_2)
+    robot_traj_1 = robot_files.RobotTrajectories.from_file(file_path_1)
+    robot_traj_2 = robot_files.RobotTrajectories.from_file(file_path_2)
 
     return robot_traj_1 == robot_traj_2
 

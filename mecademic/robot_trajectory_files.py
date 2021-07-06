@@ -362,7 +362,7 @@ class RobotTrajectories:
 
         if file_path:
             shutil.move(PurePath.joinpath(current_dir, filename + '.zip'),
-                        PurePath.joinpath(file_path, filename + '.zip'))
+                        PurePath.joinpath(PurePath(file_path), filename + '.zip'))
 
     @staticmethod
     def from_file(filepath):
