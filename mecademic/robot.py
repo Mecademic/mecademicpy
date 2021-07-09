@@ -1214,6 +1214,40 @@ class Robot:
         return self._robot_events.on_homed.wait(timeout=timeout)
 
     @disconnect_on_exception
+    def WaitSimActivated(self, timeout=None):
+        """Pause program execution until the robot simulation mode is activated.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
+        return self._robot_events.on_activate_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitSimDeactivated(self, timeout=None):
+        """Pause program execution until the robot simulation mode is deactivated.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
+        return self._robot_events.on_deactivate_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
     def WaitMotionResumed(self, timeout=None):
         """Pause program execution until the robot motion is resumed.
 
@@ -1958,6 +1992,7 @@ class Robot:
         """
         response = _Message(None, None)
 
+        start = time.time()
         while response.id != mx_def.MX_ST_CONNECTED:
             try:
                 response = message_queue.get(block=True, timeout=self.default_timeout)
@@ -1972,7 +2007,11 @@ class Robot:
             if from_command_port:
                 break
 
-        if from_command_port and response.id != mx_def.MX_ST_CONNECTED:
+            if (time.time() - start) > self.default_timeout:
+                self.logger.error('No rconnect message received within timeout interval.')
+                break
+
+        if response.id != mx_def.MX_ST_CONNECTED:
             self.logger.error('Connection error: {}'.format(response))
             self.Disconnect()
             raise CommunicationError('Connection error: {}'.format(response))
