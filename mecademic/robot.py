@@ -2119,7 +2119,7 @@ class Robot:
             # Increment internal checkpoint counter.
             self._internal_checkpoint_counter += 1
             if self._internal_checkpoint_counter > _CHECKPOINT_ID_MAX_PRIVATE:
-                self._internal_checkpoint_counter.value = mx_def.MX_CHECKPOINT_ID_MAX + 1
+                self._internal_checkpoint_counter = mx_def.MX_CHECKPOINT_ID_MAX + 1
 
             return self._set_checkpoint_impl(checkpoint_id)
 
