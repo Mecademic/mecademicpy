@@ -250,7 +250,7 @@ class Robot:
         self._robot_info = None
         self._robot_kinetics = None
         self._robot_kinetics_stable = None
-        self._robot_status = _RobotStatus()
+        self._robot_status = RobotStatus()
         self._robot_events = _RobotEvents()
 
         self._file_logger = None
@@ -2755,7 +2755,7 @@ class RobotKinetics:
         self.max_queue_size = 0
 
 
-class _RobotStatus:
+class RobotStatus:
     """Class for storing the internal status of a generic Mecademic robot.
 
     Attributes
