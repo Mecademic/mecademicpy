@@ -2008,7 +2008,7 @@ class Robot:
                 break
 
             if (time.time() - start) > self.default_timeout:
-                self.logger.error('No rconnect message received within timeout interval.')
+                self.logger.error('No connect message received within timeout interval.')
                 break
 
         if response.id != mx_def.MX_ST_CONNECTED:
