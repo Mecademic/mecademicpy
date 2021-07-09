@@ -53,7 +53,7 @@ with mdr.Robot() as robot:
         # Start running a test script while logging robot data to a csv file
         print('Start running test script while logging to csv file...')
         # Configure monitoring interval and required fields to capture in file
-        with robot.FileLogger(0.001, fields=["TargetJointPos", "JointPos"]):
+        with robot.FileLogger(0.001, fields=["TargetJointPos", "JointPos"], file_name='logger_example_traj_file'):
 
             # Perform 2 simple joint moves, few loops
             for i in range(0, 2):

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import os
 import queue
 import time
 
@@ -8,6 +7,7 @@ import pandas as pd
 import mecademic.mx_robot_def as mx_def
 
 from .robot_trajectory_files import RobotTrajectories
+from pathlib import PurePath
 
 # 2nd values of this dict are taken directly from controler.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
@@ -63,6 +63,7 @@ class _RobotTrajectoryLogger:
                  robot_info,
                  robot_kinetics,
                  fields=None,
+                 file_name=None,
                  file_path=None,
                  record_time=True,
                  monitoring_interval=None):
@@ -76,10 +77,12 @@ class _RobotTrajectoryLogger:
             List of fields to be logged.
         robot_kinetics : RobotKinetics object
             Contains state of robot.
+        file_name: string or None
+            Log file name
+            If None, file name will be built with date/time and robot information (robot type, serial, version).
         file_path : string or None
             Path to save the zipped file that contains logged data + robot info in, respectively, csv and json file.
-            If not provided, file will be saved in working directory. File name will be built with date/time
-            and robot information (robot type, serial, version).
+            If not provided, file will be saved in working directory.
         record_time : bool
             If true, current time will also be recorded in the text file. (Time is also available in filename.)
         monitoring_interval: float
@@ -90,9 +93,12 @@ class _RobotTrajectoryLogger:
         serial_number_or_blank = ('_serial_' + robot_info.serial) if robot_info.serial else ""
 
         # Add unique name to file path.
-        self.file_name = (f"{robot_info.model}_R{robot_info.revision}_"
-                          f"v{robot_info.fw_major_rev}_{robot_info.fw_minor_rev}_{robot_info.fw_patch_num}_"
-                          f"log_{current_date_time}{serial_number_or_blank}")
+        if file_name:
+            self.file_name = file_name
+        else:
+            self.file_name = (f'{robot_info.model}_R{robot_info.revision}_'
+                              f'v{robot_info.fw_major_rev}_{robot_info.fw_minor_rev}_{robot_info.fw_patch_num}_'
+                              f'log_{current_date_time}{serial_number_or_blank}')
 
         self.file_path = file_path
 
@@ -243,6 +249,6 @@ class _RobotTrajectoryLogger:
         self.robot_trajectories.to_file(self.file_name, file_path=self.file_path)
 
         if self.file_path:
-            return os.path.join(self.file_path, self.file_name)
+            return PurePath.joinpath(PurePath(self.file_path), self.file_name)
         else:
-            return self.file_name
+            return PurePath(self.file_name)

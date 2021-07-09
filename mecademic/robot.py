@@ -1692,7 +1692,7 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_status)
 
-    def StartLogging(self, monitoringInterval, file_path=None, fields=None, record_time=True):
+    def StartLogging(self, monitoringInterval, file_name=None, file_path=None, fields=None, record_time=True):
         """Start logging robot state to file.
 
         Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
@@ -1703,10 +1703,13 @@ class Robot:
         monitoring_interval: float
             Indicates rate at which state from robot will be received on monitor port. Unit: seconds
 
+        file_name: string or None
+            Log file name
+            If None, file name will be built with date/time and robot information (robot type, serial, version).
+
         file_path : string or None
-            Path to save the csv file that contains logged data.
-            If not provided, file will be saved in working directory. File name will be built with date/time
-            and robot information (robot type, serial, version).
+            Path to save the zip file that contains logged data.
+            If not provided, file will be saved in working directory.
 
         fields : list of strings or None
             List of fields to log. Taken from RobotKinetics attributes. None means log all compatible fields.
@@ -1729,7 +1732,8 @@ class Robot:
         self._file_logger = _RobotTrajectoryLogger(self._robot_info,
                                                    self._robot_kinetics,
                                                    fields,
-                                                   file_path,
+                                                   file_name=file_name,
+                                                   file_path=file_path,
                                                    record_time=record_time,
                                                    monitoring_interval=monitoringInterval)
 
@@ -1740,11 +1744,13 @@ class Robot:
         if self._file_logger is None:
             raise InvalidStateError('No existing logger to stop.')
 
-        self._file_logger.end_log()
+        file_name = self._file_logger.end_log()
         self._file_logger = None
 
+        return file_name
+
     @contextlib.contextmanager
-    def FileLogger(self, monitoringInterval, file_path=None, fields=None, record_time=True, want_to_correlate=False):
+    def FileLogger(self, monitoringInterval, file_name=None, file_path=None, fields=None, record_time=True):
         """Contextmanager interface for file logger.
 
         Parameters
@@ -1752,10 +1758,13 @@ class Robot:
         monitoring_interval: float
             Indicates rate at which kinetics from robot will be received on monitor port. Unit: seconds
 
+        file_name: string or None
+            Log file name
+            If None, file name will be built with date/time and robot information (robot type, serial, version).
+
         file_path : string or None
-            Path to save the csv file that contains logged data.
-            If not provided, file will be saved in working directory. File name will be built with date/time
-            and robot information (robot type, serial, version).
+            Path to save the zip file that contains logged data.
+            If not provided, file will be saved in working directory.
 
         fields : list of strings or None
             List of fields to log. Taken from RobotKinetics attributes. None means log all compatible fields.
@@ -1766,6 +1775,7 @@ class Robot:
         """
         self.StartLogging(
             monitoringInterval,
+            file_name=file_name,
             file_path=file_path,
             fields=fields,
             record_time=record_time,
@@ -1938,7 +1948,7 @@ class Robot:
             self.Disconnect()
             raise
 
-    def _receive_welcome_message(self, message_queue):
+    def _receive_welcome_message(self, message_queue, from_command_port):
         """Receive and parse a welcome message in order to set _robot_info and _robot_kinetics.
 
         Parameters
@@ -1946,19 +1956,23 @@ class Robot:
         message_queue : queue
             The welcome message will be fetched from this queue.
         """
+        response = _Message(None, None)
 
-        try:
-            response = message_queue.get(block=True, timeout=self.default_timeout)
-        except queue.Empty:
-            self.logger.error('No response received within timeout interval.')
-            self.Disconnect()
-            raise CommunicationError('No response received within timeout interval.')
-        except BaseException:
-            self.Disconnect()
-            raise
+        while response.id != mx_def.MX_ST_CONNECTED:
+            try:
+                response = message_queue.get(block=True, timeout=self.default_timeout)
+            except queue.Empty:
+                self.logger.error('No response received within timeout interval.')
+                self.Disconnect()
+                raise CommunicationError('No response received within timeout interval.')
+            except BaseException:
+                self.Disconnect()
+                raise
 
-        # Check that response is appropriate.
-        if response.id != mx_def.MX_ST_CONNECTED:
+            if from_command_port:
+                break
+
+        if from_command_port and response.id != mx_def.MX_ST_CONNECTED:
             self.logger.error('Connection error: {}'.format(response))
             self.Disconnect()
             raise CommunicationError('Connection error: {}'.format(response))
@@ -1973,7 +1987,7 @@ class Robot:
         """Attempt to connect to the command port of the Mecademic Robot.
 
         """
-        self._receive_welcome_message(self._command_rx_queue)
+        self._receive_welcome_message(self._command_rx_queue, True)
 
         self._command_response_handler_thread = self._launch_thread(target=self._command_response_handler, args=())
 
@@ -1988,7 +2002,7 @@ class Robot:
         """
 
         if self._monitor_mode:
-            self._receive_welcome_message(self._monitor_rx_queue)
+            self._receive_welcome_message(self._monitor_rx_queue, False)
 
         self._monitor_handler_thread = self._launch_thread(target=self._monitor_handler, args=())
 

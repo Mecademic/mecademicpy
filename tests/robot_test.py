@@ -214,6 +214,16 @@ def test_sequential_connections(robot):
     robot.Disconnect()
 
 
+def test_monitoring_connection(robot):
+    robot._monitor_rx_queue.put(mdr._Message(99999, ''))
+    robot._monitor_rx_queue.put(mdr._Message(99999, ''))
+    robot._monitor_rx_queue.put(mdr._Message(99999, ''))
+    robot._monitor_rx_queue.put(mdr._Message(99999, ''))
+    # Make sure robot connects quickly even if many messages preceding connection message are on monitoring port
+    connect_robot_helper(robot)
+    assert robot.WaitConnected(timeout=0)
+
+
 # Ensure user can wrap robot object within "with" block.
 def test_with_block(robot):
     called_callbacks = []

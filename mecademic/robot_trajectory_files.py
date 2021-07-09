@@ -361,8 +361,10 @@ class RobotTrajectories:
             shutil.make_archive(base_name=filename, format='zip', root_dir=root_dir)
 
         if file_path:
-            shutil.move(PurePath.joinpath(current_dir, filename + '.zip'),
-                        PurePath.joinpath(PurePath(file_path), filename + '.zip'))
+            shutil.move(
+                PurePath.joinpath(current_dir, filename + '.zip'),
+                PurePath.joinpath(PurePath(file_path), filename + '.zip'),
+            )
 
     @staticmethod
     def from_file(filepath):
