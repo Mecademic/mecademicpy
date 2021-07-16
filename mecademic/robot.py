@@ -341,6 +341,7 @@ class Robot:
 
             # Put all responses into the queue.
             for response in responses[:-1]:
+                # print(f'response: {response}')
                 rx_queue.put(_Message.from_string(response))
 
     @staticmethod
@@ -364,6 +365,7 @@ class Robot:
             if command == _TERMINATE:
                 return
             else:
+                # print(f'command: {command}')
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
@@ -1231,6 +1233,40 @@ class Robot:
         return self._robot_events.on_activate_sim.wait(timeout=timeout)
 
     @disconnect_on_exception
+    def WaitForError(self, timeout=None):
+        """Pause program execution until the robot is in error state.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
+        return self._robot_events.on_error.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitErrorReset(self, timeout=None):
+        """Pause program execution until the robot is not in an error state.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+
+        Return
+        ------
+        boolean
+            True if wait was successful, false otherwise.
+
+        """
+        return self._robot_events.on_error_reset.wait(timeout=timeout)
+
+    @disconnect_on_exception
     def WaitSimDeactivated(self, timeout=None):
         """Pause program execution until the robot simulation mode is deactivated.
 
@@ -1714,15 +1750,26 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_kinetics_stable)
 
-    def GetRobotStatus(self):
+    @disconnect_on_exception
+    def GetRobotStatus(self, synchronous_update=False, timeout=None):
         """Return a copy of the current robot status
 
-        Return
-        ------
+        Returns
+        -------
         RobotStatus
             Object containing the current robot status
 
         """
+        if synchronous_update:
+            with self._main_lock:
+                self._check_internal_states()
+                if self._robot_events.on_status_updated.is_set():
+                    self._robot_events.on_status_updated.clear()
+                    self._send_command('GetStatusRobot')
+
+            if not self._robot_events.on_status_updated.wait(timeout=timeout):
+                raise TimeoutError
+
         with self._main_lock:
             return copy.deepcopy(self._robot_status)
 
@@ -1759,7 +1806,7 @@ class Robot:
 
         self.SetMonitoringInterval(monitoringInterval)
         if fields is None:
-            self.SetRealTimeMonitoring(["all"])
+            self.SetRealTimeMonitoring(['all'])
         else:
             self.SetRealTimeMonitoring(fields)
 
