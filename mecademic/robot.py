@@ -305,7 +305,7 @@ class Robot:
             raise e
 
     @staticmethod
-    def _handle_socket_rx(robot_socket, rx_queue):
+    def _handle_socket_rx(robot_socket, rx_queue, logger):
         """Handle received data on the socket.
 
         Parameters
@@ -315,6 +315,9 @@ class Robot:
 
         rx_queue : queue
             Thread-safe queue to push complete messages onto.
+
+        logger : logger instance
+            Logger to use.
 
         """
         remainder = ''
@@ -341,11 +344,12 @@ class Robot:
 
             # Put all responses into the queue.
             for response in responses[:-1]:
-                # print(f'response: {response}')
+
+                logger.debug(f'Socket Rx - Response: {response}')
                 rx_queue.put(_Message.from_string(response))
 
     @staticmethod
-    def _handle_socket_tx(robot_socket, tx_queue):
+    def _handle_socket_tx(robot_socket, tx_queue, logger):
         """Handle sending data on the socket.
 
         Parameters
@@ -356,6 +360,9 @@ class Robot:
         tx_queue : queue
             Thread-safe queue to get messages from.
 
+        logger : logger instance
+            Logger to use.
+
         """
         while True:
             # Wait for a command to be available from the queue.
@@ -365,7 +372,7 @@ class Robot:
             if command == _TERMINATE:
                 return
             else:
-                # print(f'command: {command}')
+                logger.debug(f'Socket Tx - Command: {command}')
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
@@ -1993,11 +2000,19 @@ class Robot:
 
             # Create rx thread for command socket communication.
             self._command_rx_thread = self._launch_thread(target=self._handle_socket_rx,
-                                                          args=(self._command_socket, self._command_rx_queue))
+                                                          args=(
+                                                              self._command_socket,
+                                                              self._command_rx_queue,
+                                                              self.logger,
+                                                          ))
 
             # Create tx thread for command socket communication.
             self._command_tx_thread = self._launch_thread(target=self._handle_socket_tx,
-                                                          args=(self._command_socket, self._command_tx_queue))
+                                                          args=(
+                                                              self._command_socket,
+                                                              self._command_tx_queue,
+                                                              self.logger,
+                                                          ))
 
         except Exception as exception:
             # Clean up threads and connections on error.
@@ -2022,7 +2037,11 @@ class Robot:
 
             # Create rx thread for monitor socket communication.
             self._monitor_rx_thread = self._launch_thread(target=self._handle_socket_rx,
-                                                          args=(self._monitor_socket, self._monitor_rx_queue))
+                                                          args=(
+                                                              self._monitor_socket,
+                                                              self._monitor_rx_queue,
+                                                              self.logger,
+                                                          ))
 
         except Exception as exception:
             # Clean up threads and connections on error.
