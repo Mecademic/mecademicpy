@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import logging
 import sys
 import os
 import pathlib
@@ -188,7 +189,7 @@ def test_successful_connection_split_response():
     rx_queue = queue.Queue()
 
     # Test the socket handler directly to ensure messages are received across several recv() calls.
-    mdr.Robot._handle_socket_rx(fake_socket, rx_queue)
+    mdr.Robot._handle_socket_rx(fake_socket, rx_queue, logging.getLogger(__name__))
 
     assert rx_queue.qsize() == 1
     message = rx_queue.get()

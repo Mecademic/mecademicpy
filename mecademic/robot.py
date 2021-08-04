@@ -2426,7 +2426,7 @@ class Robot:
 
         """
         if response.id == mx_def.MX_ST_GET_STATUS_ROBOT:
-            self._handle_robot_status_response(response)
+            self._handle_robot_status_response(response, is_command_response)
 
         # Only update using legacy messages if robot is not capable of rt messages.
         elif response.id == mx_def.MX_ST_GET_JOINTS and not self._robot_info.rt_message_capable:
@@ -2499,7 +2499,7 @@ class Robot:
                     or timestamp > self._robot_kinetics.rt_accelerometer[index].timestamp):
                 self._robot_kinetics.rt_accelerometer[index] = TimestampedData(timestamp, measurements)
 
-    def _handle_robot_status_response(self, response):
+    def _handle_robot_status_response(self, response, is_command_response):
         """Parse robot status response and update status fields and events.
 
         Parameters
@@ -2577,8 +2577,11 @@ class Robot:
                 self._robot_events.on_end_of_block.clear()
             self._robot_status.end_of_block_status = status_flags[5]
 
-        self._robot_events.on_status_updated.set()
-        self._callback_queue.put('on_status_updated')
+        # We only want to detect status response on command port, or else it is not possible to have synchronous
+        # response on GetRobotStatus
+        if is_command_response:
+            self._robot_events.on_status_updated.set()
+            self._callback_queue.put('on_status_updated')
 
     def _handle_checkpoint_response(self, response):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.
