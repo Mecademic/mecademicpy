@@ -4,7 +4,7 @@ import setuptools
 with open('README.md', 'r') as fh:
     long_description = fh.read()
 
-setuptools.setup(name='mecademic',
+setuptools.setup(name='mecademicpy',
                  version='0.0.1',
                  author='Mecademic',
                  author_email='support@mecademic.com',
@@ -12,7 +12,7 @@ setuptools.setup(name='mecademic',
                  description='A package to control the Mecademic robots through python',
                  long_description=long_description,
                  long_description_content_type='markdown',
-                 url='https://github.com/Mecademic/python_driver',
+                 url='https://github.com/Mecademic/mecademicpy',
                  packages=setuptools.find_packages(),
                  data_files=[('', ['LICENSE', 'README.md'])],
                  include_package_data=True,
@@ -21,9 +21,4 @@ setuptools.setup(name='mecademic',
                      'License :: OSI Approved :: MIT License',
                      'Operating System :: OS Independent',
                  ],
-                 entry_points={
-                     'console_scripts': [
-                         'FirmwareUpdate = FirmwareUpdate:main',
-                     ],
-                 },
-                 install_requires=['dataclasses_json>=0.5.4'])
+                 install_requires=['dataclasses_json>=0.5.4', 'pandas'])
