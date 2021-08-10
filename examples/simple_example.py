@@ -2,7 +2,7 @@
 import os
 import sys
 
-import mecademic.robot as mdr
+import mecademicpy.robot as mdr
 
 # (use "with" block to ensure proper disconnection at end of block)
 with mdr.Robot() as robot:
