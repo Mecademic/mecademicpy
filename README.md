@@ -155,7 +155,7 @@ Checkpoints may also be set in an offline program, saved to robot memory. Use `E
 ```python
 robot.StartOfflineProgram(1)
 checkpoint_event = robot.ExpectExternalCheckpoint(5)
-checkpoint_event.wait_for_data(30)
+checkpoint_event.wait(30)
 print("Received expected external checkpoint")
 ```
 where offline program 1 is
