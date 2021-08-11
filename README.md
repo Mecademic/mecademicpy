@@ -20,25 +20,25 @@ This library is compatible with Windows, Linux, and Mac.
 
 ## Downloading the package
 
-To install the package through pip, Mecademic Github repository url must be given. Pip will download and install the package on your machine and place it in the python local packages directory. This is done by running the following command:
+To download and install the package, the user can easily do so through pip. Pip will download and install the package on your machine and place it in the python local packages directory. This is done by running the following command:
 
 ```
-pip install git+https://github.com/mecademic/mecademic
+pip install mecademicpy
 ``` 
 
 ## Quick Start
 
 **Ensure the robot is properly connected to the computer, powered on, and in a nominal state.**
 
-In a python shell or script, import the library. Then initialize an instance of the Robot class by passing the IP Address of the Robot as an argument. Finally, use connect() to establish a connection:
+In a python shell or script, import the library. Then initialize an instance of the `Robot` class. Finally, use the `Connect` function by passing the IP Address of the robot as an argument to establish a connection:
 
 ```python
-import mecademic.robot as mdr
+import mecademicpy.robot as mdr
 robot = mdr.Robot()
 robot.Connect(address='192.168.0.100')
 ```
 
-The connect function returns true if connection is successful.
+The `Connect` function returns `True` if connection is successful.
 This function is synchronous (awaits for success or timeout) even when using the `Robot` class in [asynchronous mode](#synchronous-vs.-asynchronous-mode). 
 
 Before using the robot, it must be activated and homed. To do so, run the following functions:
@@ -84,7 +84,9 @@ For complete and working examples, please refer to the `examples` folder.
 By default the API operates in 'asynchronous mode', which means sending a command to the robot does not block program execution. To illustrate, the following code will be able to successfully print out the changing joint values resulting from the `MoveJoints` command:
 
 ```python
-import mecademic.robot as mdr
+import mecademicpy.robot as mdr
+import time
+
 robot = mdr.Robot()
 robot.Connect(address='192.168.0.100', enable_synchronous_mode=False)
 robot.ActivateAndHome()
@@ -106,7 +108,7 @@ However, sometimes it is desired for programs to wait until the previous command
 The code block below will only print out the final joint position, since `robot.GetJoints()` doesn't execute until the motion is complete.
 
 ```python
-import mecademic.robot as mdr
+import mecademicpy.robot as mdr
 robot = mdr.Robot()
 robot.Connect(address='192.168.0.100', enable_synchronous_mode=True)
 robot.ActivateAndHome()
@@ -148,7 +150,25 @@ print('The MoveJoints() motions are complete.')
 
 Note that creating multiple checkpoints with the same ID is possible but not recommended. The checkpoints will be triggered in the order they are set.
 
-Checkpoints may also be set in an offline program, saved to robot memory. Use `ExpectExternalCheckpoint(n)` to receive these checkpoints while the robot is running the offline program. The call to `ExpectExternalCheckpoint(n)` should be made before the offline program is started, or otherwise must be guaranteed to occur before the robot can possibly send the checkpoint.
+Checkpoints may also be set in an offline program, saved to robot memory. Use `ExpectExternalCheckpoint(n)` to receive these checkpoints while the robot is running the offline program. The call to `ExpectExternalCheckpoint(n)` should be made before the offline program is started, or otherwise must be guaranteed to occur before the robot can possibly send the checkpoint. For example, the following code will start an offline program and expect to receive a checkpoint from the program, and then print "`Received expected external checkpoint`":
+
+```python
+robot.StartOfflineProgram(1)
+checkpoint_event = robot.ExpectExternalCheckpoint(5)
+checkpoint_event.wait(30)
+print("Received expected external checkpoint")
+```
+where offline program 1 is
+```
+StartSaving(1)
+MoveJoints(100,0,0,0,0,0)
+MoveJoints(-100,0,0,0,0,0)
+SetCheckpoint(5)
+MoveJoints(0,-60,60,0,0,0)
+MoveJoints(0,0,0,0,0,0)
+SetOfflineProgramLoop(1)
+StopSaving
+```
 
 If the robot motion command queue is cleared (using `ClearMotion()` for example), or the robot is disconnected, all pending checkpoints will be aborted, and all active `wait()` calls will raise an `InterruptException`.
 
@@ -156,32 +176,32 @@ If the robot motion command queue is cleared (using `ClearMotion()` for example)
 
 The `Robot` class supports user-provided callback functions on a variety of events. These callbacks are entirely optional and are not required. The available events are listed in the `RobotCallbacks` class. Currently, they are:
 
-- on_connected
-- on_disconnected
-- on_status_updated
-- on_activated
-- on_deactivated
-- on_homed
-- on_error
-- on_error_reset
-- on_p_stop
-- on_p_stop_reset
-- on_motion_paused
-- on_motion_cleared
-- on_motion_resumed
-- on_checkpoint_reached
-- on_activate_sim
-- on_deactivate_sim
-- on_command_message
-- on_monitor_message
-- on_offline_program_state
+- `on_connected`
+- `on_disconnected`
+- `on_status_updated`
+- `on_activated`
+- `on_deactivated`
+- `on_homed`
+- `on_error`
+- `on_error_reset`
+- `on_p_stop`
+- `on_p_stop_reset`
+- `on_motion_paused`
+- `on_motion_cleared`
+- `on_motion_resumed`
+- `on_checkpoint_reached`
+- `on_activate_sim`
+- `on_deactivate_sim`
+- `on_command_message`
+- `on_monitor_message`
+- `on_offline_program_state`
 
-Note that `on_checkpoint_reached` passes the ID of the checkpoint, and `on_command_message` and `on_monitor_message` passes a `mecademic.robot.Message` object. All other callbacks do not pass any arguments.
+Note that `on_checkpoint_reached` passes the ID of the checkpoint, and `on_command_message` and `on_monitor_message` passes a `mecademicpy.robot.Message` object. All other callbacks do not pass any arguments.
 
 A simple usage example:
 
 ```python
-import mecademic.robot as mdr
+import mecademicpy.robot as mdr
 robot = mdr.Robot()
 
 def print_connected():
@@ -263,27 +283,27 @@ The `FileLogger` context will automatically end logging after either completing 
 
 The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
 
-- TargetJointPos 
-- TargetCartPos 
-- TargetJointVel 
-- TargetCartVel 
-- TargetConf 
-- TargetConfTurn 
+- "TargetJointPos" 
+- "TargetCartPos"
+- "TargetJointVel"
+- "TargetCartVel"
+- "TargetConf"
+- "TargetConfTurn"
 
-- JointPos 
-- CartPos
-- JointVel 
-- JointTorq 
-- CartVel 
-- Conf 
-- ConfTurn
+- "JointPos"
+- "CartPos"
+- "JointVel" 
+- "JointTorq" 
+- "CartVel" 
+- "Conf" 
+- "ConfTurn"
 
-- Accel
+- "Accel"
 
 
 These strings should be placed into the list given to the `fields` parameter.
 
-The following example only logs the `TargetJointPos` and `JointPos`.
+The following example only logs the `"TargetJointPos"` and `"JointPos"`.
 
 ```python
 robot.WaitIdle()
@@ -302,11 +322,11 @@ It is possible to send an arbitrary command to the robot using the `SendCustomCo
 
 Example usage:
 ```python
-import mecademic.robot as mdr
-
+import mecademicpy.robot as mdr
+import mecademicpy.mx_robot_def as mdr_def
 # Connect, activate, and home robot...
 
-response_codes = [mdr.MX_ST_ERROR_RESET, mdr.MX_ST_NO_ERROR_RESET])
+response_codes = [mdr_def.MX_ST_ERROR_RESET, mdr_def.MX_ST_NO_ERROR_RESET]
 response_event = robot.SendCustomCommand('ResetError', expected_responses=response_codes)
 response = response_event.wait_for_data(timeout=10)
 ```
@@ -318,9 +338,9 @@ Although raw numerical response codes can also be used, it is recommended to use
 For a complete list of available methods and further documentation, use the help() function on any class in a python terminal (such as `ipython`).
 
 ```python
->>> import mecademic.robot as mdr
+>>> import mecademicpy.robot as mdr
 >>> help(mdr.Robot)
->>> help(mdr.Message)
+>>> help(mdr.RobotInfo)
 ```
 
 ## Getting Help

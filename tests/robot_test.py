@@ -16,9 +16,9 @@ from unittest import mock
 ## Allow the mecademic.robot module to be found using a relative path from this file.
 #sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import mecademic.robot as mdr
-import mecademic.mx_robot_def as mx_def
-import mecademic.robot_trajectory_files as robot_files
+import mecademicpy.robot as mdr
+import mecademicpy.mx_robot_def as mx_def
+import mecademicpy.robot_trajectory_files as robot_files
 
 TEST_IP = '127.0.0.1'
 MECA500_CONNECTED_RESPONSE = 'Connected to Meca500 R3 v9.0.0'

@@ -2,7 +2,7 @@
 import os
 import sys
 
-import mecademic.robot as mdr
+import mecademicpy.robot as mdr
 
 
 # Define a callback function to print test progress based on reached checkpoints
@@ -20,7 +20,7 @@ with mdr.Robot() as robot:
 
     # CHECK THAT IP ADDRESS IS CORRECT! #
     try:
-        robot.Connect(address='127.0.0.1')
+        robot.Connect(address='192.168.0.100')
         print('Connected to robot')
     except mdr.CommunicationError as e:
         print(f'Robot failed to connect. Is the IP address correct? {e}')

@@ -13,7 +13,7 @@ from pathlib import PurePath
 
 import pandas as pd
 
-import mecademic.mx_robot_def as mx_def
+import mecademicpy.mx_robot_def as mx_def
 
 from ._robot_trajectory_logger import _RobotTrajectoryLogger
 
@@ -1813,9 +1813,9 @@ class Robot:
 
         self.SetMonitoringInterval(monitoringInterval)
         if fields is None:
-            self.SetRealTimeMonitoring(['all'])
+            self.SetRealTimeMonitoring('all')
         else:
-            self.SetRealTimeMonitoring(fields)
+            self.SetRealTimeMonitoring(*fields)
 
         self._file_logger = _RobotTrajectoryLogger(self._robot_info,
                                                    self._robot_kinetics,

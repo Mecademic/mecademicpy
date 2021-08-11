@@ -1,5 +1,5 @@
 import pytest
-import mecademic.robot_trajectory_files as robot_files
+import mecademicpy.robot_trajectory_files as robot_files
 from tempfile import TemporaryDirectory
 from pathlib import PurePath
 

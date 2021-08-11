@@ -8,7 +8,7 @@ RobotTrajectories objects can then be reconstructed from those files using ZipFi
 Raw data should be stored in a RobotTrajectories object using only robot_df_hist.output_dfs attribute (for data) and
 robot_context.robot_information and robot_context.sent_commands (for info on how data was logged)
 
-Manipulated or processed data will use all attributes of RobotTrajectories, stroring intermediate data in
+Manipulated or processed data will use all attributes of RobotTrajectories, storing intermediate data in
 robot_df_hist.mid_dfs, statistics in robot_context.test_results and info on how statistics where produced in
 robot_context.test_context
 """
@@ -106,7 +106,7 @@ class RobotContext:
         """
 
         with open(filepath) as file:
-            file_content = file.read()  # .strip().replace('\n', '')
+            file_content = file.read()
             robot_context = RobotContext.from_json(file_content)
 
         return robot_context
@@ -121,7 +121,7 @@ class RobotDfHist:
     ----------
     input_dfs: list of Pandas dataframes
         Dataframes from which all processing is made
-    mid_difs: dict of Pandas Dataframes
+    mid_dfs: dict of Pandas Dataframes
         Intermediate results of processing
     output_dfs: list of dataframes
         Final results of processing. 'RobotDfHist' should contain at least one dataframe in this list (this is the only
@@ -142,7 +142,7 @@ class RobotDfHist:
             If this list contains strings, it will put dataframes from input_dfs of other in the mid_dfs dict of this
             object, associating them to the strings in 'input_names'
         output_names : list of strings, optional
-            If this list contains strings, it will put dataframes from 'output_df's of other in the 'mid_dfs' dict of
+            If this list contains strings, it will put dataframes from 'output_dfs' of other in the 'mid_dfs' dict of
             this object, associating them to the strings in 'output_names'. Otherwise, the contents of
             'other.output_dfs' will be put into this object's 'output_dfs'
         """
@@ -180,7 +180,7 @@ class RobotDfHist:
         Returns
         -------
         out_dict: dict of Pandas dataframes
-            Dataframes stored in all atributes of this object, with special names from dataframes from input_dfs and
+            Dataframes stored in all attributes of this object, with special names from dataframes from input_dfs and
             output_dfs
         """
         out_dict = dict()
@@ -221,13 +221,13 @@ class RobotDfHist:
         Parameters
         ----------
         key : string
-            Used to identifie to which attribute 'df' belongs to
+            Used to identify to which attribute 'df' belongs to
         df : Pandas dataframe
             To add to an attribute
         attr_list : list of Pandas dataframe
             Attribute to add the dataframe to if it belongs to it
         list_prefix_func : function
-            function used to identifiy if 'key, and thus 'df', belongs to 'attr_list'
+            function used to identify if 'key, and thus 'df', belongs to 'attr_list'
 
         Returns
         -------
@@ -262,11 +262,11 @@ class RobotDfHist:
         return 'output_df'
 
     def __eq__(self, other) -> bool:
-        """Returns true if both RobotDfHsit objects contain same dataframes, in same position of each attribute
+        """Returns true if both RobotDfHist objects contain same dataframes, in same position of each attribute
 
         Parameters
         ----------
-        other : RobotDfHsit object
+        other : RobotDfHist object
             Object comapred to self
 
         Returns
