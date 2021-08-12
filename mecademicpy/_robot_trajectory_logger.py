@@ -97,7 +97,7 @@ class _RobotTrajectoryLogger:
             self.file_name = file_name
         else:
             self.file_name = (f'{robot_info.model}_R{robot_info.revision}_'
-                              f'v{robot_info.fw_major_rev}_{robot_info.fw_minor_rev}_{robot_info.fw_patch_num}_'
+                              f'v{robot_info.version.short_version}_'
                               f'log_{current_date_time}{serial_number_or_blank}')
 
         self.file_path = file_path
@@ -135,7 +135,7 @@ class _RobotTrajectoryLogger:
         # Write robot information.
         # Maybe robot information could be stored as a RobotInfo object in robot_trajectories?
         self.robot_trajectories.robot_context.robot_information.append(dict())
-        for attr in ['model', 'revision', 'fw_major_rev', 'fw_minor_rev', 'fw_patch_num']:
+        for attr in ['model', 'revision', 'version']:
             self.robot_trajectories.robot_context.robot_information[0][attr] = f'{getattr(robot_info, attr)}'
         if robot_info.serial is not None:
             self.robot_trajectories.robot_context.robot_information[0]['serial_number'] = f'{robot_info.serial}'

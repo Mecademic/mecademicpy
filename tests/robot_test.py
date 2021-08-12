@@ -13,9 +13,6 @@ from functools import partial
 import pytest
 from unittest import mock
 
-## Allow the mecademic.robot module to be found using a relative path from this file.
-#sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import mecademicpy.robot as mdr
 import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.robot_trajectory_files as robot_files
@@ -68,6 +65,11 @@ def connect_robot_helper(robot, offline_mode=True, disconnect_on_exception=False
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
 
+    expected_command = 'GetFwVersionFull'
+    robot_response = mdr._Message(mx_def.MX_ST_GET_FW_VERSION_FULL, "9.1--.0.1213-tests")
+    fake_robot = threading.Thread(target=simple_response_handler,
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
+                                        robot_response))
     fake_robot.start()
 
     robot.Connect(TEST_IP,
@@ -170,9 +172,11 @@ def test_successful_connection_full_socket(robot):
     assert robot.GetRobotInfo().model == 'Meca500'
     assert robot.GetRobotInfo().revision == 3
     assert robot.GetRobotInfo().is_virtual is True
-    assert robot.GetRobotInfo().fw_major_rev == 9
-    assert robot.GetRobotInfo().fw_minor_rev == 1
-    assert robot.GetRobotInfo().fw_patch_num == 0
+    assert robot.GetRobotInfo().version.major == 9
+    assert robot.GetRobotInfo().version.minor == 1
+    assert robot.GetRobotInfo().version.patch == 0
+    assert robot.GetRobotInfo().version.build == 1213
+    assert robot.GetRobotInfo().version.extra == "tests"
     assert robot.GetRobotInfo().serial == 'm500-99999'
 
     robot.Disconnect()
