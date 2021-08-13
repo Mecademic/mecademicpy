@@ -22,6 +22,7 @@ import mecademicpy.robot_trajectory_files as robot_files
 
 TEST_IP = '127.0.0.1'
 MECA500_CONNECTED_RESPONSE = 'Connected to Meca500 R3 v9.0.0'
+MECA500_CONNECTED_RESPONSE_LEGACY = 'Connected to Meca500 R3 v8.0.0'
 MECA500_SERIAL = 'm500-99999999'
 DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
@@ -58,15 +59,26 @@ def robot():
 
 
 # Automates sending the welcome message and responding to the robot serial query. Do not use for monitor_mode=True.
-def connect_robot_helper(robot, offline_mode=True, disconnect_on_exception=False, enable_synchronous_mode=False):
-    # Prepare connection messages.
-    robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
+def connect_robot_helper(robot,
+                         offline_mode=True,
+                         disconnect_on_exception=False,
+                         enable_synchronous_mode=False,
+                         supports_rt_monitoring=True):
 
-    expected_command = 'GetRobotSerial'
-    robot_response = mdr._Message(mx_def.MX_ST_GET_ROBOT_SERIAL, MECA500_SERIAL)
+    # Prepare connection messages.
+    expected_commands = ['GetRobotSerial']
+    robot_responses = [mdr._Message(mx_def.MX_ST_GET_ROBOT_SERIAL, MECA500_SERIAL)]
+
+    if supports_rt_monitoring:
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
+        expected_commands.append('GetRealTimeMonitoring')
+        robot_responses.append(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
+    else:
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE_LEGACY))
+
     fake_robot = threading.Thread(target=simple_response_handler,
-                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
-                                        robot_response))
+                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
+                                        robot_responses))
 
     fake_robot.start()
 
@@ -77,13 +89,21 @@ def connect_robot_helper(robot, offline_mode=True, disconnect_on_exception=False
 
     fake_robot.join()
 
-    assert robot.WaitConnected(timeout=0)
+    robot.WaitConnected(timeout=0)
 
 
 # Function for exchanging one message with queue.
 def simple_response_handler(queue_in, queue_out, expected_in, desired_out):
-    assert queue_in.get(block=True, timeout=1) == expected_in
-    queue_out.put(desired_out)
+    if isinstance(expected_in, list):
+        for i in range(len(expected_in)):
+            event = queue_in.get(block=True, timeout=1)
+            assert event == expected_in[i]
+            queue_out.put(desired_out[i])
+
+    else:
+        event = queue_in.get(block=True, timeout=1)
+        assert event == expected_in
+        queue_out.put(desired_out)
 
 
 # Server to listen for a connection. Send initial data in data_list on connect, send rest in response to any msg.
@@ -159,13 +179,14 @@ def test_successful_connection_full_socket(robot):
 
     command_server_thread = run_fake_server(
         TEST_IP, mx_def.MX_ROBOT_TCP_PORT_CONTROL,
-        ['[3000][Connected to Meca500 R3-virtual v9.1.0]\0', '[2083][m500-99999]\0'])
+        ['[3000][Connected to Meca500 R3-virtual v9.1.0]\0', '[2083][m500-99999]\0', '[2117][]\0'])
     monitor_server_thread = run_fake_server(TEST_IP, mx_def.MX_ROBOT_TCP_PORT_FEED, [])
 
-    assert not robot.WaitConnected(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitConnected(timeout=0)
 
     robot.Connect(TEST_IP)
-    assert robot.WaitConnected()
+    robot.WaitConnected()
 
     assert robot.GetRobotInfo().model == 'Meca500'
     assert robot.GetRobotInfo().revision == 3
@@ -222,7 +243,7 @@ def test_monitoring_connection(robot):
     robot._monitor_rx_queue.put(mdr._Message(99999, ''))
     # Make sure robot connects quickly even if many messages preceding connection message are on monitoring port
     connect_robot_helper(robot)
-    assert robot.WaitConnected(timeout=0)
+    robot.WaitConnected(timeout=0)
 
 
 # Ensure user can wrap robot object within "with" block.
@@ -334,25 +355,25 @@ def test_monitoring_connection(robot):
     robot._initialize_monitoring_connection()
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
-    assert robot._robot_kinetics.rt_target_joint_pos == make_test_data(mx_def.MX_ST_RT_TARGET_JOINT_POS, range(7))
-    assert robot._robot_kinetics.rt_target_cart_pos == make_test_data(mx_def.MX_ST_RT_TARGET_CART_POS, range(7))
-    assert robot._robot_kinetics.rt_target_joint_vel == make_test_data(mx_def.MX_ST_RT_TARGET_JOINT_VEL, range(7))
-    assert robot._robot_kinetics.rt_target_cart_vel == make_test_data(mx_def.MX_ST_RT_TARGET_CART_VEL, range(7))
-    assert robot._robot_kinetics.rt_target_conf == make_test_data(mx_def.MX_ST_RT_TARGET_CONF, range(4))
-    assert robot._robot_kinetics.rt_target_conf_turn == make_test_data(mx_def.MX_ST_RT_TARGET_CONF_TURN, range(2))
+    assert robot._robot_kinematics.rt_target_joint_pos == make_test_data(mx_def.MX_ST_RT_TARGET_JOINT_POS, range(7))
+    assert robot._robot_kinematics.rt_target_cart_pos == make_test_data(mx_def.MX_ST_RT_TARGET_CART_POS, range(7))
+    assert robot._robot_kinematics.rt_target_joint_vel == make_test_data(mx_def.MX_ST_RT_TARGET_JOINT_VEL, range(7))
+    assert robot._robot_kinematics.rt_target_cart_vel == make_test_data(mx_def.MX_ST_RT_TARGET_CART_VEL, range(7))
+    assert robot._robot_kinematics.rt_target_conf == make_test_data(mx_def.MX_ST_RT_TARGET_CONF, range(4))
+    assert robot._robot_kinematics.rt_target_conf_turn == make_test_data(mx_def.MX_ST_RT_TARGET_CONF_TURN, range(2))
 
-    assert robot._robot_kinetics.rt_joint_pos == make_test_data(mx_def.MX_ST_RT_JOINT_POS, range(7))
-    assert robot._robot_kinetics.rt_cart_pos == make_test_data(mx_def.MX_ST_RT_CART_POS, range(7))
-    assert robot._robot_kinetics.rt_joint_vel == make_test_data(mx_def.MX_ST_RT_JOINT_VEL, range(7))
-    assert robot._robot_kinetics.rt_joint_torq == make_test_data(mx_def.MX_ST_RT_JOINT_TORQ, range(7))
-    assert robot._robot_kinetics.rt_cart_vel == make_test_data(mx_def.MX_ST_RT_CART_VEL, range(7))
-    assert robot._robot_kinetics.rt_conf == make_test_data(mx_def.MX_ST_RT_CONF, range(4))
-    assert robot._robot_kinetics.rt_conf_turn == make_test_data(mx_def.MX_ST_RT_CONF_TURN, range(2))
+    assert robot._robot_kinematics.rt_joint_pos == make_test_data(mx_def.MX_ST_RT_JOINT_POS, range(7))
+    assert robot._robot_kinematics.rt_cart_pos == make_test_data(mx_def.MX_ST_RT_CART_POS, range(7))
+    assert robot._robot_kinematics.rt_joint_vel == make_test_data(mx_def.MX_ST_RT_JOINT_VEL, range(7))
+    assert robot._robot_kinematics.rt_joint_torq == make_test_data(mx_def.MX_ST_RT_JOINT_TORQ, range(7))
+    assert robot._robot_kinematics.rt_cart_vel == make_test_data(mx_def.MX_ST_RT_CART_VEL, range(7))
+    assert robot._robot_kinematics.rt_conf == make_test_data(mx_def.MX_ST_RT_CONF, range(4))
+    assert robot._robot_kinematics.rt_conf_turn == make_test_data(mx_def.MX_ST_RT_CONF_TURN, range(2))
 
     # The data is sent as [timestamp, accelerometer_id, {measurements...}].
     # We convert it to a dictionary which maps the accelerometer_id to a TimestampedData object.
     accel_array = make_test_array(mx_def.MX_ST_RT_ACCELEROMETER, range(5))
-    assert robot._robot_kinetics.rt_accelerometer == {
+    assert robot._robot_kinematics.rt_accelerometer == {
         accel_array[1]: mdr.TimestampedData(accel_array[0], accel_array[2:])
     }
 
@@ -368,10 +389,11 @@ def test_user_set_checkpoints(robot):
     # Check that the id is correct.
     assert checkpoint_1.id == 1
     # Check that wait times out if response has not been sent.
-    assert not checkpoint_1.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_1.wait(timeout=0)
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, '1'))
     # Check that wait succeeds if response is sent.
-    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
+    checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
 
 # Test that the user can wait on checkpoints which were set by an external source, like an offline program.
@@ -385,10 +407,11 @@ def test_external_checkpoints(robot):
     # Check that the id is correct.
     assert checkpoint_1.id == 1
     # Check that wait times out if response has not been sent.
-    assert not checkpoint_1.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_1.wait(timeout=0)
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, '1'))
     # Check that wait succeeds if response is sent.
-    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
+    checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
 
 # Test that user-set and external checkpoints work concurrently.
@@ -401,27 +424,33 @@ def test_multiple_checkpoints(robot):
     checkpoint_3 = robot.ExpectExternalCheckpoint(3)
 
     # All three checkpoints are still pending, check that all three time out.
-    assert not checkpoint_1.wait(timeout=0)
-    assert not checkpoint_2.wait(timeout=0)
-    assert not checkpoint_3.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_1.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_2.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_3.wait(timeout=0)
 
     # First checkpoint is reached, second two should time out.
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, '1'))
-    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
-    assert not checkpoint_2.wait(timeout=0)
-    assert not checkpoint_3.wait(timeout=0)
+    checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_2.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_3.wait(timeout=0)
 
     # First and second checkpoints are reached, last one should time out.
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, '2'))
-    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
-    assert checkpoint_2.wait(timeout=DEFAULT_TIMEOUT)
-    assert not checkpoint_3.wait(timeout=0)
+    checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
+    checkpoint_2.wait(timeout=DEFAULT_TIMEOUT)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_3.wait(timeout=0)
 
     # All checkpoints are reached.
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, '3'))
-    assert checkpoint_3.wait(timeout=DEFAULT_TIMEOUT)
-    assert checkpoint_2.wait(timeout=DEFAULT_TIMEOUT)
-    assert checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
+    checkpoint_3.wait(timeout=DEFAULT_TIMEOUT)
+    checkpoint_2.wait(timeout=DEFAULT_TIMEOUT)
+    checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
 
 # Test that repeated checkpoints are unblocked in the order they are set.
@@ -433,18 +462,21 @@ def test_repeated_checkpoints(robot):
     checkpoint_1_b = robot.SetCheckpoint(1)
 
     # Check that wait times out if response has not been sent.
-    assert not checkpoint_1_a.wait(timeout=0)
-    assert not checkpoint_1_b.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_1_a.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_1_b.wait(timeout=0)
 
     # Only one checkpoint has been returned, the second should still block.
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, '1'))
-    assert not checkpoint_1_b.wait(timeout=0)
-    assert checkpoint_1_a.wait(timeout=DEFAULT_TIMEOUT)
+    with pytest.raises(mdr.TimeoutException):
+        checkpoint_1_b.wait(timeout=0)
+    checkpoint_1_a.wait(timeout=DEFAULT_TIMEOUT)
 
     # Check that waits succeeds if response is sent.
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, '1'))
-    assert checkpoint_1_b.wait(timeout=DEFAULT_TIMEOUT)
-    assert checkpoint_1_a.wait(timeout=DEFAULT_TIMEOUT)
+    checkpoint_1_b.wait(timeout=DEFAULT_TIMEOUT)
+    checkpoint_1_a.wait(timeout=DEFAULT_TIMEOUT)
 
 
 # Test WaitForAnyCheckpoint().
@@ -454,10 +486,11 @@ def test_special_checkpoints(robot):
     checkpoint_1 = robot.SetCheckpoint(1)
     checkpoint_2 = robot.SetCheckpoint(2)
 
-    assert not robot.WaitForAnyCheckpoint(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitForAnyCheckpoint(timeout=0)
 
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, '1'))
-    assert robot.WaitForAnyCheckpoint()
+    robot.WaitForAnyCheckpoint()
 
 
 # Test that receiving a checkpoint without an associated wait does not raise exception.
@@ -486,72 +519,81 @@ def test_stranded_checkpoints(robot):
 
 # Test that events can be correctly waited for and set.
 def test_events(robot):
-    assert not robot.WaitActivated(timeout=0)
-    assert robot.WaitDeactivated()
-    assert not robot.WaitConnected(timeout=0)
-    assert robot.WaitDisconnected()
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitActivated(timeout=0)
+    robot.WaitDeactivated()
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitConnected(timeout=0)
+    robot.WaitDisconnected()
 
     connect_robot_helper(robot)
 
-    assert robot.WaitConnected()
-    assert not robot.WaitDisconnected(timeout=0)
+    robot.WaitConnected()
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitDisconnected(timeout=0)
 
-    assert not robot.WaitActivated(timeout=0)
-    assert robot.WaitDeactivated()
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitActivated(timeout=0)
+    robot.WaitDeactivated()
 
     robot.ActivateRobot()
     robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,0,0,0,0,0,0'))
 
-    assert robot.WaitActivated(timeout=1)
-    assert not robot.WaitDeactivated(timeout=0)
+    robot.WaitActivated(timeout=1)
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitDeactivated(timeout=0)
 
-    assert not robot.WaitHomed(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitHomed(timeout=0)
     robot.Home()
     robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
-    assert robot.WaitHomed(timeout=1)
+    robot.WaitHomed(timeout=1)
 
     robot.PauseMotion()
     robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,1,0,0'))
     # Wait until pause is successfully set.
-    assert robot.WaitMotionPaused(timeout=DEFAULT_TIMEOUT)
+    robot.WaitMotionPaused(timeout=DEFAULT_TIMEOUT)
 
-    assert not robot.WaitMotionResumed(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitMotionResumed(timeout=0)
     robot.ResumeMotion()
     robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
-    assert robot.WaitMotionResumed(timeout=1)
+    robot.WaitMotionResumed(timeout=1)
 
     robot.ClearMotion()
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CLEAR_MOTION, ''))
-    assert robot.WaitMotionCleared(timeout=1)
+    robot.WaitMotionCleared(timeout=1)
 
     robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,0'))
-    assert robot._robot_events.on_end_of_block.wait(timeout=1)
+    robot._robot_events.on_end_of_block.wait(timeout=1)
 
     # Robot enters error state.
     robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,1,0,0,0'))
-    assert robot._robot_events.on_error.wait(timeout=1)
+    robot._robot_events.on_error.wait(timeout=1)
 
     robot.ResetError()
     robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
-    assert robot._robot_events.on_error_reset.wait(timeout=1)
+    robot._robot_events.on_error_reset.wait(timeout=1)
 
     robot.DeactivateRobot()
     robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '0,0,0,0,0,0,0'))
 
     # Note: the order of these waits is intentional.
     # The WaitActivated check may fail if message hasn't yet been processed.
-    assert robot.WaitDeactivated(timeout=1)
-    assert not robot.WaitActivated(timeout=0)
+    robot.WaitDeactivated(timeout=1)
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitActivated(timeout=0)
 
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_BRAKES_OFF, ''))
-    assert robot._robot_events.on_brakes_deactivated.wait(timeout=DEFAULT_TIMEOUT)
+    robot._robot_events.on_brakes_deactivated.wait(timeout=DEFAULT_TIMEOUT)
 
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_BRAKES_ON, ''))
-    assert robot._robot_events.on_brakes_activated.wait(timeout=DEFAULT_TIMEOUT)
+    robot._robot_events.on_brakes_activated.wait(timeout=DEFAULT_TIMEOUT)
 
-    assert not robot.WaitDisconnected(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        robot.WaitDisconnected(timeout=0)
     robot.Disconnect()
-    assert robot.WaitDisconnected()
+    robot.WaitDisconnected()
 
 
 # Test that robot disconnects automatically on exception when feature is enabled.
@@ -624,7 +666,14 @@ def test_callbacks(robot):
         robot.ActivateRobot()
 
         robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
+        robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CYCLE_END, '12345'))
         robot.Home()
+
+        robot.GetStatusRobot(synchronous_update=False)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,1,0,0'))
+
+        robot.GetStatusGripper(synchronous_update=False)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_GRIPPER, '0,0,0,0,0,0'))
 
         checkpoint_1 = robot.SetCheckpoint(checkpoint_id)
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CHECKPOINT_REACHED, str(checkpoint_id)))
@@ -690,11 +739,12 @@ def test_event_with_exception():
     # Test successful setting.
     event = mdr.InterruptableEvent()
     event.set()
-    assert event.wait(timeout=0)
+    event.wait(timeout=0)
 
     # Test event timed out.
     event.clear()
-    assert not event.wait(timeout=0)
+    with pytest.raises(mdr.TimeoutException):
+        event.wait(timeout=0)
 
     # Test event throwing exception.
     exception_event = mdr.InterruptableEvent()
@@ -770,36 +820,33 @@ def test_joint_moves(robot):
 def test_synchronous_gets(robot):
     connect_robot_helper(robot)
 
-    test_data = [1, 2, 3, 4, 5, 6]
-    test_data_string = ','.join([str(x) for x in test_data])
-
     # Test GetJoints.
-    expected_command = 'GetJoints'
-    robot_response = mdr._Message(mx_def.MX_ST_GET_JOINTS, test_data_string)
+    expected_command = 'GetRtTargetJointPos'
+    robot_response = mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, '1234, 1, 2, 3, 4, 5, 6')
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
 
     fake_robot.start()
 
-    assert robot.GetJoints(synchronous_update=True, timeout=1) == test_data
+    assert robot.GetJoints(synchronous_update=True, timeout=1) == [1, 2, 3, 4, 5, 6]
     fake_robot.join()
 
     # Test GetPose.
-    expected_command = 'GetPose'
-    robot_response = mdr._Message(mx_def.MX_ST_GET_POSE, test_data_string)
+    expected_command = 'GetRtTargetCartPos'
+    robot_response = mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, '1234, 1, 2, 3, 4, 5, 6')
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
 
     fake_robot.start()
 
-    assert robot.GetPose(synchronous_update=True, timeout=1) == test_data
+    assert robot.GetPose(synchronous_update=True, timeout=1) == [1, 2, 3, 4, 5, 6]
     fake_robot.join()
 
     # Test GetConf.
-    expected_command = 'GetConf'
-    robot_response = mdr._Message(mx_def.MX_ST_GET_CONF, '1,-1,1')
+    expected_command = 'GetRtTargetConf'
+    robot_response = mdr._Message(mx_def.MX_ST_RT_TARGET_CONF, '1234, 1,-1,1')
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
@@ -810,8 +857,8 @@ def test_synchronous_gets(robot):
     fake_robot.join()
 
     # Test GetConfTurn.
-    expected_command = 'GetConfTurn'
-    robot_response = mdr._Message(mx_def.MX_ST_GET_CONF_TURN, '-1')
+    expected_command = 'GetRtTargetConfTurn'
+    robot_response = mdr._Message(mx_def.MX_ST_RT_TARGET_CONF_TURN, '1234, -1')
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
@@ -823,16 +870,16 @@ def test_synchronous_gets(robot):
 
     # Attempting these gets without the appropriate robot response should result in timeout.
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(mdr.TimeoutException):
         robot.GetJoints(synchronous_update=True, timeout=0)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(mdr.TimeoutException):
         robot.GetPose(synchronous_update=True, timeout=0)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(mdr.TimeoutException):
         robot.GetConf(synchronous_update=True, timeout=0)
 
-    with pytest.raises(TimeoutError):
+    with pytest.raises(mdr.TimeoutException):
         robot.GetConfTurn(synchronous_update=True, timeout=0)
 
 
@@ -876,14 +923,14 @@ def test_monitor_mode(robot):
                   disconnect_on_exception=False,
                   enable_synchronous_mode=True)
 
-    assert robot.WaitConnected(timeout=0)
+    robot.WaitConnected(timeout=0)
 
     # Check that the Meca500 response was correctly parsed to have 6 joints.
     assert robot.GetRobotInfo().num_joints == 6
 
     # Send test messages.
-    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, '1, 2, 3, 4, 5, 6'))
-    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, '7, 8, 9, 10, 11, 12'))
+    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, '1234, 1, 2, 3, 4, 5, 6'))
+    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, '1234, 7, 8, 9, 10, 11, 12'))
 
     # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdr._TERMINATE)
@@ -899,7 +946,8 @@ def test_monitor_mode(robot):
 
 # Test that get commands correctly return timestamps.
 def test_gets_with_timestamp(robot):
-    connect_robot_helper(robot)
+    # Use a connected response that indicate a robot that does not support real-time monitoring
+    connect_robot_helper(robot, supports_rt_monitoring=False)
 
     # Helper functions for generating fake data.
     def fake_data(seed, length=6):
@@ -1004,15 +1052,15 @@ def test_custom_command(robot):
     connect_robot_helper(robot)
 
     expected_command = 'TestCommand'
-    robot_response = mdr._Message(8888, 'TestResponse')
+    robot_response = mdr._Message(mx_def.MX_ST_CMD_SUCCESSFUL, 'TestResponse')
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
 
     fake_robot.start()
 
-    response_event = robot.SendCustomCommand('TestCommand', expected_responses=[8888])
-    assert response_event.wait_for_data(timeout=DEFAULT_TIMEOUT) == robot_response
+    response_event = robot.SendCustomCommand('TestCommand', expected_responses=[mx_def.MX_ST_CMD_SUCCESSFUL])
+    response_event.wait(timeout=DEFAULT_TIMEOUT) == robot_response
 
     assert len(robot._custom_response_events) == 0
 
@@ -1102,7 +1150,7 @@ def test_file_logger(tmp_path, robot):
 # return the same time (in nanoseconds).
 @mock.patch('time.time_ns', mock.MagicMock(return_value=1621277770487091))
 def test_file_logger_legacy(tmp_path, robot):
-    connect_robot_helper(robot)
+    connect_robot_helper(robot, supports_rt_monitoring=False)
 
     # The following two functions are used to mock up data to be logged.
     def fake_data(seed, length=6):
@@ -1140,7 +1188,7 @@ def test_file_logger_legacy(tmp_path, robot):
     assert len(directory) == 1
 
     log_file_name = directory[0]
-    assert log_file_name.startswith('Meca500_R3_v9_0_0')
+    assert log_file_name.startswith('Meca500_R3_v8_0_0')
 
     log_file_path = os.path.join(tmp_path, log_file_name)
     reference_file_path = os.path.join(os.path.dirname(__file__), 'legacy_log_file_reference.zip')
