@@ -1,5 +1,4 @@
-![Mecademic](./docs/logo/mecademic_logo.jpg  "Mecademic")
-
+![Mecademic](https://github.com/Mecademic/mecademicpy/blob/main/docs/logo/mecademic_logo.jpg?raw=true  "Mecademic")
 # Mecademic Python API
 
 A python module designed for robot products from Mecademic. The module offers tools that give access to the features of the Mecademic Robots such as MoveLin and MoveJoints available through the TCP/IP text interface. The module can be started from a terminal or a python application and controls the Mecademic products. 
@@ -176,13 +175,13 @@ If the robot motion command queue is cleared (using `ClearMotion()` for example)
 
 The `Robot` class supports user-provided callback functions on a variety of events. These callbacks are entirely optional and are not required, but useful to implement asynchronous applications. The available events are listed in the `RobotCallbacks` class. Here are some of these callbacks:
 
-- on_connected
-- on_disconnected
-- on_activated
-- on_deactivated
-- on_homed
-- on_error
-- on_checkpoint_reached
+- `on_connected`
+- `on_disconnected`
+- `on_activated`
+- `on_deactivated`
+- `on_homed`
+- `on_error`
+- `on_checkpoint_reached`
 - etc... (refer to class `RobotCallbacks` for exhaustive list of callbacks)
 
 Note that some callbacks pass arguments. For example `on_checkpoint_reached` passes the ID of the checkpoint, `on_command_message` and `on_monitor_message` passes a `mecademicpy.robot.Message` object. Refer to class documentation for details.
@@ -272,22 +271,22 @@ The `FileLogger` context will automatically end logging after either completing 
 
 The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
 
-- "TargetJointPos" 
-- "TargetCartPos"
-- "TargetJointVel"
-- "TargetCartVel"
-- "TargetConf"
-- "TargetConfTurn"
+- `"TargetJointPos"` 
+- `"TargetCartPos"`
+- `"TargetJointVel"`
+- `"TargetCartVel"`
+- `"TargetConf"`
+- `"TargetConfTurn"`
 
-- "JointPos"
-- "CartPos"
-- "JointVel" 
-- "JointTorq" 
-- "CartVel" 
-- "Conf" 
-- "ConfTurn"
+- `"JointPos"`
+- `"CartPos"`
+- `"JointVel"` 
+- `"JointTorq"` 
+- `"CartVel"` 
+- `"Conf"` 
+- `"ConfTurn"`
 
-- "Accel"
+- `"Accel"`
 
 
 These strings should be placed into the list given to the `fields` parameter.
