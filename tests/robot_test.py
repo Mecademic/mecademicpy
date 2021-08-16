@@ -13,8 +13,8 @@ from functools import partial
 import pytest
 from unittest import mock
 
-## Allow the mecademic.robot module to be found using a relative path from this file.
-#sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Allow the mecademic.robot module to be found using a relative path from this file.
+# sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import mecademicpy.robot as mdr
 import mecademicpy.mx_robot_def as mx_def
@@ -23,7 +23,9 @@ import mecademicpy.robot_trajectory_files as robot_files
 TEST_IP = '127.0.0.1'
 MECA500_CONNECTED_RESPONSE = 'Connected to Meca500 R3 v9.0.0'
 MECA500_CONNECTED_RESPONSE_LEGACY = 'Connected to Meca500 R3 v8.0.0'
+MECA500_CONNECTED_RESPONSE_SCARA = 'Connected to Scara R1-virtual v9.0.0'
 MECA500_SERIAL = 'm500-99999999'
+SCARA_SERIAL = 'scara-87654321'
 DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
 #####################################################################################
@@ -63,19 +65,29 @@ def connect_robot_helper(robot,
                          offline_mode=True,
                          disconnect_on_exception=False,
                          enable_synchronous_mode=False,
-                         supports_rt_monitoring=True):
+                         supports_rt_monitoring=True,
+                         is_scara=False):
 
-    # Prepare connection messages.
-    expected_commands = ['GetRobotSerial']
-    robot_responses = [mdr._Message(mx_def.MX_ST_GET_ROBOT_SERIAL, MECA500_SERIAL)]
-
-    if supports_rt_monitoring:
+    # Prepare connection messages like the one that the robot should send upon connetion
+    if is_scara:
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE_SCARA))
+        supports_rt_monitoring = True
+    elif supports_rt_monitoring:
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-        expected_commands.append('GetRealTimeMonitoring')
-        robot_responses.append(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
     else:
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE_LEGACY))
 
+    # Prepare expected responses to "Get" requests that the Robot class does automatically while connecting
+    expected_commands = ['GetRobotSerial']
+    if is_scara:
+        robot_responses = [mdr._Message(mx_def.MX_ST_GET_ROBOT_SERIAL, SCARA_SERIAL)]
+    else:
+        robot_responses = [mdr._Message(mx_def.MX_ST_GET_ROBOT_SERIAL, MECA500_SERIAL)]
+    if supports_rt_monitoring:
+        expected_commands.append('GetRealTimeMonitoring')
+        robot_responses.append(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
+
+    # Start the fake robot thread (that will simulate response to expected requests)
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
                                         robot_responses))
@@ -216,6 +228,17 @@ def test_successful_connection_split_response():
     message = rx_queue.get()
     assert message.id == mx_def.MX_ST_CONNECTED
     assert message.data == MECA500_CONNECTED_RESPONSE
+
+
+# Test that we can connect to a Scara robot.
+def test_scara_connection(robot: mdr.Robot):
+    connect_robot_helper(robot, is_scara=True)
+    assert not robot.GetStatusRobot().activation_state
+    assert robot.GetRobotInfo().model == 'Scara'
+    assert robot.GetRobotInfo().num_joints == 4
+    assert robot.GetRobotInfo().fw_major_rev == 9
+    assert robot.GetRobotInfo().rt_message_capable
+    assert robot.GetRobotInfo().serial == SCARA_SERIAL
 
 
 # Ensure user can reconnect to robot after disconnection or failure to connect.

@@ -336,7 +336,7 @@ class Robot:
             try:
                 robot_socket.setblocking(True)
                 raw_responses = robot_socket.recv(1024)
-            except (ConnectionAbortedError, BrokenPipeError):
+            except (ConnectionAbortedError, BrokenPipeError, OSError):
                 return
 
             # Socket has been closed.
@@ -656,6 +656,18 @@ class Robot:
             true if connected to the robot
         """
         return self._robot_events.on_connected.is_set()
+
+    def set_synchronous_mode(self, sync_mode=True):
+        """Enables synchronous mode. In this mode, all commands are blocking until robot's response is received.
+           Note that this will apply to next API calls.
+           So disabling synchronous mode will not not awake thread already awaiting on synchronous operations.
+
+        Parameters
+        ----------
+        sync_mode : bool, optional
+            Synchronous mode enabled (else asynchronous mode), by default True
+        """
+        self._enable_synchronous_mode = sync_mode
 
     @disconnect_on_exception
     def ActivateRobot(self):
@@ -2438,8 +2450,12 @@ class Robot:
         """
 
         # Print error trace if this is an error code
-        if robot_code_info[response.id]["is_error"]:
-            self.logger.error("Received robot error " + robot_code_info[response.id]["name"])
+        if response.id in mx_def.robot_status_code_info:
+            code_info = code_info = mx_def.robot_status_code_info[response.id]
+            if code_info.is_error:
+                self.logger.error(f'Received robot error {code_info.code} ({code_info.name})')
+        else:
+            self.logger.error(f'Received unknown robot status code {response.id}')
 
         #
         # Only update using legacy messages if robot is not capable of rt messages.
@@ -2936,8 +2952,8 @@ class TimestampedData:
 class RobotKinematics:
     """Class for storing the internal kinematics of a Mecademic robot.
 
-    Note that the frequency and availability of kinematics depends on the monitoring interval and which monitoring events
-    are enabled. Monitoring events can be configured using SetMonitoringInterval() and SetRealTimeMonitoring().
+    Note that the frequency and availability of kinematics depends on the monitoring interval and which monitoring
+    events are enabled. Monitoring events can be configured using SetMonitoringInterval() and SetRealTimeMonitoring().
 
     Attributes
     ----------
@@ -3136,7 +3152,7 @@ class RobotInfo:
 
         if self.model == 'Meca500':
             self.num_joints = 6
-        elif self.mode == 'scara':
+        elif self.model == 'Scara':
             self.num_joints = 4
         elif self.model is None:
             self.num_joints = 1
@@ -3165,7 +3181,7 @@ class RobotInfo:
                        fw_minor_rev=int(matches[4]),
                        fw_patch_num=int(matches[5]))
         except Exception as exception:
-            raise ValueError('Could not parse robot info string {}'.format(input_string))
+            raise ValueError(f'Could not parse robot info string "{input_string}"')
 
 
 class InterruptableEvent:
