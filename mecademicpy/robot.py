@@ -1449,9 +1449,6 @@ class Robot:
 
     # Non-motion commands.
 
-
-# debugAlain re-enable legacy GetJoints, GetPose
-
     @disconnect_on_exception
     def GetRtTargetJointPos(self, include_timestamp=False, synchronous_update=False, timeout=None):
         """Returns the real-time target joint positions of the robot.
@@ -1493,6 +1490,12 @@ class Robot:
                     return copy.deepcopy(self._robot_kinematics.rt_target_joint_pos)
 
             return copy.deepcopy(self._robot_kinematics.rt_target_joint_pos.data)
+
+    def GetJoints(self, synchronous_update=False, timeout=None):
+        """Legacy command. Please use GetRtTargetJointPos instead
+
+        """
+        return self.GetRtTargetJointPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
     def GetRtTargetCartPos(self, include_timestamp=False, synchronous_update=False, timeout=None):
@@ -1536,6 +1539,12 @@ class Robot:
                     return copy.deepcopy(self._robot_kinematics.rt_target_cart_pos)
 
             return copy.deepcopy(self._robot_kinematics.rt_target_cart_pos.data)
+
+    def GetPose(self, synchronous_update=False, timeout=None):
+        """Legacy command. Please use GetRtTargetCartPos instead
+
+        """
+        return self.GetRtTargetCartPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
     def SetMonitoringInterval(self, t):
