@@ -13,9 +13,6 @@ from functools import partial
 import pytest
 from unittest import mock
 
-# Allow the mecademic.robot module to be found using a relative path from this file.
-# sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import mecademicpy.robot as mdr
 import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.robot_trajectory_files as robot_files
