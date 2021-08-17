@@ -37,8 +37,7 @@ def _string_to_numbers(input_string):
     -------
     list of numbers
         Returns converted list of floats or integers, depending on nature of element in 'input_string'.
-
-    """
+"""
 
     return [(float(x) if ('.' in x) else int(x)) for x in input_string.split(',')]
 
@@ -50,8 +49,7 @@ def disconnect_on_exception(func):
     ----------
     func : function object
         Function to wrap.
-
-    """
+"""
 
     @functools.wraps(func)
     def wrap(self, *args, **kwargs):
@@ -70,43 +68,37 @@ def disconnect_on_exception(func):
 
 class MecademicException(Exception):
     """Base exception class for Mecademic-related exceptions.
-
-    """
+"""
     pass
 
 
 class InvalidStateError(MecademicException):
     """The internal state of the instance is invalid.
-
-    """
+"""
     pass
 
 
 class CommunicationError(MecademicException):
     """There is a communication issue with the robot.
-
-    """
+"""
     pass
 
 
 class DisconnectError(MecademicException):
     """A non-nominal disconnection has occurred.
-
-    """
+"""
     pass
 
 
 class InterruptException(MecademicException):
     """An event has encountered an error. Perhaps it will never be set.
-
-    """
+"""
     pass
 
 
 class TimeoutException(MecademicException):
     """Requested timeout during a blocking operation (synchronous mode or Wait* functions) has been reached.
-       (raised by InterruptableEvent)
-    """
+       (raised by InterruptableEvent)"""
     pass
 
 
@@ -186,8 +178,7 @@ class Robot:
 
     default_timeout : float
         Default timeout to use for blocking operations.
-
-    """
+"""
 
     def __init__(self):
         """Constructor for an instance of the Robot class.
@@ -1492,9 +1483,7 @@ class Robot:
             return copy.deepcopy(self._robot_kinematics.rt_target_joint_pos.data)
 
     def GetJoints(self, synchronous_update=False, timeout=None):
-        """Legacy command. Please use GetRtTargetJointPos instead
-
-        """
+        """Legacy command. Please use GetRtTargetJointPos instead"""
         return self.GetRtTargetJointPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
@@ -1541,9 +1530,7 @@ class Robot:
             return copy.deepcopy(self._robot_kinematics.rt_target_cart_pos.data)
 
     def GetPose(self, synchronous_update=False, timeout=None):
-        """Legacy command. Please use GetRtTargetCartPos instead
-
-        """
+        """Legacy command. Please use GetRtTargetCartPos instead"""
         return self.GetRtTargetCartPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
@@ -2388,7 +2375,7 @@ class Robot:
     def _handle_common_messages(self, response, is_command_response=False):
         """Handle response messages which are received on the command and monitor port, and are processed the same way.
 
-        Parameters_parse_response_int
+        Parameters
         ----------
         response : Message object
             Robot status response to parse and handle.
@@ -2397,11 +2384,11 @@ class Robot:
 
         # Print error trace if this is an error code
         if response.id in mx_def.robot_status_code_info:
-            code_info = code_info = mx_def.robot_status_code_info[response.id]
+            code_info = mx_def.robot_status_code_info[response.id]
             if code_info.is_error:
                 self.logger.error(f'Received robot error {code_info.code} ({code_info.name})')
         else:
-            self.logger.error(f'Received unknown robot status code {response.id}')
+            self.logger.debug(f'Received unknown robot status code {response.id}')
 
         #
         # Only update using legacy messages if robot is not capable of rt messages.
@@ -2750,8 +2737,7 @@ class RobotCallbacks:
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
         on_end_of_cycle : function object
-            Function to be called each time end of cycle is reached
-    """
+            Function to be called each time end of cycle is reached"""
 
     def __init__(self):
         self.on_connected = None
@@ -2796,8 +2782,7 @@ class TimestampedData:
         Timestamp associated with data.
     data : object
         Data to be stored.
-
-    """
+"""
 
     def __init__(self, timestamp, data):
         self.timestamp = timestamp
@@ -2932,8 +2917,7 @@ class RobotKinematics:
 
     rt_accelerometer : TimestampedData
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
-
-    """
+"""
 
     def __init__(self, num_joints):
         self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
@@ -3005,8 +2989,7 @@ class RobotStatus:
         True if motion is currently paused.
     end_of_block_status : boolean
         True if robot is not moving and motion queue is empty.
-
-    """
+"""
 
     def __init__(self):
 
@@ -3036,8 +3019,7 @@ class GripperStatus:
         True if the gripper is at a limit (fully opened or closed).
     overload_error : boolean
         True if the gripper is in overload error state.
-
-    """
+"""
 
     def __init__(self):
 
@@ -3073,8 +3055,7 @@ class RobotInfo:
         True if robot is capable of sending real-time monitoring messages.
     num_joints : int
         Number of joints on the robot.
-
-    """
+"""
 
     def __init__(self,
                  model=None,
@@ -3142,8 +3123,7 @@ class InterruptableEvent:
         If true, event is in an error state.
     _interrupted_msg : string
         User message that explains the reason of interruption
-
-    """
+"""
 
     def __init__(self, id=None, data=None):
         self._id = id
@@ -3251,8 +3231,7 @@ class _Message:
         The id of the message, representing the type of message.
     data : string
         The raw payload of the message.
-
-    """
+"""
 
     def __init__(self, id, data):
         self.id = id
@@ -3336,8 +3315,7 @@ class _RobotEvents:
         Set if end of block has been reached.
     on_end_of_cycle: event
         Set if end of cycle has been reached
-
-    """
+"""
 
     def __init__(self):
         self.on_connected = InterruptableEvent()
@@ -3432,8 +3410,7 @@ class _CallbackQueue():
         Queue to use to store callback names and associated data.
     _registered_callbacks : set
         Set of names of registered callbacks.
-
-    """
+"""
 
     def __init__(self, robot_callbacks):
         self._queue = queue.Queue()

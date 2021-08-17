@@ -241,13 +241,19 @@ MX_ST_INVALID = 0xFFFFFFFF
 
 
 class RobotStatusCodeInfo:
-    """This class contains information bout a robot status codes above (ex: MX_ST_BUFFER_FULL)
-        code:       The integer value (ex: 1001)
-        name:       The code name (ex: "MX_ST_BUFFER_FULL"
-        is_error:   True if this is an error code
-    """
 
     def __init__(self, code, is_error):
+        """This class contains information bout a robot status codes above (ex: MX_ST_BUFFER_FULL)
+
+        Parameters
+        ----------
+        code : integer
+            The integer value (ex: 1001)
+        is_error : bool
+            True if this is an error code
+        name : string
+            The code name (ex: "MX_ST_BUFFER_FULL"
+        """
         self.code = code
         self.is_error = is_error
         # Convert code to string using variable name (as declared above)
