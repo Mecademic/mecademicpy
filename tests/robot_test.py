@@ -13,9 +13,6 @@ from functools import partial
 import pytest
 from unittest import mock
 
-## Allow the mecademic.robot module to be found using a relative path from this file.
-#sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import mecademicpy.robot as mdr
 import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.robot_trajectory_files as robot_files
@@ -23,7 +20,9 @@ import mecademicpy.robot_trajectory_files as robot_files
 TEST_IP = '127.0.0.1'
 MECA500_CONNECTED_RESPONSE = 'Connected to Meca500 R3 v9.0.0'
 MECA500_CONNECTED_RESPONSE_LEGACY = 'Connected to Meca500 R3 v8.0.0'
+MECA500_CONNECTED_RESPONSE_SCARA = 'Connected to Scara R1-virtual v9.0.0'
 MECA500_SERIAL = 'm500-99999999'
+SCARA_SERIAL = 'scara-87654321'
 DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
 #####################################################################################
@@ -63,19 +62,29 @@ def connect_robot_helper(robot,
                          offline_mode=True,
                          disconnect_on_exception=False,
                          enable_synchronous_mode=False,
-                         supports_rt_monitoring=True):
+                         supports_rt_monitoring=True,
+                         is_scara=False):
 
-    # Prepare connection messages.
-    expected_commands = ['GetRobotSerial']
-    robot_responses = [mdr._Message(mx_def.MX_ST_GET_ROBOT_SERIAL, MECA500_SERIAL)]
-
-    if supports_rt_monitoring:
+    # Prepare connection messages like the one that the robot should send upon connetion
+    if is_scara:
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE_SCARA))
+        supports_rt_monitoring = True
+    elif supports_rt_monitoring:
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-        expected_commands.append('GetRealTimeMonitoring')
-        robot_responses.append(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
     else:
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE_LEGACY))
 
+    # Prepare expected responses to "Get" requests that the Robot class does automatically while connecting
+    expected_commands = ['GetRobotSerial']
+    if is_scara:
+        robot_responses = [mdr._Message(mx_def.MX_ST_GET_ROBOT_SERIAL, SCARA_SERIAL)]
+    else:
+        robot_responses = [mdr._Message(mx_def.MX_ST_GET_ROBOT_SERIAL, MECA500_SERIAL)]
+    if supports_rt_monitoring:
+        expected_commands.append('GetRealTimeMonitoring')
+        robot_responses.append(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
+
+    # Start the fake robot thread (that will simulate response to expected requests)
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
                                         robot_responses))
@@ -216,6 +225,17 @@ def test_successful_connection_split_response():
     message = rx_queue.get()
     assert message.id == mx_def.MX_ST_CONNECTED
     assert message.data == MECA500_CONNECTED_RESPONSE
+
+
+# Test that we can connect to a Scara robot.
+def test_scara_connection(robot: mdr.Robot):
+    connect_robot_helper(robot, is_scara=True)
+    assert not robot.GetStatusRobot().activation_state
+    assert robot.GetRobotInfo().model == 'Scara'
+    assert robot.GetRobotInfo().num_joints == 4
+    assert robot.GetRobotInfo().fw_major_rev == 9
+    assert robot.GetRobotInfo().rt_message_capable
+    assert robot.GetRobotInfo().serial == SCARA_SERIAL
 
 
 # Ensure user can reconnect to robot after disconnection or failure to connect.
@@ -820,7 +840,7 @@ def test_joint_moves(robot):
 def test_synchronous_gets(robot):
     connect_robot_helper(robot)
 
-    # Test GetJoints.
+    # Test GetRtTargetJointPos.
     expected_command = 'GetRtTargetJointPos'
     robot_response = mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, '1234, 1, 2, 3, 4, 5, 6')
     fake_robot = threading.Thread(target=simple_response_handler,
@@ -829,10 +849,10 @@ def test_synchronous_gets(robot):
 
     fake_robot.start()
 
-    assert robot.GetJoints(synchronous_update=True, timeout=1) == [1, 2, 3, 4, 5, 6]
+    assert robot.GetRtTargetJointPos(synchronous_update=True, timeout=1) == [1, 2, 3, 4, 5, 6]
     fake_robot.join()
 
-    # Test GetPose.
+    # Test GetRtTargetCartPos.
     expected_command = 'GetRtTargetCartPos'
     robot_response = mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, '1234, 1, 2, 3, 4, 5, 6')
     fake_robot = threading.Thread(target=simple_response_handler,
@@ -841,7 +861,7 @@ def test_synchronous_gets(robot):
 
     fake_robot.start()
 
-    assert robot.GetPose(synchronous_update=True, timeout=1) == [1, 2, 3, 4, 5, 6]
+    assert robot.GetRtTargetCartPos(synchronous_update=True, timeout=1) == [1, 2, 3, 4, 5, 6]
     fake_robot.join()
 
     # Test GetConf.
@@ -851,36 +871,13 @@ def test_synchronous_gets(robot):
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
 
-    fake_robot.start()
-
-    assert robot.GetConf(synchronous_update=True, timeout=1) == [1, -1, 1]
-    fake_robot.join()
-
-    # Test GetConfTurn.
-    expected_command = 'GetRtTargetConfTurn'
-    robot_response = mdr._Message(mx_def.MX_ST_RT_TARGET_CONF_TURN, '1234, -1')
-    fake_robot = threading.Thread(target=simple_response_handler,
-                                  args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
-                                        robot_response))
-
-    fake_robot.start()
-
-    assert robot.GetConfTurn(synchronous_update=True, timeout=1) == -1
-    fake_robot.join()
-
     # Attempting these gets without the appropriate robot response should result in timeout.
 
     with pytest.raises(mdr.TimeoutException):
-        robot.GetJoints(synchronous_update=True, timeout=0)
+        robot.GetRtTargetJointPos(synchronous_update=True, timeout=0)
 
     with pytest.raises(mdr.TimeoutException):
-        robot.GetPose(synchronous_update=True, timeout=0)
-
-    with pytest.raises(mdr.TimeoutException):
-        robot.GetConf(synchronous_update=True, timeout=0)
-
-    with pytest.raises(mdr.TimeoutException):
-        robot.GetConfTurn(synchronous_update=True, timeout=0)
+        robot.GetRtTargetCartPos(synchronous_update=True, timeout=0)
 
 
 # Test initializing offline programs.
@@ -937,8 +934,8 @@ def test_monitor_mode(robot):
     robot._monitor_handler_thread.join(timeout=5)
 
     # Check that these gets do not raise an exception.
-    assert robot.GetJoints() == [1, 2, 3, 4, 5, 6]
-    assert robot.GetPose() == [7, 8, 9, 10, 11, 12]
+    assert robot.GetRtTargetJointPos() == [1, 2, 3, 4, 5, 6]
+    assert robot.GetRtTargetCartPos() == [7, 8, 9, 10, 11, 12]
 
     with pytest.raises(mdr.InvalidStateError):
         robot.MoveJoints(1, 2, 3, 4, 5, 6)
@@ -967,12 +964,12 @@ def test_gets_with_timestamp(robot):
 
     # Without RT messages, enabling 'include_timestamp' should raise exception.
     with pytest.raises(mdr.InvalidStateError):
-        robot.GetJoints(include_timestamp=True)
+        robot.GetRtTargetJointPos(include_timestamp=True)
     with pytest.raises(mdr.InvalidStateError):
-        robot.GetPose(include_timestamp=True)
+        robot.GetRtTargetCartPos(include_timestamp=True)
 
-    robot.GetJoints(include_timestamp=False) == fake_data(1)
-    robot.GetPose(include_timestamp=False) == fake_data(1)
+    robot.GetRtTargetJointPos(include_timestamp=False) == fake_data(1)
+    robot.GetRtTargetCartPos(include_timestamp=False) == fake_data(1)
 
     assert not robot.GetRobotInfo().rt_message_capable
 
@@ -985,7 +982,7 @@ def test_gets_with_timestamp(robot):
 
     fake_robot.start()
 
-    assert robot.GetJoints(synchronous_update=True, timeout=1) == fake_data(2)
+    assert robot.GetRtTargetJointPos(synchronous_update=True, timeout=1) == fake_data(2)
     fake_robot.join()
 
     expected_command = 'GetPose'
@@ -996,7 +993,7 @@ def test_gets_with_timestamp(robot):
 
     fake_robot.start()
 
-    assert robot.GetPose(synchronous_update=True, timeout=1) == fake_data(2)
+    assert robot.GetRtTargetCartPos(synchronous_update=True, timeout=1) == fake_data(2)
     fake_robot.join()
 
     # Test RT messages compatible:
@@ -1016,8 +1013,8 @@ def test_gets_with_timestamp(robot):
 
     expected_response = mdr.TimestampedData(3, fake_data(3))
 
-    assert robot.GetJoints(include_timestamp=True) == expected_response
-    assert robot.GetPose(include_timestamp=True) == expected_response
+    assert robot.GetRtTargetJointPos(include_timestamp=True) == expected_response
+    assert robot.GetRtTargetCartPos(include_timestamp=True) == expected_response
 
     assert robot.GetRobotInfo().rt_message_capable
 
@@ -1031,7 +1028,7 @@ def test_gets_with_timestamp(robot):
     fake_robot.start()
 
     expected_response = mdr.TimestampedData(4, fake_data(4))
-    assert robot.GetJoints(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
+    assert robot.GetRtTargetJointPos(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
     fake_robot.join()
 
     expected_command = 'GetRtTargetCartPos'
@@ -1043,7 +1040,7 @@ def test_gets_with_timestamp(robot):
     fake_robot.start()
 
     expected_response = mdr.TimestampedData(4, fake_data(4))
-    assert robot.GetPose(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
+    assert robot.GetRtTargetCartPos(include_timestamp=True, synchronous_update=True, timeout=1) == expected_response
     fake_robot.join()
 
 

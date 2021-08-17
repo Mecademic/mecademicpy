@@ -37,8 +37,7 @@ def _string_to_numbers(input_string):
     -------
     list of numbers
         Returns converted list of floats or integers, depending on nature of element in 'input_string'.
-
-    """
+"""
 
     return [(float(x) if ('.' in x) else int(x)) for x in input_string.split(',')]
 
@@ -50,8 +49,7 @@ def disconnect_on_exception(func):
     ----------
     func : function object
         Function to wrap.
-
-    """
+"""
 
     @functools.wraps(func)
     def wrap(self, *args, **kwargs):
@@ -70,43 +68,37 @@ def disconnect_on_exception(func):
 
 class MecademicException(Exception):
     """Base exception class for Mecademic-related exceptions.
-
-    """
+"""
     pass
 
 
 class InvalidStateError(MecademicException):
     """The internal state of the instance is invalid.
-
-    """
+"""
     pass
 
 
 class CommunicationError(MecademicException):
     """There is a communication issue with the robot.
-
-    """
+"""
     pass
 
 
 class DisconnectError(MecademicException):
     """A non-nominal disconnection has occurred.
-
-    """
+"""
     pass
 
 
 class InterruptException(MecademicException):
     """An event has encountered an error. Perhaps it will never be set.
-
-    """
+"""
     pass
 
 
 class TimeoutException(MecademicException):
     """Requested timeout during a blocking operation (synchronous mode or Wait* functions) has been reached.
-       (raised by InterruptableEvent)
-    """
+       (raised by InterruptableEvent)"""
     pass
 
 
@@ -186,8 +178,7 @@ class Robot:
 
     default_timeout : float
         Default timeout to use for blocking operations.
-
-    """
+"""
 
     def __init__(self):
         """Constructor for an instance of the Robot class.
@@ -336,7 +327,7 @@ class Robot:
             try:
                 robot_socket.setblocking(True)
                 raw_responses = robot_socket.recv(1024)
-            except (ConnectionAbortedError, BrokenPipeError):
+            except (ConnectionAbortedError, BrokenPipeError, OSError):
                 return
 
             # Socket has been closed.
@@ -580,8 +571,6 @@ class Robot:
 
             self._robot_events.on_status_updated.set()
             self._robot_events.on_status_gripper_updated.set()
-            self._robot_events.on_conf_updated.set()
-            self._robot_events.on_conf_turn_updated.set()
             self._robot_events.on_joints_updated.set()
             self._robot_events.on_pose_updated.set()
 
@@ -656,6 +645,18 @@ class Robot:
             true if connected to the robot
         """
         return self._robot_events.on_connected.is_set()
+
+    def set_synchronous_mode(self, sync_mode=True):
+        """Enables synchronous mode. In this mode, all commands are blocking until robot's response is received.
+           Note that this will apply to next API calls.
+           So disabling synchronous mode will not not awake thread already awaiting on synchronous operations.
+
+        Parameters
+        ----------
+        sync_mode : bool, optional
+            Synchronous mode enabled (else asynchronous mode), by default True
+        """
+        self._enable_synchronous_mode = sync_mode
 
     @disconnect_on_exception
     def ActivateRobot(self):
@@ -1440,10 +1441,8 @@ class Robot:
     # Non-motion commands.
 
     @disconnect_on_exception
-    def GetJoints(self, include_timestamp=False, synchronous_update=False, timeout=None):
-        """Returns the current joint positions of the robot.
-
-        Uses RT commands if possible, otherwise uses legacy versions.
+    def GetRtTargetJointPos(self, include_timestamp=False, synchronous_update=False, timeout=None):
+        """Returns the real-time target joint positions of the robot.
 
         Parameters
         ----------
@@ -1468,6 +1467,7 @@ class Robot:
                     if self._robot_info.rt_message_capable:
                         self._send_command('GetRtTargetJointPos')
                     else:
+                        # This robot does not have GetRtTargetJointPos, use legacy GetJoints (but won't get timestamp)
                         self._send_command('GetJoints')
 
             # Wait until response is received (this will throw TimeoutException if appropriate)
@@ -1482,8 +1482,12 @@ class Robot:
 
             return copy.deepcopy(self._robot_kinematics.rt_target_joint_pos.data)
 
+    def GetJoints(self, synchronous_update=False, timeout=None):
+        """Legacy command. Please use GetRtTargetJointPos instead"""
+        return self.GetRtTargetJointPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
+
     @disconnect_on_exception
-    def GetPose(self, include_timestamp=False, synchronous_update=False, timeout=None):
+    def GetRtTargetCartPos(self, include_timestamp=False, synchronous_update=False, timeout=None):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
         Parameters
@@ -1510,6 +1514,7 @@ class Robot:
                     if self._robot_info.rt_message_capable:
                         self._send_command('GetRtTargetCartPos')
                     else:
+                        # This robot does not have GetRtTargetCartPos, use legacy GetJoints (but won't get timestamp)
                         self._send_command('GetPose')
 
             # Wait until response is received (this will throw TimeoutException if appropriate)
@@ -1524,69 +1529,9 @@ class Robot:
 
             return copy.deepcopy(self._robot_kinematics.rt_target_cart_pos.data)
 
-    @disconnect_on_exception
-    def GetConf(self, include_timestamp=False, synchronous_update=False, timeout=None):
-        """Get robot's current (physical) inverse-kinematics configuration.
-
-        Returns
-        -------
-        list of integers (timestmap optional)
-            Configuration status of robot.
-
-        """
-        if synchronous_update:
-            with self._main_lock:
-                self._check_internal_states()
-                if self._robot_events.on_conf_updated.is_set():
-                    self._robot_events.on_conf_updated.clear()
-                    if self._robot_info.rt_message_capable:
-                        self._send_command('GetRtTargetConf')
-                    else:
-                        self._send_command('GetConf')
-
-            # Wait until response is received (this will throw TimeoutException if appropriate)
-            self._robot_events.on_conf_updated.wait(timeout=timeout)
-
-        with self._main_lock:
-            if include_timestamp:
-                if not self._robot_info.rt_message_capable:
-                    raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
-                else:
-                    return copy.deepcopy(self._robot_kinematics.rt_target_conf)
-
-            return copy.deepcopy(self._robot_kinematics.rt_target_conf.data)
-
-    @disconnect_on_exception
-    def GetConfTurn(self, include_timestamp=False, synchronous_update=False, timeout=None):
-        """Get robot's current (physical) last-joint turn number.
-
-        Returns
-        -------
-        int (timestamp optional)
-            Turn number of last joint.
-
-        """
-        if synchronous_update:
-            with self._main_lock:
-                self._check_internal_states()
-                if self._robot_events.on_conf_turn_updated.is_set():
-                    self._robot_events.on_conf_turn_updated.clear()
-                    if self._robot_info.rt_message_capable:
-                        self._send_command('GetRtTargetConfTurn')
-                    else:
-                        self._send_command('GetConfTurn')
-
-            # Wait until response is received (this will throw TimeoutException if appropriate)
-            self._robot_events.on_conf_turn_updated.wait(timeout=timeout)
-
-        with self._main_lock:
-            if include_timestamp:
-                if not self._robot_info.rt_message_capable:
-                    raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
-                else:
-                    return copy.deepcopy(self._robot_kinematics.rt_target_conf_turn)
-
-            return copy.deepcopy(self._robot_kinematics.rt_target_conf_turn.data[0])
+    def GetPose(self, synchronous_update=False, timeout=None):
+        """Legacy command. Please use GetRtTargetCartPos instead"""
+        return self.GetRtTargetCartPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
     def SetMonitoringInterval(self, t):
@@ -2438,8 +2383,12 @@ class Robot:
         """
 
         # Print error trace if this is an error code
-        if robot_code_info[response.id]["is_error"]:
-            self.logger.error("Received robot error " + robot_code_info[response.id]["name"])
+        if response.id in mx_def.robot_status_code_info:
+            code_info = mx_def.robot_status_code_info[response.id]
+            if code_info.is_error:
+                self.logger.error(f'Received robot error {code_info.code} ({code_info.name})')
+        else:
+            self.logger.debug(f'Received unknown robot status code {response.id}')
 
         #
         # Only update using legacy messages if robot is not capable of rt messages.
@@ -2460,14 +2409,10 @@ class Robot:
             elif response.id == mx_def.MX_ST_GET_CONF:
                 self._robot_kinematics.rt_target_conf.data = _string_to_numbers(response.data)
                 self._robot_kinematics.rt_target_conf.enabled = True
-                if is_command_response:
-                    self._robot_events.on_conf_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_CONF_TURN:
                 self._robot_kinematics.rt_target_conf_turn.data = _string_to_numbers(response.data)
                 self._robot_kinematics.rt_target_conf_turn.enabled = True
-                if is_command_response:
-                    self._robot_events.on_conf_turn_updated.set()
 
         #
         # Handle various responses/events that we're interested into
@@ -2497,12 +2442,8 @@ class Robot:
 
         elif response.id == mx_def.MX_ST_RT_TARGET_CONF:
             self._robot_kinematics.rt_target_conf.update_from_csv(response.data)
-            if is_command_response:
-                self._robot_events.on_conf_updated.set()
         elif response.id == mx_def.MX_ST_RT_TARGET_CONF_TURN:
             self._robot_kinematics.rt_target_conf_turn.update_from_csv(response.data)
-            if is_command_response:
-                self._robot_events.on_conf_turn_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_JOINT_POS:
             self._robot_kinematics.rt_joint_pos.update_from_csv(response.data)
@@ -2542,12 +2483,18 @@ class Robot:
     def _parse_response_bool(self, response):
         """ Parse standard robot response, returns array of boolean values
         """
-        return [bool(int(x)) for x in response.data.split(',')]
+        if response.data.strip == '':
+            return []
+        else:
+            return [bool(int(x)) for x in response.data.split(',')]
 
     def _parse_response_int(self, response):
         """ Parse standard robot response, returns array of integer values
         """
-        return [int(x) for x in response.data.split(',')]
+        if response.data.strip() == '':
+            return []
+        else:
+            return [int(x) for x in response.data.split(',')]
 
     def _handle_robot_status_response(self, response, is_command_response):
         """Parse robot status response and update status fields and events.
@@ -2709,40 +2656,39 @@ class Robot:
         self._robot_kinematics._reset_enabled()
 
         # Parse the response to identify which are "enabled"
-        if response.data != '':
-            enabled_event_ids = self._parse_response_int(response)
-            for event_id in enabled_event_ids:
-                if event_id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
-                    self._robot_kinematics.rt_target_joint_pos.enabled = True
-                if event_id == mx_def.MX_ST_RT_TARGET_CART_POS:
-                    self._robot_kinematics.rt_target_cart_pos.enabled = True
-                if event_id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
-                    self._robot_kinematics.rt_target_joint_vel.enabled = True
-                if event_id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-                    self._robot_kinematics.rt_target_joint_torq.enabled = True
-                if event_id == mx_def.MX_ST_RT_TARGET_CART_VEL:
-                    self._robot_kinematics.rt_target_cart_vel.enabled = True
-                if event_id == mx_def.MX_ST_RT_TARGET_CONF:
-                    self._robot_kinematics.rt_target_conf.enabled = True
-                if event_id == mx_def.MX_ST_RT_TARGET_CONF_TURN:
-                    self._robot_kinematics.rt_target_conf_turn.enabled = True
-                if event_id == mx_def.MX_ST_RT_JOINT_POS:
-                    self._robot_kinematics.rt_joint_pos.enabled = True
-                if event_id == mx_def.MX_ST_RT_CART_POS:
-                    self._robot_kinematics.rt_cart_pos.enabled = True
-                if event_id == mx_def.MX_ST_RT_JOINT_VEL:
-                    self._robot_kinematics.rt_joint_vel.enabled = True
-                if event_id == mx_def.MX_ST_RT_JOINT_TORQ:
-                    self._robot_kinematics.rt_joint_torq.enabled = True
-                if event_id == mx_def.MX_ST_RT_CART_VEL:
-                    self._robot_kinematics.rt_cart_vel.enabled = True
-                if event_id == mx_def.MX_ST_RT_CONF:
-                    self._robot_kinematics.rt_conf.enabled = True
-                if event_id == mx_def.MX_ST_RT_CONF_TURN:
-                    self._robot_kinematics.rt_conf_turn.enabled = True
-                if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
-                    for accelerometer in self._robot_kinematics.rt_accelerometer.values():
-                        accelerometer.enabled = True
+        enabled_event_ids = self._parse_response_int(response)
+        for event_id in enabled_event_ids:
+            if event_id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
+                self._robot_kinematics.rt_target_joint_pos.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_CART_POS:
+                self._robot_kinematics.rt_target_cart_pos.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
+                self._robot_kinematics.rt_target_joint_vel.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
+                self._robot_kinematics.rt_target_joint_torq.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_CART_VEL:
+                self._robot_kinematics.rt_target_cart_vel.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_CONF:
+                self._robot_kinematics.rt_target_conf.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_CONF_TURN:
+                self._robot_kinematics.rt_target_conf_turn.enabled = True
+            if event_id == mx_def.MX_ST_RT_JOINT_POS:
+                self._robot_kinematics.rt_joint_pos.enabled = True
+            if event_id == mx_def.MX_ST_RT_CART_POS:
+                self._robot_kinematics.rt_cart_pos.enabled = True
+            if event_id == mx_def.MX_ST_RT_JOINT_VEL:
+                self._robot_kinematics.rt_joint_vel.enabled = True
+            if event_id == mx_def.MX_ST_RT_JOINT_TORQ:
+                self._robot_kinematics.rt_joint_torq.enabled = True
+            if event_id == mx_def.MX_ST_RT_CART_VEL:
+                self._robot_kinematics.rt_cart_vel.enabled = True
+            if event_id == mx_def.MX_ST_RT_CONF:
+                self._robot_kinematics.rt_conf.enabled = True
+            if event_id == mx_def.MX_ST_RT_CONF_TURN:
+                self._robot_kinematics.rt_conf_turn.enabled = True
+            if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
+                for accelerometer in self._robot_kinematics.rt_accelerometer.values():
+                    accelerometer.enabled = True
 
 
 class RobotCallbacks:
@@ -2791,8 +2737,7 @@ class RobotCallbacks:
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
         on_end_of_cycle : function object
-            Function to be called each time end of cycle is reached
-    """
+            Function to be called each time end of cycle is reached"""
 
     def __init__(self):
         self.on_connected = None
@@ -2837,8 +2782,7 @@ class TimestampedData:
         Timestamp associated with data.
     data : object
         Data to be stored.
-
-    """
+"""
 
     def __init__(self, timestamp, data):
         self.timestamp = timestamp
@@ -2936,8 +2880,8 @@ class TimestampedData:
 class RobotKinematics:
     """Class for storing the internal kinematics of a Mecademic robot.
 
-    Note that the frequency and availability of kinematics depends on the monitoring interval and which monitoring events
-    are enabled. Monitoring events can be configured using SetMonitoringInterval() and SetRealTimeMonitoring().
+    Note that the frequency and availability of kinematics depends on the monitoring interval and which monitoring
+    events are enabled. Monitoring events can be configured using SetMonitoringInterval() and SetRealTimeMonitoring().
 
     Attributes
     ----------
@@ -2973,8 +2917,7 @@ class RobotKinematics:
 
     rt_accelerometer : TimestampedData
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
-
-    """
+"""
 
     def __init__(self, num_joints):
         self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
@@ -3046,8 +2989,7 @@ class RobotStatus:
         True if motion is currently paused.
     end_of_block_status : boolean
         True if robot is not moving and motion queue is empty.
-
-    """
+"""
 
     def __init__(self):
 
@@ -3077,8 +3019,7 @@ class GripperStatus:
         True if the gripper is at a limit (fully opened or closed).
     overload_error : boolean
         True if the gripper is in overload error state.
-
-    """
+"""
 
     def __init__(self):
 
@@ -3114,8 +3055,7 @@ class RobotInfo:
         True if robot is capable of sending real-time monitoring messages.
     num_joints : int
         Number of joints on the robot.
-
-    """
+"""
 
     def __init__(self,
                  model=None,
@@ -3136,7 +3076,7 @@ class RobotInfo:
 
         if self.model == 'Meca500':
             self.num_joints = 6
-        elif self.mode == 'scara':
+        elif self.model == 'Scara':
             self.num_joints = 4
         elif self.model is None:
             self.num_joints = 1
@@ -3165,7 +3105,7 @@ class RobotInfo:
                        fw_minor_rev=int(matches[4]),
                        fw_patch_num=int(matches[5]))
         except Exception as exception:
-            raise ValueError('Could not parse robot info string {}'.format(input_string))
+            raise ValueError(f'Could not parse robot info string "{input_string}"')
 
 
 class InterruptableEvent:
@@ -3183,8 +3123,7 @@ class InterruptableEvent:
         If true, event is in an error state.
     _interrupted_msg : string
         User message that explains the reason of interruption
-
-    """
+"""
 
     def __init__(self, id=None, data=None):
         self._id = id
@@ -3292,8 +3231,7 @@ class _Message:
         The id of the message, representing the type of message.
     data : string
         The raw payload of the message.
-
-    """
+"""
 
     def __init__(self, id, data):
         self.id = id
@@ -3363,10 +3301,6 @@ class _RobotEvents:
         Set if robot is in sim mode.
     on_deactivate_sim : event
         Set if robot is not in sim mode.
-    on_conf_updated : event
-        Set if robot configuration has been updated.
-    on_conf_turn_updated : event
-        Set if last joint turn number has been updated.
     on_joints_updated : event
         Set if joint angles has been updated.
     on_pose_updated : event
@@ -3381,8 +3315,7 @@ class _RobotEvents:
         Set if end of block has been reached.
     on_end_of_cycle: event
         Set if end of cycle has been reached
-
-    """
+"""
 
     def __init__(self):
         self.on_connected = InterruptableEvent()
@@ -3408,8 +3341,6 @@ class _RobotEvents:
         self.on_activate_sim = InterruptableEvent()
         self.on_deactivate_sim = InterruptableEvent()
 
-        self.on_conf_updated = InterruptableEvent()
-        self.on_conf_turn_updated = InterruptableEvent()
         self.on_joints_updated = InterruptableEvent()
         self.on_pose_updated = InterruptableEvent()
 
@@ -3430,8 +3361,6 @@ class _RobotEvents:
 
         self.on_status_updated.set()
         self.on_status_gripper_updated.set()
-        self.on_conf_updated.set()
-        self.on_conf_turn_updated.set()
         self.on_joints_updated.set()
         self.on_pose_updated.set()
         self.on_brakes_activated.set()
@@ -3481,8 +3410,7 @@ class _CallbackQueue():
         Queue to use to store callback names and associated data.
     _registered_callbacks : set
         Set of names of registered callbacks.
-
-    """
+"""
 
     def __init__(self, robot_callbacks):
         self._queue = queue.Queue()

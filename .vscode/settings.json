@@ -27,6 +27,7 @@
         "ipython",
         "mutex",
         "pytest",
+        "traj",
         "qsize"
     ],
     "python.linting.pycodestyleArgs": [
