@@ -1758,6 +1758,13 @@ class Robot:
         else:
             self.SetRealTimeMonitoring(*fields)
 
+        # Use a synchronous "GetRealTimeMonitoring" to ensure that we've started receiving data for all the requested
+        # real-time monitoring fields we just enabled
+        response = self._send_custom_command('GetRealTimeMonitoring',
+                                             expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
+                                             skip_internal_check=True)
+        response.wait(timeout=self.default_timeout)
+
         self._file_logger = _RobotTrajectoryLogger(self._robot_info,
                                                    self._robot_kinematics,
                                                    fields,
