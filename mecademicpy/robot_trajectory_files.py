@@ -25,7 +25,7 @@ from dataclasses_json import dataclass_json
 @dataclass_json
 @dataclass
 class TestContext:
-    """ Context in which robot kinematics logs where produced, specifically those made by tests, and in which test
+    """ Context in which robot trajectory logs where produced, specifically those made by tests, and in which test
     were produced
 
     Attributes
@@ -52,21 +52,21 @@ class TestContext:
 @dataclass_json
 @dataclass
 class RobotContext:
-    """ Context in which robot kinematics logs where produced
+    """ Context in which robot trajectory logs where produced
 
     Attributes
     ----------
     robot_information: list of dicts
         This list, when produced by the logger, will contain one dict filled with information about a robot. Could
-        contain more dicts after test on robot kinematics from many robots
+        contain more dicts after test on robot rt_data from many robots
     sent_commands: list or strings
         This list, produced by the logger, should contain the commands from which the robot movement was produced.
-        Tests should only compare robot kinematics that came from same set of commands
+        Tests should only compare robot rt_data that came from same set of commands
     test_context: dict
-        This dict should contain context on tests made on robot kinematics after data was logged. This will not
+        This dict should contain context on tests made on robot rt_data after data was logged. This will not
         be filled by the logger
     test_results: dict
-        This dict should contain results of tests made on robot kinematics after data was logged. This will not
+        This dict should contain results of tests made on robot rt_data after data was logged. This will not
         be filled by the logger.
     """
     robot_information: List[Dict[str, str]] = field(default_factory=list)
@@ -114,7 +114,7 @@ class RobotContext:
 
 @dataclass
 class RobotDfHist:
-    """This class contains all robot kinematics dataframes produced by a function, whether they were produced at the
+    """This class contains all robot rt_data dataframes produced by a function, whether they were produced at the
     beginning, during or at the end of the function.
 
     Attributes
@@ -300,7 +300,7 @@ class RobotDfHist:
 
     @staticmethod
     def from_file(filepath):
-        """ Finds robot kinematics data in a csv file
+        """ Finds robot rt_data in a csv file
 
         Parameters
         ----------
@@ -320,7 +320,7 @@ class RobotDfHist:
 
 @dataclass
 class RobotTrajectories:
-    """Robot movement through time and context in which those kinematics where produced
+    """Robot movement through time and context in which rt_data was produced
 
     Attributes
     ----------
@@ -328,7 +328,7 @@ class RobotTrajectories:
         Explains how and where dfs where produced
     robot_df_hist: RobotDfHist object
         This object, when produced by the logger, should contain only one dataframe, in the output_dfs list, associating
-        timestamps to robot kinematics through time
+        timestamps to robot rt_data through time
 
         All other dataframes in this object could be produced by subsequent tests and manipulations made on the data from
         the first dataframe
@@ -368,7 +368,7 @@ class RobotTrajectories:
 
     @staticmethod
     def from_file(filepath):
-        """ Finds robot context and kinematics data in a zip file
+        """ Finds robot context and rt_data data in a zip file
 
         Parameters
         ----------

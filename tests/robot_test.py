@@ -413,25 +413,25 @@ def test_monitoring_connection(robot: mdr.Robot):
     robot.Disconnect()
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
-    assert robot._robot_kinematics.rt_target_joint_pos == make_test_data(mx_def.MX_ST_RT_TARGET_JOINT_POS, range(7))
-    assert robot._robot_kinematics.rt_target_cart_pos == make_test_data(mx_def.MX_ST_RT_TARGET_CART_POS, range(7))
-    assert robot._robot_kinematics.rt_target_joint_vel == make_test_data(mx_def.MX_ST_RT_TARGET_JOINT_VEL, range(7))
-    assert robot._robot_kinematics.rt_target_cart_vel == make_test_data(mx_def.MX_ST_RT_TARGET_CART_VEL, range(7))
-    assert robot._robot_kinematics.rt_target_conf == make_test_data(mx_def.MX_ST_RT_TARGET_CONF, range(4))
-    assert robot._robot_kinematics.rt_target_conf_turn == make_test_data(mx_def.MX_ST_RT_TARGET_CONF_TURN, range(2))
+    assert robot._robot_rt_data.rt_target_joint_pos == make_test_data(mx_def.MX_ST_RT_TARGET_JOINT_POS, range(7))
+    assert robot._robot_rt_data.rt_target_cart_pos == make_test_data(mx_def.MX_ST_RT_TARGET_CART_POS, range(7))
+    assert robot._robot_rt_data.rt_target_joint_vel == make_test_data(mx_def.MX_ST_RT_TARGET_JOINT_VEL, range(7))
+    assert robot._robot_rt_data.rt_target_cart_vel == make_test_data(mx_def.MX_ST_RT_TARGET_CART_VEL, range(7))
+    assert robot._robot_rt_data.rt_target_conf == make_test_data(mx_def.MX_ST_RT_TARGET_CONF, range(4))
+    assert robot._robot_rt_data.rt_target_conf_turn == make_test_data(mx_def.MX_ST_RT_TARGET_CONF_TURN, range(2))
 
-    assert robot._robot_kinematics.rt_joint_pos == make_test_data(mx_def.MX_ST_RT_JOINT_POS, range(7))
-    assert robot._robot_kinematics.rt_cart_pos == make_test_data(mx_def.MX_ST_RT_CART_POS, range(7))
-    assert robot._robot_kinematics.rt_joint_vel == make_test_data(mx_def.MX_ST_RT_JOINT_VEL, range(7))
-    assert robot._robot_kinematics.rt_joint_torq == make_test_data(mx_def.MX_ST_RT_JOINT_TORQ, range(7))
-    assert robot._robot_kinematics.rt_cart_vel == make_test_data(mx_def.MX_ST_RT_CART_VEL, range(7))
-    assert robot._robot_kinematics.rt_conf == make_test_data(mx_def.MX_ST_RT_CONF, range(4))
-    assert robot._robot_kinematics.rt_conf_turn == make_test_data(mx_def.MX_ST_RT_CONF_TURN, range(2))
+    assert robot._robot_rt_data.rt_joint_pos == make_test_data(mx_def.MX_ST_RT_JOINT_POS, range(7))
+    assert robot._robot_rt_data.rt_cart_pos == make_test_data(mx_def.MX_ST_RT_CART_POS, range(7))
+    assert robot._robot_rt_data.rt_joint_vel == make_test_data(mx_def.MX_ST_RT_JOINT_VEL, range(7))
+    assert robot._robot_rt_data.rt_joint_torq == make_test_data(mx_def.MX_ST_RT_JOINT_TORQ, range(7))
+    assert robot._robot_rt_data.rt_cart_vel == make_test_data(mx_def.MX_ST_RT_CART_VEL, range(7))
+    assert robot._robot_rt_data.rt_conf == make_test_data(mx_def.MX_ST_RT_CONF, range(4))
+    assert robot._robot_rt_data.rt_conf_turn == make_test_data(mx_def.MX_ST_RT_CONF_TURN, range(2))
 
     # The data is sent as [timestamp, accelerometer_id, {measurements...}].
     # We convert it to a dictionary which maps the accelerometer_id to a TimestampedData object.
     accel_array = make_test_array(mx_def.MX_ST_RT_ACCELEROMETER, range(5))
-    assert robot._robot_kinematics.rt_accelerometer == {
+    assert robot._robot_rt_data.rt_accelerometer == {
         accel_array[1]: mdr.TimestampedData(accel_array[0], accel_array[2:])
     }
 

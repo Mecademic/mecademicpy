@@ -12,7 +12,7 @@ from pathlib import PurePath
 # 2nd values of this dict are taken directly from controller.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
 # values)
-robot_kinematics_to_real_time_monit = {
+robot_rt_data_to_real_time_monit = {
     'rt_target_joint_pos': (mx_def.MX_ST_RT_TARGET_JOINT_POS, 'TargetJointPos'),
     'rt_target_cart_pos': (mx_def.MX_ST_RT_TARGET_CART_POS, 'TargetCartPos'),
     'rt_target_joint_vel': (mx_def.MX_ST_RT_TARGET_JOINT_VEL, 'TargetJointVel'),
@@ -61,7 +61,7 @@ class _RobotTrajectoryLogger:
 
     def __init__(self,
                  robot_info,
-                 robot_kinematics,
+                 robot_rt_data,
                  fields=None,
                  file_name=None,
                  file_path=None,
@@ -75,7 +75,7 @@ class _RobotTrajectoryLogger:
             Contains robot information.
         fields : list of strings
             List of fields to be logged.
-        robot_kinematics : RobotKinematics object
+        robot_rt_data : RobotRtData object
             Contains state of robot.
         file_name: string or None
             Log file name
@@ -107,18 +107,18 @@ class _RobotTrajectoryLogger:
         if fields is None:
 
             if robot_info.rt_message_capable:
-                for attr in vars(robot_kinematics):
+                for attr in vars(robot_rt_data):
                     if attr.startswith('rt_'):
-                        self.fields[attr] = robot_kinematics_to_real_time_monit[attr][1]
+                        self.fields[attr] = robot_rt_data_to_real_time_monit[attr][1]
             else:
                 # Only the following fields are available if platform is not rt monitoring capable.
                 self.fields = {
-                    'rt_target_joint_pos': robot_kinematics_to_real_time_monit['rt_target_joint_pos'][1],
-                    'rt_target_cart_pos': robot_kinematics_to_real_time_monit['rt_target_cart_pos'][1]
+                    'rt_target_joint_pos': robot_rt_data_to_real_time_monit['rt_target_joint_pos'][1],
+                    'rt_target_cart_pos': robot_rt_data_to_real_time_monit['rt_target_cart_pos'][1]
                 }
         else:
             for field in fields:
-                for key, val in robot_kinematics_to_real_time_monit.items():
+                for key, val in robot_rt_data_to_real_time_monit.items():
                     if (isinstance(field, str) and field.lower() == val[1].lower()) or field == val[0]:
                         self.fields[key] = val[1]
                         break
@@ -129,7 +129,7 @@ class _RobotTrajectoryLogger:
         self.timestamp_element_width = 15
         self.done_logging = False
         self.expanded_fields = []
-        self.data_dict = dict()  # Key: timestamp, Value: List of all corresponding robot_kinematics values
+        self.data_dict = dict()  # Key: timestamp, Value: List of all corresponding robot_rt_data values
         self.robot_trajectories = RobotTrajectories()
 
         # Write robot information.
@@ -147,12 +147,12 @@ class _RobotTrajectoryLogger:
         # Write headers for logged data
         self.write_field_and_element_headers(robot_info)
 
-    def get_timestamp_data(self, robot_kinematics, field):
+    def get_timestamp_data(self, robot_rt_data, field):
         """ Return timestamp data object associated with the specific field (or None).
 
         Parameters
         ----------
-        robot_kinematics : RobotKinematics object
+        robot_rt_data : RobotRtData object
             Current state of robot to get timestamp_data from
         field : String
             Name of the field to get timestamp_data for.
@@ -160,12 +160,12 @@ class _RobotTrajectoryLogger:
         """
         if field == 'rt_accelerometer':
             index = 5  # For now, only index 5 supported (joint 5's accelerometer)
-            accel_dict = getattr(robot_kinematics, field)
+            accel_dict = getattr(robot_rt_data, field)
             if index not in accel_dict:
                 return None
             field_attr = accel_dict[index]
         else:
-            field_attr = getattr(robot_kinematics, field)
+            field_attr = getattr(robot_rt_data, field)
         return field_attr
 
     def write_field_and_element_headers(self, robot_info):
@@ -200,14 +200,14 @@ class _RobotTrajectoryLogger:
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
-    def write_fields(self, timestamp, robot_kinematics):
+    def write_fields(self, timestamp, robot_rt_data):
         """Write fields to file.
 
         Parameters
         ----------
         timestamp : numeric
             The timestamp of the current data.
-        robot_kinematics : RobotKinematics object
+        robot_rt_data : RobotRtData object
             This object contains the current robot state.
 
         """
@@ -219,7 +219,7 @@ class _RobotTrajectoryLogger:
         self.data_dict[formatted_tim] = []
         for field in self.fields:
             # For each field, write each value with appropriate spacing.
-            ts_data = self.get_timestamp_data(robot_kinematics, field)
+            ts_data = self.get_timestamp_data(robot_rt_data, field)
             if ts_data is None:
                 continue
             self.data_dict[formatted_tim].extend([f'{x:{self.element_width}}' for x in ts_data.data])

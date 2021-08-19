@@ -137,12 +137,12 @@ class Robot:
 
     _robot_info: RobotInfo object
         Store information concerning robot (ex.: serial number)
-    _robot_kinematics : RobotKinematics object
-        Stores most current robot kinematics.
+    _robot_rt_data : RobotRtData object
+        Stores most current robot real-time data.
         All attributes of this object are the latest captured on monitor port, so they don't necessarily share the same
         timestamp
-    _robot_kinematics_stable : RobotKinematics object
-        Stores most current robot kinematics, but all attributes of object share the same timestamp
+    _robot_rt_data_stable : RobotRtData object
+        Stores most current robot real-time data, but all attributes of object share the same timestamp
     _robot_status: RobotStatus object
         Stores most current robot status
     _gripper_status: GripperStatus object
@@ -151,7 +151,7 @@ class Robot:
         Stores events related to the robot state.
 
     _file_logger : RobotDataLogger object
-        Collects RobotInformation, all RobotKinematics and SentCommands during determined period
+        Collects RobotInformation, all RobotRtData and SentCommands during determined period
 
     _robot_callbacks : RobotCallbacks instance
         Stores user-defined callback functions.
@@ -261,8 +261,8 @@ class Robot:
         self._callback_thread = None
 
         self._robot_info = None
-        self._robot_kinematics = None
-        self._robot_kinematics_stable = None
+        self._robot_rt_data = None
+        self._robot_rt_data_stable = None
         self._robot_status = RobotStatus()
         self._gripper_status = GripperStatus()
         self._robot_events = _RobotEvents()
@@ -1496,9 +1496,9 @@ class Robot:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_kinematics.rt_target_joint_pos)
+                    return copy.deepcopy(self._robot_rt_data.rt_target_joint_pos)
 
-            return copy.deepcopy(self._robot_kinematics.rt_target_joint_pos.data)
+            return copy.deepcopy(self._robot_rt_data.rt_target_joint_pos.data)
 
     def GetJoints(self, synchronous_update=False, timeout=None):
         """Legacy command. Please use GetRtTargetJointPos instead"""
@@ -1536,9 +1536,9 @@ class Robot:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_kinematics.rt_target_cart_pos)
+                    return copy.deepcopy(self._robot_rt_data.rt_target_cart_pos)
 
-            return copy.deepcopy(self._robot_kinematics.rt_target_cart_pos.data)
+            return copy.deepcopy(self._robot_rt_data.rt_target_cart_pos.data)
 
     def GetPose(self, synchronous_update=False, timeout=None):
         """Legacy command. Please use GetRtTargetCartPos instead"""
@@ -1646,17 +1646,17 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_info)
 
-    def GetRobotKinematics(self):
-        """Return a copy of the current robot kinematics, with all values associated with the same timestamp
+    def GetRobotRtData(self):
+        """Return a copy of the current robot real-time data, with all values associated with the same timestamp
 
         Return
         ------
-        RobotKinematics
-            Object containing the current robot kinematics
+        RobotRtData
+            Object containing the current robot real-time data
 
         """
         with self._main_lock:
-            return copy.deepcopy(self._robot_kinematics_stable)
+            return copy.deepcopy(self._robot_rt_data_stable)
 
     @disconnect_on_exception
     def GetStatusRobot(self, synchronous_update=False, timeout=None):
@@ -1741,7 +1741,7 @@ class Robot:
             If not provided, file will be saved in working directory.
 
         fields : list of strings or None
-            List of fields to log. Taken from RobotKinematics attributes. None means log all compatible fields.
+            List of fields to log. Taken from RobotRtData attributes. None means log all compatible fields.
 
         record_time : bool
             If true, current date and time will be recorded in file.
@@ -1767,7 +1767,7 @@ class Robot:
             response.wait(timeout=self.default_timeout)
 
         self._file_logger = _RobotTrajectoryLogger(self._robot_info,
-                                                   self._robot_kinematics,
+                                                   self._robot_rt_data,
                                                    fields,
                                                    file_name=file_name,
                                                    file_path=file_path,
@@ -1775,7 +1775,7 @@ class Robot:
                                                    monitoring_interval=monitoringInterval)
 
     def EndLogging(self):
-        """Stop logging robot kinematics to file.
+        """Stop logging robot real-time data to file.
 
         """
         if self._file_logger is None:
@@ -1793,7 +1793,7 @@ class Robot:
         Parameters
         ----------
         monitoring_interval: float
-            Indicates rate at which kinematics from robot will be received on monitor port. Unit: seconds
+            Indicates rate at which real-time data from robot will be received on monitor port. Unit: seconds
 
         file_name: string or None
             Log file name
@@ -1804,7 +1804,7 @@ class Robot:
             If not provided, file will be saved in working directory.
 
         fields : list of strings or None
-            List of fields to log. Taken from RobotKinematics attributes. None means log all compatible fields.
+            List of fields to log. Taken from RobotRtData attributes. None means log all compatible fields.
 
         record_time : bool
             If true, current date and time will be recorded in file.
@@ -2051,7 +2051,7 @@ class Robot:
             raise
 
     def _receive_welcome_message(self, message_queue, from_command_port):
-        """Receive and parse a welcome message in order to set _robot_info and _robot_kinematics.
+        """Receive and parse a welcome message in order to set _robot_info and _robot_rt_data.
 
         Parameters
         ----------
@@ -2087,8 +2087,8 @@ class Robot:
         # Attempt to parse robot return data.
         self._robot_info = RobotInfo.from_command_response_string(response.data)
 
-        self._robot_kinematics = RobotKinematics(self._robot_info.num_joints)
-        self._robot_kinematics_stable = RobotKinematics(self._robot_info.num_joints)
+        self._robot_rt_data = RobotRtData(self._robot_info.num_joints)
+        self._robot_rt_data_stable = RobotRtData(self._robot_info.num_joints)
 
     def _initialize_command_connection(self):
         """Attempt to connect to the command port of the Mecademic Robot.
@@ -2287,15 +2287,15 @@ class Robot:
             self._callback_queue.put('on_monitor_message', response)
 
             queue_size = self._monitor_rx_queue.qsize()
-            if queue_size > self._robot_kinematics.max_queue_size:
-                self._robot_kinematics.max_queue_size = queue_size
+            if queue_size > self._robot_rt_data.max_queue_size:
+                self._robot_rt_data.max_queue_size = queue_size
 
             with self._main_lock:
 
                 self._handle_common_messages(response)
 
                 # On non-rt monitoring capable platforms, no CYCLE_END event is sent, so use system time.
-                # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotKinematics upon GET_POSE.
+                # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotRtData upon GET_POSE.
                 if response.id == mx_def.MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
                     # On non rt_monitoring platforms, we will consider this moment to be the end of cycle
                     self._robot_events.on_end_of_cycle.set()
@@ -2303,18 +2303,18 @@ class Robot:
 
                     if self._file_logger:
                         # Log time in microseconds to be consistent with real-time logging timestamp.
-                        self._file_logger.write_fields(time.time_ns() / 1000, self._robot_kinematics)
-                    self._make_stable_kinematics()
+                        self._file_logger.write_fields(time.time_ns() / 1000, self._robot_rt_data)
+                    self._make_stable_rt_data()
 
-    def _make_stable_kinematics(self):
-        """We have to create stable copy of kinematics, with consistent timestamp values for all attributes.
-        This consistent copy is used by GetRobotKinematics()
+    def _make_stable_rt_data(self):
+        """We have to create stable copy of rt_data, with consistent timestamp values for all attributes.
+        This consistent copy is used by GetRobotRtData()
         """
 
-        self._robot_kinematics_stable = copy.deepcopy(self._robot_kinematics)
+        self._robot_rt_data_stable = copy.deepcopy(self._robot_rt_data)
 
         # Make sure not to report values that are not enabled in real-time monitoring
-        self._robot_kinematics_stable._clear_if_disabled()
+        self._robot_rt_data_stable._clear_if_disabled()
 
     def _command_response_handler(self):
         """Handle received messages on the command socket.
@@ -2416,38 +2416,38 @@ class Robot:
 
                 # Update joint and pose with legacy messages from current cycle plus the timestamps we just received
                 if self._tmp_rt_joint_pos:
-                    self._robot_kinematics.rt_target_joint_pos.update_from_data(timestamp, self._tmp_rt_joint_pos)
-                    self._robot_kinematics.rt_target_joint_pos.enabled = True
+                    self._robot_rt_data.rt_target_joint_pos.update_from_data(timestamp, self._tmp_rt_joint_pos)
+                    self._robot_rt_data.rt_target_joint_pos.enabled = True
                     self._tmp_rt_joint_pos = None
                 if self._tmp_rt_cart_pos:
-                    self._robot_kinematics.rt_target_cart_pos.update_from_data(timestamp, self._tmp_rt_cart_pos)
-                    self._robot_kinematics.rt_target_cart_pos.enabled = True
+                    self._robot_rt_data.rt_target_cart_pos.update_from_data(timestamp, self._tmp_rt_cart_pos)
+                    self._robot_rt_data.rt_target_cart_pos.enabled = True
                     self._tmp_rt_cart_pos = None
 
                 # If logging is active, log the current state.
                 if self._file_logger:
-                    self._file_logger.write_fields(timestamp, self._robot_kinematics)
-                self._make_stable_kinematics()
+                    self._file_logger.write_fields(timestamp, self._robot_rt_data)
+                self._make_stable_rt_data()
         else:  # not self._robot_info.rt_message_capable
             if response.id == mx_def.MX_ST_GET_JOINTS:
-                self._robot_kinematics.rt_target_joint_pos.data = _string_to_numbers(response.data)
-                self._robot_kinematics.rt_target_joint_pos.enabled = True
+                self._robot_rt_data.rt_target_joint_pos.data = _string_to_numbers(response.data)
+                self._robot_rt_data.rt_target_joint_pos.enabled = True
                 if self._is_get_sync():
                     self._robot_events.on_joints_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_POSE:
-                self._robot_kinematics.rt_target_cart_pos.data = _string_to_numbers(response.data)
-                self._robot_kinematics.rt_target_cart_pos.enabled = True
+                self._robot_rt_data.rt_target_cart_pos.data = _string_to_numbers(response.data)
+                self._robot_rt_data.rt_target_cart_pos.enabled = True
                 if self._is_get_sync():
                     self._robot_events.on_pose_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_CONF:
-                self._robot_kinematics.rt_target_conf.data = _string_to_numbers(response.data)
-                self._robot_kinematics.rt_target_conf.enabled = True
+                self._robot_rt_data.rt_target_conf.data = _string_to_numbers(response.data)
+                self._robot_rt_data.rt_target_conf.enabled = True
 
             elif response.id == mx_def.MX_ST_GET_CONF_TURN:
-                self._robot_kinematics.rt_target_conf_turn.data = _string_to_numbers(response.data)
-                self._robot_kinematics.rt_target_conf_turn.enabled = True
+                self._robot_rt_data.rt_target_conf_turn.data = _string_to_numbers(response.data)
+                self._robot_rt_data.rt_target_conf_turn.enabled = True
 
         #
         # Handle various responses/events that we're interested into
@@ -2459,53 +2459,53 @@ class Robot:
             self._handle_gripper_status_response(response)
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
-            self._robot_kinematics.rt_target_joint_pos.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_joint_pos.update_from_csv(response.data)
             if self._is_get_sync():
                 self._robot_events.on_joints_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_TARGET_CART_POS:
-            self._robot_kinematics.rt_target_cart_pos.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_cart_pos.update_from_csv(response.data)
             if self._is_get_sync():
                 self._robot_events.on_pose_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
-            self._robot_kinematics.rt_target_joint_vel.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_joint_vel.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-            self._robot_kinematics.rt_target_joint_torq.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_joint_torq.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_TARGET_CART_VEL:
-            self._robot_kinematics.rt_target_cart_vel.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_cart_vel.update_from_csv(response.data)
 
         elif response.id == mx_def.MX_ST_RT_TARGET_CONF:
-            self._robot_kinematics.rt_target_conf.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_conf.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_TARGET_CONF_TURN:
-            self._robot_kinematics.rt_target_conf_turn.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_conf_turn.update_from_csv(response.data)
 
         elif response.id == mx_def.MX_ST_RT_JOINT_POS:
-            self._robot_kinematics.rt_joint_pos.update_from_csv(response.data)
+            self._robot_rt_data.rt_joint_pos.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_CART_POS:
-            self._robot_kinematics.rt_cart_pos.update_from_csv(response.data)
+            self._robot_rt_data.rt_cart_pos.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_JOINT_VEL:
-            self._robot_kinematics.rt_joint_vel.update_from_csv(response.data)
+            self._robot_rt_data.rt_joint_vel.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_JOINT_TORQ:
-            self._robot_kinematics.rt_joint_torq.update_from_csv(response.data)
+            self._robot_rt_data.rt_joint_torq.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_CART_VEL:
-            self._robot_kinematics.rt_cart_vel.update_from_csv(response.data)
+            self._robot_rt_data.rt_cart_vel.update_from_csv(response.data)
 
         elif response.id == mx_def.MX_ST_RT_CONF:
-            self._robot_kinematics.rt_conf.update_from_csv(response.data)
+            self._robot_rt_data.rt_conf.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_CONF_TURN:
-            self._robot_kinematics.rt_conf_turn.update_from_csv(response.data)
+            self._robot_rt_data.rt_conf_turn.update_from_csv(response.data)
 
         elif response.id == mx_def.MX_ST_RT_ACCELEROMETER:
             # The data is stored as [timestamp, index, {measurements...}]
             timestamp, index, *measurements = _string_to_numbers(response.data)
             # Record accelerometer measurement only if newer.
-            if index not in self._robot_kinematics.rt_accelerometer:
-                self._robot_kinematics.rt_accelerometer[index] = TimestampedData(timestamp, measurements)
-                self._robot_kinematics.rt_accelerometer[index].enabled = True
-            if timestamp > self._robot_kinematics.rt_accelerometer[index].timestamp:
-                self._robot_kinematics.rt_accelerometer[index].timestamp = timestamp
-                self._robot_kinematics.rt_accelerometer[index].data = measurements
+            if index not in self._robot_rt_data.rt_accelerometer:
+                self._robot_rt_data.rt_accelerometer[index] = TimestampedData(timestamp, measurements)
+                self._robot_rt_data.rt_accelerometer[index].enabled = True
+            if timestamp > self._robot_rt_data.rt_accelerometer[index].timestamp:
+                self._robot_rt_data.rt_accelerometer[index].timestamp = timestamp
+                self._robot_rt_data.rt_accelerometer[index].data = measurements
 
         elif response.id == mx_def.MX_ST_IMPOSSIBLE_RESET_ERR:
             message = "Robot indicated that this error cannot be reset"
@@ -2687,45 +2687,45 @@ class Robot:
         assert response.id == mx_def.MX_ST_GET_REAL_TIME_MONITORING
 
         # Clear all "enabled" bits in real-time data
-        self._robot_kinematics._reset_enabled()
+        self._robot_rt_data._reset_enabled()
 
         # Parse the response to identify which are "enabled"
         enabled_event_ids = self._parse_response_int(response)
         for event_id in enabled_event_ids:
             if event_id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
-                self._robot_kinematics.rt_target_joint_pos.enabled = True
+                self._robot_rt_data.rt_target_joint_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CART_POS:
-                self._robot_kinematics.rt_target_cart_pos.enabled = True
+                self._robot_rt_data.rt_target_cart_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
-                self._robot_kinematics.rt_target_joint_vel.enabled = True
+                self._robot_rt_data.rt_target_joint_vel.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-                self._robot_kinematics.rt_target_joint_torq.enabled = True
+                self._robot_rt_data.rt_target_joint_torq.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CART_VEL:
-                self._robot_kinematics.rt_target_cart_vel.enabled = True
+                self._robot_rt_data.rt_target_cart_vel.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CONF:
-                self._robot_kinematics.rt_target_conf.enabled = True
+                self._robot_rt_data.rt_target_conf.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CONF_TURN:
-                self._robot_kinematics.rt_target_conf_turn.enabled = True
+                self._robot_rt_data.rt_target_conf_turn.enabled = True
             if event_id == mx_def.MX_ST_RT_JOINT_POS:
-                self._robot_kinematics.rt_joint_pos.enabled = True
+                self._robot_rt_data.rt_joint_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_CART_POS:
-                self._robot_kinematics.rt_cart_pos.enabled = True
+                self._robot_rt_data.rt_cart_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_JOINT_VEL:
-                self._robot_kinematics.rt_joint_vel.enabled = True
+                self._robot_rt_data.rt_joint_vel.enabled = True
             if event_id == mx_def.MX_ST_RT_JOINT_TORQ:
-                self._robot_kinematics.rt_joint_torq.enabled = True
+                self._robot_rt_data.rt_joint_torq.enabled = True
             if event_id == mx_def.MX_ST_RT_CART_VEL:
-                self._robot_kinematics.rt_cart_vel.enabled = True
+                self._robot_rt_data.rt_cart_vel.enabled = True
             if event_id == mx_def.MX_ST_RT_CONF:
-                self._robot_kinematics.rt_conf.enabled = True
+                self._robot_rt_data.rt_conf.enabled = True
             if event_id == mx_def.MX_ST_RT_CONF_TURN:
-                self._robot_kinematics.rt_conf_turn.enabled = True
+                self._robot_rt_data.rt_conf_turn.enabled = True
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
-                for accelerometer in self._robot_kinematics.rt_accelerometer.values():
+                for accelerometer in self._robot_rt_data.rt_accelerometer.values():
                     accelerometer.enabled = True
 
         # Make sure to clear values that we should no more received
-        self._robot_kinematics._clear_if_disabled()
+        self._robot_rt_data._clear_if_disabled()
 
     def _handle_sync_response(self, response):
         """Parse robot response to "Sync" request
@@ -2941,10 +2941,10 @@ class TimestampedData:
         return not self == other
 
 
-class RobotKinematics:
-    """Class for storing the internal kinematics of a Mecademic robot.
+class RobotRtData:
+    """Class for storing the internal real-time data of a Mecademic robot.
 
-    Note that the frequency and availability of kinematics depends on the monitoring interval and which monitoring
+    Note that the frequency and availability of real-time data depends on the monitoring interval and which monitoring
     events are enabled. Monitoring events can be configured using SetMonitoringInterval() and SetRealTimeMonitoring().
 
     Attributes
