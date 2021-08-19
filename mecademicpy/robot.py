@@ -178,6 +178,16 @@ class Robot:
 
     default_timeout : float
         Default timeout to use for blocking operations.
+
+    _tmp_rt_joint_pos : list of float
+        Values from legacy MX_ST_GET_JOINTS event received in current cycle
+    _tmp_rt_cart_pos : list of float
+        Values from legacy MX_ST_GET_POSE event received in current cycle
+
+    _tx_sync : integer
+        Value sent in the most recent "Sync" request sent to robot
+    _rx_sync : integer
+        Most recent response to "Sync" (MX_ST_SYNC) received from the robot
 """
 
     def __init__(self):
@@ -204,11 +214,14 @@ class Robot:
 
     def __enter__(self):
         """Function called when entering "with" block with a Robot object instance.
-        This simply validates that the robot is not already connection (must not be by design)
+
+        Raises
+        ------
+        InvalidStateError
+            Exception raised if robot is already connected when entering "with" statement (since by design the usage
+            of the "with" statement is to ensure proper disconnection from the robot at the end of the "with" scope
         """
-        # Don't allow entering a "with" statement when robot is already connected
-        # (since the goal of "with" is to disconnect)
-        if self._monitor_handler_thread is not None:
+        if self.IsConnected():
             raise InvalidStateError('Robot cannot be connected when entering \'with\' block')
         return self
 
@@ -266,6 +279,13 @@ class Robot:
 
         self.logger = logging.getLogger(__name__)
         self.default_timeout = 10
+
+        # Variables to hold joint positions and poses while waiting for timestamp.
+        self._tmp_rt_joint_pos = None
+        self._tmp_rt_cart_pos = None
+
+        self._tx_sync = 0
+        self._rx_sync = 0
 
         self._is_initialized = True
 
@@ -464,7 +484,7 @@ class Robot:
         if not isinstance(callbacks, RobotCallbacks):
             raise TypeError('Callbacks object is not the appropriate class.')
 
-        if self._monitor_handler_thread or self._command_response_handler_thread:
+        if self.IsConnected():
             raise InvalidStateError('Callbacks cannot be set if already connected.')
 
         self._callback_queue = _CallbackQueue(callbacks)
@@ -558,9 +578,6 @@ class Robot:
                 self._initialize_command_socket()
                 self._initialize_command_connection()
 
-            self._initialize_monitoring_socket()
-            self._initialize_monitoring_connection()
-
             self._robot_events.clear_all()
 
             self._robot_events.on_deactivated.set()
@@ -574,25 +591,40 @@ class Robot:
             self._robot_events.on_joints_updated.set()
             self._robot_events.on_pose_updated.set()
 
-            self._robot_events.on_connected.set()
-            self._callback_queue.put('on_connected')
-
             # Start callback thread if necessary
             self._start_callback_thread()
 
         # Once connected, we fetch some information required by this Robot class (outside main lock).
+        connect_to_monitoring_port = True
         if not self._monitor_mode:
             # Fetch the robot serial number
-            serial_response = self.SendCustomCommand('GetRobotSerial',
-                                                     expected_responses=[mx_def.MX_ST_GET_ROBOT_SERIAL])
+            serial_response = self._send_custom_command('GetRobotSerial',
+                                                        expected_responses=[mx_def.MX_ST_GET_ROBOT_SERIAL],
+                                                        skip_internal_check=True)
             serial_response_message = serial_response.wait(timeout=self.default_timeout)
             self._robot_info.serial = serial_response_message.data
 
             # Fetch the current real-time monitoring settings
             if self._robot_info.rt_message_capable:
-                real_time_monitoring_response = self.SendCustomCommand(
-                    'GetRealTimeMonitoring', expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING])
+                real_time_monitoring_response = self._send_custom_command(
+                    'GetRealTimeMonitoring',
+                    expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
+                    skip_internal_check=True)
                 real_time_monitoring_response.wait(timeout=self.default_timeout)
+
+            # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid race
+            # conditions between the two sockets causing potential problems with this API)
+            if self._robot_info.rt_on_ctrl_port_capable:
+                self._send_custom_command('SetCtrlPortMonitoring(1)', skip_internal_check=True)
+                connect_to_monitoring_port = False  # We won't need to connect to monitoring port
+
+        if connect_to_monitoring_port:
+            with self._main_lock:
+                self._initialize_monitoring_socket()
+                self._initialize_monitoring_connection()
+
+        self._robot_events.on_connected.set()
+        self._callback_queue.put('on_connected')
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
@@ -1400,17 +1432,7 @@ class Robot:
         event.wait() to wait for and get the response message.
 
         """
-        with self._main_lock:
-            self._check_internal_states()
-
-            if expected_responses:
-                event_with_data = InterruptableEvent(data=expected_responses)
-                self._custom_response_events.append(event_with_data)
-
-            self._send_command(command)
-
-        if expected_responses:
-            return event_with_data
+        return self._send_custom_command(command, expected_responses, skip_internal_check=True)
 
     @disconnect_on_exception
     def StartOfflineProgram(self, n, timeout=None):
@@ -1460,15 +1482,11 @@ class Robot:
 
         """
         if synchronous_update:
-            with self._main_lock:
-                self._check_internal_states()
-                if self._robot_events.on_joints_updated.is_set():
-                    self._robot_events.on_joints_updated.clear()
-                    if self._robot_info.rt_message_capable:
-                        self._send_command('GetRtTargetJointPos')
-                    else:
-                        # This robot does not have GetRtTargetJointPos, use legacy GetJoints (but won't get timestamp)
-                        self._send_command('GetJoints')
+            if self._robot_info.rt_message_capable:
+                self._send_sync_command('GetRtTargetJointPos', self._robot_events.on_joints_updated, timeout)
+            else:
+                # This robot does not have GetRtTargetJointPos, use legacy GetJoints (but won't get timestamp)
+                self._send_sync_command('GetJoints', self._robot_events.on_joints_updated, timeout)
 
             # Wait until response is received (this will throw TimeoutException if appropriate)
             self._robot_events.on_joints_updated.wait(timeout=timeout)
@@ -1507,18 +1525,11 @@ class Robot:
         """
 
         if synchronous_update:
-            with self._main_lock:
-                self._check_internal_states()
-                if self._robot_events.on_pose_updated.is_set():
-                    self._robot_events.on_pose_updated.clear()
-                    if self._robot_info.rt_message_capable:
-                        self._send_command('GetRtTargetCartPos')
-                    else:
-                        # This robot does not have GetRtTargetCartPos, use legacy GetJoints (but won't get timestamp)
-                        self._send_command('GetPose')
-
-            # Wait until response is received (this will throw TimeoutException if appropriate)
-            self._robot_events.on_pose_updated.wait(timeout=timeout)
+            if self._robot_info.rt_message_capable:
+                self._send_sync_command('GetRtTargetCartPos', self._robot_events.on_pose_updated, timeout)
+            else:
+                # This robot does not have GetRtTargetCartPos, use legacy GetPose (but won't get timestamp)
+                self._send_sync_command('GetPose', self._robot_events.on_pose_updated, timeout)
 
         with self._main_lock:
             if include_timestamp:
@@ -1665,14 +1676,7 @@ class Robot:
 
         """
         if synchronous_update:
-            with self._main_lock:
-                self._check_internal_states()
-                if self._robot_events.on_status_updated.is_set():
-                    self._robot_events.on_status_updated.clear()
-                    self._send_command('GetStatusRobot')
-
-            # Wait until response is received (this will throw TimeoutException if appropriate)
-            self._robot_events.on_status_updated.wait(timeout=timeout)
+            self._send_sync_command('GetStatusRobot', self._robot_events.on_status_updated, timeout)
 
         with self._main_lock:
             return copy.deepcopy(self._robot_status)
@@ -1697,14 +1701,7 @@ class Robot:
 
         """
         if synchronous_update:
-            with self._main_lock:
-                self._check_internal_states()
-                if self._robot_events.on_status_gripper_updated.is_set():
-                    self._robot_events.on_status_gripper_updated.clear()
-                    self._send_command('GetStatusGripper')
-
-            # Wait until response is received (this will throw TimeoutException if appropriate)
-            self._robot_events.on_status_gripper_updated.wait(timeout=timeout)
+            self._send_sync_command('GetStatusGripper', self._robot_events.on_status_gripper_updated, timeout)
 
         with self._main_lock:
             return copy.deepcopy(self._gripper_status)
@@ -1827,6 +1824,9 @@ class Robot:
         Attempt to disconnect from the robot if not.
 
         """
+        if self._robot_info.rt_on_ctrl_port_capable:
+            # We're not using monitoring port. No need to check here.
+            return
 
         if not (self._monitor_handler_thread and self._monitor_handler_thread.is_alive()):
             self.Disconnect()
@@ -1898,6 +1898,56 @@ class Robot:
         # If logging is enabled, send command to logger.
         if self._file_logger:
             self._file_logger.command_queue.put(command)
+
+    def _send_sync_command(self, command, event, timeout):
+        """Send a command and wait for corresponding response
+           (this function handles well-known commands which have their corresponding 'wait' event in this class,
+            use _send_custom_command to perform synchronous operations on other commands)
+
+        Parameters
+        ----------
+        command : string
+            Name of the command to send (example: GetStatusGripper)
+        event : InterruptableEvent
+            Event that will be set (unblocked) once the corresponding response is received
+        timeout : float
+            Maximum time to wait for the event to be set (i.e. response received)
+
+
+        Raises
+        ------
+        TimeoutException
+            If response was not received before timeout
+        """
+        with self._main_lock:
+            self._check_internal_states()
+            if self._robot_info.rt_on_ctrl_port_capable:
+                # Send a "sync" request so we know when we get the response to this get (and not an earlier one)
+                self._tx_sync += 1
+                self._send_command(f'Sync({self._tx_sync})')
+            if event.is_set():
+                event.clear()
+                self._send_command(command)
+
+        # Wait until response is received (this will throw TimeoutException if appropriate)
+        event.wait(timeout=timeout)
+
+    def _send_custom_command(self, command, expected_responses=None, skip_internal_check=False):
+        """Internal version of SendCustomCommand with option to skip internal state check (so it can be used
+           during connetion)
+        """
+        with self._main_lock:
+            if not skip_internal_check:
+                self._check_internal_states()
+
+            if expected_responses:
+                event_with_data = InterruptableEvent(data=expected_responses)
+                self._custom_response_events.append(event_with_data)
+
+            self._send_command(command)
+
+        if expected_responses:
+            return event_with_data
 
     def _launch_thread(self, *, target, args):
         """Establish the threads responsible for reading/sending messages using the sockets.
@@ -2028,11 +2078,6 @@ class Robot:
 
         # Attempt to parse robot return data.
         self._robot_info = RobotInfo.from_command_response_string(response.data)
-
-        # Check if current robot version supports real-time monitoring messages (8.4+)
-        if (self._robot_info.fw_major_rev >= 9) or (self._robot_info.fw_major_rev == 8
-                                                    and self._robot_info.fw_minor_rev >= 4):
-            self._robot_info.rt_message_capable = True
 
         self._robot_kinematics = RobotKinematics(self._robot_info.num_joints)
         self._robot_kinematics_stable = RobotKinematics(self._robot_info.num_joints)
@@ -2222,11 +2267,6 @@ class Robot:
         """Handle messages from the monitoring port of the robot.
 
         """
-        # Variables to hold joint positions and poses while waiting for timestamp.
-        rt_joint_pos = None
-        rt_cart_pos = None
-        rt_conf = None
-        rt_conf_turn = None
 
         while True:
             # Wait for a message in the queue.
@@ -2244,62 +2284,19 @@ class Robot:
 
             with self._main_lock:
 
-                # Temporarily save data if rt messages will be available to add timestamps.
-                # Note that if robot platform isn't RT message capable, the update occurs in _handle_common_messages.
-                if response.id == mx_def.MX_ST_GET_JOINTS and self._robot_info.rt_message_capable:
-                    rt_joint_pos = _string_to_numbers(response.data)
-                elif response.id == mx_def.MX_ST_GET_POSE and self._robot_info.rt_message_capable:
-                    rt_cart_pos = _string_to_numbers(response.data)
-                elif response.id == mx_def.MX_ST_GET_CONF and self._robot_info.rt_message_capable:
-                    rt_conf = _string_to_numbers(response.data)
-                elif response.id == mx_def.MX_ST_GET_CONF_TURN and self._robot_info.rt_message_capable:
-                    rt_conf_turn = _string_to_numbers(response.data)
+                self._handle_common_messages(response)
 
-                if response.id == mx_def.MX_ST_RT_CYCLE_END:
-                    if not self._robot_info.rt_message_capable:
-                        self._robot_info.rt_message_capable = True
-                    timestamp = int(response.data)
-
-                    # Useful to detect end of cycle for logging, to start logging on more consistent moment
+                # On non-rt monitoring capable platforms, no CYCLE_END event is sent, so use system time.
+                # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotKinematics upon GET_POSE.
+                if response.id == mx_def.MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
+                    # On non rt_monitoring platforms, we will consider this moment to be the end of cycle
                     self._robot_events.on_end_of_cycle.set()
                     self._callback_queue.put('on_end_of_cycle')
 
-                    # Update the legacy joint and pose messages with timestamps.
-                    if rt_joint_pos:
-                        self._robot_kinematics.rt_target_joint_pos.update_from_data(timestamp, rt_joint_pos)
-                        self._robot_kinematics.rt_target_joint_pos.enabled = True
-                        rt_joint_pos = None
-                    if rt_cart_pos:
-                        self._robot_kinematics.rt_target_cart_pos.update_from_data(timestamp, rt_cart_pos)
-                        self._robot_kinematics.rt_target_cart_pos.enabled = True
-                        rt_cart_pos = None
-                    if rt_conf:
-                        self._robot_kinematics.rt_target_conf.update_from_data(timestamp, rt_conf)
-                        self._robot_kinematics.rt_target_conf.enabled = True
-                        rt_conf = None
-                    if rt_conf_turn:
-                        self._robot_kinematics.rt_target_conf_turn.update_from_data(timestamp, rt_conf_turn)
-                        self._robot_kinematics.rt_target_conf_turn.enabled = True
-                        rt_conf_turn = None
-
-                    # If logging is active, log the current state.
                     if self._file_logger:
-                        self._file_logger.write_fields(timestamp, self._robot_kinematics)
+                        # Log time in microseconds to be consistent with real-time logging timestamp.
+                        self._file_logger.write_fields(time.time_ns() / 1000, self._robot_kinematics)
                     self._make_stable_kinematics()
-                else:
-                    self._handle_common_messages(response, is_command_response=False)
-
-                    # On non-rt monitoring capable platforms, no CYCLE_END event is sent, so use system time.
-                    # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotKinematics upon GET_POSE.
-                    if response.id == mx_def.MX_ST_GET_POSE and not self._robot_info.rt_message_capable:
-                        # On non rt_monitoring platforms, we will consider this moment to be the end of cycle
-                        self._robot_events.on_end_of_cycle.set()
-                        self._callback_queue.put('on_end_of_cycle')
-
-                        if self._file_logger:
-                            # Log time in microseconds to be consistent with real-time logging timestamp.
-                            self._file_logger.write_fields(time.time_ns() / 1000, self._robot_kinematics)
-                        self._make_stable_kinematics()
 
     def _make_stable_kinematics(self):
         """We have to create stable copy of kinematics, with consistent timestamp values for all attributes.
@@ -2370,9 +2367,9 @@ class Robot:
                     self._robot_events.on_offline_program_started.abort("specified offline program id does not exist")
 
                 else:
-                    self._handle_common_messages(response, is_command_response=True)
+                    self._handle_common_messages(response)
 
-    def _handle_common_messages(self, response, is_command_response=False):
+    def _handle_common_messages(self, response):
         """Handle response messages which are received on the command and monitor port, and are processed the same way.
 
         Parameters
@@ -2393,17 +2390,47 @@ class Robot:
         #
         # Only update using legacy messages if robot is not capable of rt messages.
         #
-        if not self._robot_info.rt_message_capable:
+        if self._robot_info.rt_message_capable:
+            # Temporarily save data if rt messages will be available to add timestamps.
+            # Note that if robot platform isn't RT message capable, the update occurs in _handle_common_messages.
+            if response.id == mx_def.MX_ST_GET_JOINTS:
+                self._tmp_rt_joint_pos = _string_to_numbers(response.data)
+            elif response.id == mx_def.MX_ST_GET_POSE:
+                self._tmp_rt_cart_pos = _string_to_numbers(response.data)
+            elif response.id == mx_def.MX_ST_RT_CYCLE_END:
+                if not self._robot_info.rt_message_capable:
+                    self._robot_info.rt_message_capable = True
+                timestamp = int(response.data)
+
+                # Useful to detect end of cycle for logging, to start logging on more consistent moment
+                self._robot_events.on_end_of_cycle.set()
+                self._callback_queue.put('on_end_of_cycle')
+
+                # Update joint and pose with legacy messages from current cycle plus the timestamps we just received
+                if self._tmp_rt_joint_pos:
+                    self._robot_kinematics.rt_target_joint_pos.update_from_data(timestamp, self._tmp_rt_joint_pos)
+                    self._robot_kinematics.rt_target_joint_pos.enabled = True
+                    self._tmp_rt_joint_pos = None
+                if self._tmp_rt_cart_pos:
+                    self._robot_kinematics.rt_target_cart_pos.update_from_data(timestamp, self._tmp_rt_cart_pos)
+                    self._robot_kinematics.rt_target_cart_pos.enabled = True
+                    self._tmp_rt_cart_pos = None
+
+                # If logging is active, log the current state.
+                if self._file_logger:
+                    self._file_logger.write_fields(timestamp, self._robot_kinematics)
+                self._make_stable_kinematics()
+        else:  # not self._robot_info.rt_message_capable
             if response.id == mx_def.MX_ST_GET_JOINTS:
                 self._robot_kinematics.rt_target_joint_pos.data = _string_to_numbers(response.data)
                 self._robot_kinematics.rt_target_joint_pos.enabled = True
-                if is_command_response:
+                if self._is_get_sync():
                     self._robot_events.on_joints_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_POSE:
                 self._robot_kinematics.rt_target_cart_pos.data = _string_to_numbers(response.data)
                 self._robot_kinematics.rt_target_cart_pos.enabled = True
-                if is_command_response:
+                if self._is_get_sync():
                     self._robot_events.on_pose_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_CONF:
@@ -2418,19 +2445,19 @@ class Robot:
         # Handle various responses/events that we're interested into
         #
         if response.id == mx_def.MX_ST_GET_STATUS_ROBOT:
-            self._handle_robot_status_response(response, is_command_response)
+            self._handle_robot_status_response(response)
 
         elif response.id == mx_def.MX_ST_GET_STATUS_GRIPPER:
-            self._handle_gripper_status_response(response, is_command_response)
+            self._handle_gripper_status_response(response)
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
             self._robot_kinematics.rt_target_joint_pos.update_from_csv(response.data)
-            if is_command_response:
+            if self._is_get_sync():
                 self._robot_events.on_joints_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_TARGET_CART_POS:
             self._robot_kinematics.rt_target_cart_pos.update_from_csv(response.data)
-            if is_command_response:
+            if self._is_get_sync():
                 self._robot_events.on_pose_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
@@ -2480,6 +2507,9 @@ class Robot:
         elif response.id == mx_def.MX_ST_GET_REAL_TIME_MONITORING:
             self._handle_get_realtime_monitoring_response(response)
 
+        elif response.id == mx_def.MX_ST_SYNC:
+            self._handle_sync_response(response)
+
     def _parse_response_bool(self, response):
         """ Parse standard robot response, returns array of boolean values
         """
@@ -2496,7 +2526,7 @@ class Robot:
         else:
             return [int(x) for x in response.data.split(',')]
 
-    def _handle_robot_status_response(self, response, is_command_response):
+    def _handle_robot_status_response(self, response):
         """Parse robot status response and update status fields and events.
 
         Parameters
@@ -2575,13 +2605,11 @@ class Robot:
                 self._robot_events.on_end_of_block.clear()
             self._robot_status.end_of_block_status = status_flags[5]
 
-        # We only want to detect status response on command port, or else it is not possible to have synchronous
-        # response on GetStatusRobot
-        if is_command_response:
+        if self._is_get_sync():
             self._robot_events.on_status_updated.set()
-            self._callback_queue.put('on_status_updated')
+        self._callback_queue.put('on_status_updated')
 
-    def _handle_gripper_status_response(self, response, is_command_response):
+    def _handle_gripper_status_response(self, response):
         """Parse gripper status response and update status fields and events.
 
         Parameters
@@ -2600,9 +2628,7 @@ class Robot:
         self._gripper_status.error_status = status_flags[4]
         self._gripper_status.overload_error = status_flags[5]
 
-        # We only want to detect status response on command port, or else it is not possible to have synchronous
-        # response on GetStatusGripper
-        if is_command_response:
+        if self._is_get_sync():
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
 
@@ -2689,6 +2715,35 @@ class Robot:
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
                 for accelerometer in self._robot_kinematics.rt_accelerometer.values():
                     accelerometer.enabled = True
+
+        # Make sure to clear values that we should no more received
+        self._robot_kinematics._clear_if_disabled()
+
+    def _handle_sync_response(self, response):
+        """Parse robot response to "Sync" request
+           This class uses the "Sync" request/response to ensure synchronous "Get" operations have received the
+           expected response from the robot (and not a response/event sent by the robot prior to our "Get" request).
+
+        Parameters
+        ----------
+        response : Message object
+            Sync response to parse and handle.
+
+        """
+        assert response.id == mx_def.MX_ST_SYNC
+
+        self._rx_sync = _string_to_numbers(response.data)[0]
+
+    def _is_get_sync(self):
+        """Tells if we're in sync with the latest "get" operation (i.e. we've received the response to the most recent
+           "Sync" request to the robot, meaning that the "get" response we just got is up-to-date)
+
+        Returns
+        -------
+        boolean
+            True if "in sync" ("get" response we just received matches the "get" request we've just made)
+        """
+        return (self._rx_sync == self._tx_sync)
 
 
 class RobotCallbacks:
@@ -2793,7 +2848,8 @@ class TimestampedData:
         """Clear timestamp and data if not reported by the robot (not part of enabled real-time monitoring events)
         """
         if not self.enabled:
-            self = TimestampedData.zeros(len(self.data))
+            self.timestamp = 0
+            self.data = TimestampedData.zeros(len(self.data)).data
 
     def update_from_csv(self, input_string):
         """Update from comma-separated string, only if timestamp is newer.
@@ -3053,6 +3109,8 @@ class RobotInfo:
         Serial identifier of robot.
     rt_message_capable : bool
         True if robot is capable of sending real-time monitoring messages.
+    rt_on_ctrl_port_capable : bool
+        True if robot is capable of sending real-time monitoring messages on control port (SetCtrlPortMonitoring)
     num_joints : int
         Number of joints on the robot.
 """
@@ -3073,6 +3131,7 @@ class RobotInfo:
         self.fw_patch_num = fw_patch_num
         self.serial = serial
         self.rt_message_capable = False
+        self.rt_on_ctrl_port_capable = False
 
         if self.model == 'Meca500':
             self.num_joints = 6
@@ -3082,6 +3141,48 @@ class RobotInfo:
             self.num_joints = 1
         else:
             raise ValueError('Invalid robot model: {}'.format(self.model))
+
+        # Check if this robot supports real-time monitoring events
+        if self.is_at_least(8, 4):
+            self.rt_message_capable = True
+        # Check if this robot supports real-time monitoring on control port (8.4.3+)
+        if self.is_at_least(8, 4, 3):
+            self.rt_on_ctrl_port_capable = True
+
+    def is_at_least(self, major, minor=0, patch=0):
+        """Tells if this RobotInfo instance's version is at least the specified version
+
+        Parameters
+        ----------
+        major : integer
+            Minimum desired major version
+        minor : integer
+            Minimum desired minor version
+        patch : integer
+            Minimum desired patch version
+
+        Returns
+        -------
+        boolean
+            True if this RobotInfo instance's version is at least the specified version
+        """
+        # Check major
+        if self.fw_major_rev > major:
+            return True
+        elif self.fw_major_rev < major:
+            return False
+
+        # Same major, check minor
+        if self.fw_minor_rev > minor:
+            return True
+        elif self.fw_minor_rev < minor:
+            return False
+
+        # Same minor, check patch
+        if self.fw_patch_num >= patch:
+            return True
+
+        return False
 
     @classmethod
     def from_command_response_string(cls, input_string):
@@ -3456,540 +3557,3 @@ class _CallbackQueue():
 
         """
         return self._queue.get(block=block, timeout=timeout)
-
-
-# Map used to provide information about robot return codes
-robot_code_info = {
-    mx_def.MX_ST_BUFFER_FULL: {
-        "name": "MX_ST_BUFFER_FULL",
-        "is_error": True
-    },
-    mx_def.MX_ST_UNKNOWN_CMD: {
-        "name": "MX_ST_UNKNOWN_CMD",
-        "is_error": True
-    },
-    mx_def.MX_ST_SYNTAX_ERR: {
-        "name": "MX_ST_SYNTAX_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_ARG_ERR: {
-        "name": "MX_ST_ARG_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_NOT_ACTIVATED: {
-        "name": "MX_ST_NOT_ACTIVATED",
-        "is_error": True
-    },
-    mx_def.MX_ST_NOT_HOMED: {
-        "name": "MX_ST_NOT_HOMED",
-        "is_error": True
-    },
-    mx_def.MX_ST_JOINT_OVER_LIMIT: {
-        "name": "MX_ST_JOINT_OVER_LIMIT",
-        "is_error": True
-    },
-    mx_def.MX_ST_BLOCKED_BY_180_DEG_PROT: {
-        "name": "MX_ST_BLOCKED_BY_180_DEG_PROT",
-        "is_error": True
-    },
-    mx_def.MX_ST_ALREADY_ERR: {
-        "name": "MX_ST_ALREADY_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_SINGULARITY_ERR: {
-        "name": "MX_ST_SINGULARITY_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_ACTIVATION_ERR: {
-        "name": "MX_ST_ACTIVATION_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_HOMING_ERR: {
-        "name": "MX_ST_HOMING_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_MASTER_ERR: {
-        "name": "MX_ST_MASTER_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_OUT_OF_REACH: {
-        "name": "MX_ST_OUT_OF_REACH",
-        "is_error": True
-    },
-    mx_def.MX_ST_OFFLINE_SAVE_ERR: {
-        "name": "MX_ST_OFFLINE_SAVE_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_IGNORE_CMD_OFFLINE: {
-        "name": "MX_ST_IGNORE_CMD_OFFLINE",
-        "is_error": True
-    },
-    mx_def.MX_ST_MASTERING_NEEDED: {
-        "name": "MX_ST_MASTERING_NEEDED",
-        "is_error": True
-    },
-    mx_def.MX_ST_IMPOSSIBLE_RESET_ERR: {
-        "name": "MX_ST_IMPOSSIBLE_RESET_ERR",
-        "is_error": True
-    },
-    mx_def.MX_ST_MUST_BE_DEACTIVATED: {
-        "name": "MX_ST_MUST_BE_DEACTIVATED",
-        "is_error": True
-    },
-    mx_def.MX_ST_SIM_MUST_DEACTIVATED: {
-        "name": "MX_ST_SIM_MUST_DEACTIVATED",
-        "is_error": True
-    },
-    mx_def.MX_ST_OFFLINE_FULL: {
-        "name": "MX_ST_OFFLINE_FULL",
-        "is_error": True
-    },
-    mx_def.MX_ST_ALREADY_SAVING: {
-        "name": "MX_ST_ALREADY_SAVING",
-        "is_error": True
-    },
-    mx_def.MX_ST_ILLEGAL_WHILE_SAVING: {
-        "name": "MX_ST_ILLEGAL_WHILE_SAVING",
-        "is_error": True
-    },
-    mx_def.MX_ST_NO_GRIPPER: {
-        "name": "MX_ST_NO_GRIPPER",
-        "is_error": True
-    },
-    mx_def.MX_ST_CMD_FAILED: {
-        "name": "MX_ST_CMD_FAILED",
-        "is_error": True
-    },
-    mx_def.MX_ST_ACTIVATED: {
-        "name": "MX_ST_ACTIVATED",
-        "is_error": False
-    },
-    mx_def.MX_ST_ALREADY_ACTIVATED: {
-        "name": "MX_ST_ALREADY_ACTIVATED",
-        "is_error": False
-    },
-    mx_def.MX_ST_HOME_DONE: {
-        "name": "MX_ST_HOME_DONE",
-        "is_error": False
-    },
-    mx_def.MX_ST_HOME_ALREADY: {
-        "name": "MX_ST_HOME_ALREADY",
-        "is_error": False
-    },
-    mx_def.MX_ST_DEACTIVATED: {
-        "name": "MX_ST_DEACTIVATED",
-        "is_error": False
-    },
-    mx_def.MX_ST_ERROR_RESET: {
-        "name": "MX_ST_ERROR_RESET",
-        "is_error": False
-    },
-    mx_def.MX_ST_NO_ERROR_RESET: {
-        "name": "MX_ST_NO_ERROR_RESET",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_STATUS_ROBOT: {
-        "name": "MX_ST_GET_STATUS_ROBOT",
-        "is_error": False
-    },
-    mx_def.MX_ST_BRAKES_OFF: {
-        "name": "MX_ST_BRAKES_OFF",
-        "is_error": False
-    },
-    mx_def.MX_ST_MASTER_DONE: {
-        "name": "MX_ST_MASTER_DONE",
-        "is_error": False
-    },
-    mx_def.MX_ST_BRAKES_ON: {
-        "name": "MX_ST_BRAKES_ON",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_WRF: {
-        "name": "MX_ST_GET_WRF",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_TRF: {
-        "name": "MX_ST_GET_TRF",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_JOINTS: {
-        "name": "MX_ST_GET_JOINTS",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_POSE: {
-        "name": "MX_ST_GET_POSE",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_AUTO_CONF: {
-        "name": "MX_ST_GET_AUTO_CONF",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_CONF: {
-        "name": "MX_ST_GET_CONF",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_AUTO_CONF_TURN: {
-        "name": "MX_ST_GET_AUTO_CONF_TURN",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_CONF_TURN: {
-        "name": "MX_ST_GET_CONF_TURN",
-        "is_error": False
-    },
-    mx_def.MX_ST_PAUSE_MOTION: {
-        "name": "MX_ST_PAUSE_MOTION",
-        "is_error": False
-    },
-    mx_def.MX_ST_RESUME_MOTION: {
-        "name": "MX_ST_RESUME_MOTION",
-        "is_error": False
-    },
-    mx_def.MX_ST_CLEAR_MOTION: {
-        "name": "MX_ST_CLEAR_MOTION",
-        "is_error": False
-    },
-    mx_def.MX_ST_SIM_ON: {
-        "name": "MX_ST_SIM_ON",
-        "is_error": False
-    },
-    mx_def.MX_ST_SIM_OFF: {
-        "name": "MX_ST_SIM_OFF",
-        "is_error": False
-    },
-    mx_def.MX_ST_EOM_ON: {
-        "name": "MX_ST_EOM_ON",
-        "is_error": False
-    },
-    mx_def.MX_ST_EOM_OFF: {
-        "name": "MX_ST_EOM_OFF",
-        "is_error": False
-    },
-    mx_def.MX_ST_EOB_ON: {
-        "name": "MX_ST_EOB_ON",
-        "is_error": False
-    },
-    mx_def.MX_ST_EOB_OFF: {
-        "name": "MX_ST_EOB_OFF",
-        "is_error": False
-    },
-    mx_def.MX_ST_START_SAVING: {
-        "name": "MX_ST_START_SAVING",
-        "is_error": False
-    },
-    mx_def.MX_ST_N_CMD_SAVED: {
-        "name": "MX_ST_N_CMD_SAVED",
-        "is_error": False
-    },
-    mx_def.MX_ST_OFFLINE_START: {
-        "name": "MX_ST_OFFLINE_START",
-        "is_error": False
-    },
-    mx_def.MX_ST_OFFLINE_LOOP_ON: {
-        "name": "MX_ST_OFFLINE_LOOP_ON",
-        "is_error": False
-    },
-    mx_def.MX_ST_OFFLINE_LOOP_OFF: {
-        "name": "MX_ST_OFFLINE_LOOP_OFF",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_STATUS_GRIPPER: {
-        "name": "MX_ST_GET_STATUS_GRIPPER",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_CMD_PENDING_COUNT: {
-        "name": "MX_ST_GET_CMD_PENDING_COUNT",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_FW_VERSION: {
-        "name": "MX_ST_GET_FW_VERSION",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_FW_VERSION_FULL: {
-        "name": "MX_ST_GET_FW_VERSION_FULL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_ROBOT_SERIAL: {
-        "name": "MX_ST_GET_ROBOT_SERIAL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_PRODUCT_TYPE: {
-        "name": "MX_ST_GET_PRODUCT_TYPE",
-        "is_error": False
-    },
-    mx_def.MX_ST_CMD_SUCCESSFUL: {
-        "name": "MX_ST_CMD_SUCCESSFUL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_JOINT_LIMITS: {
-        "name": "MX_ST_GET_JOINT_LIMITS",
-        "is_error": False
-    },
-    mx_def.MX_ST_SET_JOINT_LIMITS: {
-        "name": "MX_ST_SET_JOINT_LIMITS",
-        "is_error": False
-    },
-    mx_def.MX_ST_SET_JOINT_LIMITS_CFG: {
-        "name": "MX_ST_SET_JOINT_LIMITS_CFG",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_JOINT_LIMITS_CFG: {
-        "name": "MX_ST_GET_JOINT_LIMITS_CFG",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_ROBOT_NAME: {
-        "name": "MX_ST_GET_ROBOT_NAME",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_ROBOT_KIN_MODEL: {
-        "name": "MX_ST_GET_ROBOT_KIN_MODEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_ROBOT_DH_MODEL: {
-        "name": "MX_ST_GET_ROBOT_DH_MODEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_JOINT_OFFSET: {
-        "name": "MX_ST_GET_JOINT_OFFSET",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_MODEL_JOINT_LIMITS: {
-        "name": "MX_ST_GET_MODEL_JOINT_LIMITS",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_MOTION_OPTIONS: {
-        "name": "MX_ST_GET_MOTION_OPTIONS",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_MONITORING_INTERVAL: {
-        "name": "MX_ST_GET_MONITORING_INTERVAL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_REAL_TIME_MONITORING: {
-        "name": "MX_ST_GET_REAL_TIME_MONITORING",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_STATUS_EVENTS: {
-        "name": "MX_ST_GET_STATUS_EVENTS",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_NETWORK_OPTIONS: {
-        "name": "MX_ST_GET_NETWORK_OPTIONS",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_RTC: {
-        "name": "MX_ST_GET_RTC",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_BLENDING: {
-        "name": "MX_ST_GET_BLENDING",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_VEL_TIMEOUT: {
-        "name": "MX_ST_GET_VEL_TIMEOUT",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_JOINT_VEL: {
-        "name": "MX_ST_GET_JOINT_VEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_JOINT_ACC: {
-        "name": "MX_ST_GET_JOINT_ACC",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_CART_LIN_VEL: {
-        "name": "MX_ST_GET_CART_LIN_VEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_CART_ANG_VEL: {
-        "name": "MX_ST_GET_CART_ANG_VEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_CART_ACC: {
-        "name": "MX_ST_GET_CART_ACC",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_CHECKPOINT: {
-        "name": "MX_ST_GET_CHECKPOINT",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_GRIPPER_FORCE: {
-        "name": "MX_ST_GET_GRIPPER_FORCE",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_GRIPPER_VEL: {
-        "name": "MX_ST_GET_GRIPPER_VEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_TORQUE_LIMITS_CFG: {
-        "name": "MX_ST_GET_TORQUE_LIMITS_CFG",
-        "is_error": False
-    },
-    mx_def.MX_ST_GET_TORQUE_LIMITS: {
-        "name": "MX_ST_GET_TORQUE_LIMITS",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_TARGET_JOINT_POS: {
-        "name": "MX_ST_RT_TARGET_JOINT_POS",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_TARGET_CART_POS: {
-        "name": "MX_ST_RT_TARGET_CART_POS",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_TARGET_JOINT_VEL: {
-        "name": "MX_ST_RT_TARGET_JOINT_VEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_TARGET_JOINT_TORQ: {
-        "name": "MX_ST_RT_TARGET_JOINT_TORQ",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_TARGET_CART_VEL: {
-        "name": "MX_ST_RT_TARGET_CART_VEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_TARGET_CONF: {
-        "name": "MX_ST_RT_TARGET_CONF",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_TARGET_CONF_TURN: {
-        "name": "MX_ST_RT_TARGET_CONF_TURN",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_JOINT_POS: {
-        "name": "MX_ST_RT_JOINT_POS",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_CART_POS: {
-        "name": "MX_ST_RT_CART_POS",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_JOINT_VEL: {
-        "name": "MX_ST_RT_JOINT_VEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_JOINT_TORQ: {
-        "name": "MX_ST_RT_JOINT_TORQ",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_CART_VEL: {
-        "name": "MX_ST_RT_CART_VEL",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_CONF: {
-        "name": "MX_ST_RT_CONF",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_CONF_TURN: {
-        "name": "MX_ST_RT_CONF_TURN",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_ACCELEROMETER: {
-        "name": "MX_ST_RT_ACCELEROMETER",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_GRIPPER_TORQ: {
-        "name": "MX_ST_RT_GRIPPER_TORQ",
-        "is_error": False
-    },
-    mx_def.MX_ST_RT_CYCLE_END: {
-        "name": "MX_ST_RT_CYCLE_END",
-        "is_error": False
-    },
-    mx_def.MX_ST_CONNECTED: {
-        "name": "MX_ST_CONNECTED",
-        "is_error": False
-    },
-    mx_def.MX_ST_USER_ALREADY: {
-        "name": "MX_ST_USER_ALREADY",
-        "is_error": True
-    },
-    mx_def.MX_ST_UPGRADE_IN_PROGRESS: {
-        "name": "MX_ST_UPGRADE_IN_PROGRESS",
-        "is_error": False
-    },
-    mx_def.MX_ST_CMD_TOO_LONG: {
-        "name": "MX_ST_CMD_TOO_LONG",
-        "is_error": True
-    },
-    mx_def.MX_ST_EOM: {
-        "name": "MX_ST_EOM",
-        "is_error": False
-    },
-    mx_def.MX_ST_ERROR_MOTION: {
-        "name": "MX_ST_ERROR_MOTION",
-        "is_error": True
-    },
-    mx_def.MX_ST_INIT_FAILED: {
-        "name": "MX_ST_INIT_FAILED",
-        "is_error": True
-    },
-    mx_def.MX_ST_EOB: {
-        "name": "MX_ST_EOB",
-        "is_error": False
-    },
-    mx_def.MX_ST_END_OFFLINE: {
-        "name": "MX_ST_END_OFFLINE",
-        "is_error": False
-    },
-    mx_def.MX_ST_CANT_SAVE_OFFLINE: {
-        "name": "MX_ST_CANT_SAVE_OFFLINE",
-        "is_error": True
-    },
-    mx_def.MX_ST_IGNORING_CMD: {
-        "name": "MX_ST_IGNORING_CMD",
-        "is_error": True
-    },
-    mx_def.MX_ST_NO_OFFLINE_SAVED: {
-        "name": "MX_ST_NO_OFFLINE_SAVED",
-        "is_error": True
-    },
-    mx_def.MX_ST_OFFLINE_LOOP: {
-        "name": "MX_ST_OFFLINE_LOOP",
-        "is_error": False
-    },
-    mx_def.MX_ST_ERROR_GRIPPER: {
-        "name": "MX_ST_ERROR_GRIPPER",
-        "is_error": True
-    },
-    mx_def.MX_ST_MAINTENANCE_CHECK: {
-        "name": "MX_ST_MAINTENANCE_CHECK",
-        "is_error": True
-    },
-    mx_def.MX_ST_INTERNAL_ERROR: {
-        "name": "MX_ST_INTERNAL_ERROR",
-        "is_error": True
-    },
-    mx_def.MX_ST_EXCESSIVE_TRQ: {
-        "name": "MX_ST_EXCESSIVE_TRQ",
-        "is_error": True
-    },
-    mx_def.MX_ST_CHECKPOINT_REACHED: {
-        "name": "MX_ST_CHECKPOINT_REACHED",
-        "is_error": False
-    },
-    mx_def.MX_ST_TEXT_API_ERROR: {
-        "name": "MX_ST_TEXT_API_ERROR",
-        "is_error": True
-    },
-    mx_def.MX_ST_PSTOP: {
-        "name": "MX_ST_PSTOP",
-        "is_error": True
-    },
-    mx_def.MX_ST_NO_VALID_CFG: {
-        "name": "MX_ST_NO_VALID_CFG",
-        "is_error": True
-    },
-    mx_def.MX_ST_TRACE_LVL_CHANGED: {
-        "name": "MX_ST_TRACE_LVL_CHANGED",
-        "is_error": False
-    },
-    mx_def.MX_ST_TCP_DUMP_STARTED: {
-        "name": "MX_ST_TCP_DUMP_STARTED",
-        "is_error": False
-    },
-    mx_def.MX_ST_TCP_DUMP_DONE: {
-        "name": "MX_ST_TCP_DUMP_DONE",
-        "is_error": False
-    },
-}

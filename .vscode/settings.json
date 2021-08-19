@@ -4,6 +4,7 @@
         "ARDY",
         "DEACT",
         "INET",
+        "MONIT",
         "MOVELINRELTRF",
         "MOVELINRELWRF",
         "MOVELINVELTRF",
@@ -23,12 +24,13 @@
         "f'Logging",
         "filecmp",
         "heapq",
+        "integ",
         "ipaddress",
         "ipython",
         "mutex",
         "pytest",
-        "traj",
-        "qsize"
+        "qsize",
+        "traj"
     ],
     "python.linting.pycodestyleArgs": [
         "--max-line-length=120"
