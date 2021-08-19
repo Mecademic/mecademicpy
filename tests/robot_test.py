@@ -93,7 +93,7 @@ def connect_robot_helper(robot: mdr.Robot,
         if supports_rt_monitoring:
             expected_commands.append('GetRealTimeMonitoring')
             robot_responses.append(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
-            expected_commands.append('SetCtrlPortMonitoring')
+            expected_commands.append('SetCtrlPortMonitoring(1)')
             robot_responses.append(mdr._Message(mx_def.MX_ST_SET_CTRL_PORT_MONIT, ''))
 
     # Start the fake robot thread (that will simulate response to expected requests)
@@ -851,29 +851,29 @@ def test_motion_commands(robot: mdr.Robot):
 def test_joint_moves(robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    test_args = [1, 2, 3, 4, 5, 6]
-    test_args_text = ','.join([str(x) for x in test_args])
+    fake_joint = fake_data(seed=1, length=6)
+    fake_joints_str = fake_string(seed=1, length=6)
 
-    robot.MoveJoints(*test_args)
+    robot.MoveJoints(*fake_joint)
     text_command = robot._command_tx_queue.get(block=True, timeout=1)
     assert text_command.find('MoveJoints') == 0
-    assert text_command.find(test_args_text) != -1
+    assert text_command.find(fake_joints_str) != -1
 
     with pytest.raises(ValueError):
         robot.MoveJoints(1, 2, 3)
 
-    robot.MoveJointsRel(*test_args)
+    robot.MoveJointsRel(*fake_joint)
     text_command = robot._command_tx_queue.get(block=True, timeout=1)
     assert text_command.find('MoveJointsRel') == 0
-    assert text_command.find(test_args_text) != -1
+    assert text_command.find(fake_joints_str) != -1
 
     with pytest.raises(ValueError):
         robot.MoveJointsRel(1, 2, 3)
 
-    robot.MoveJointsVel(*test_args)
+    robot.MoveJointsVel(*fake_joint)
     text_command = robot._command_tx_queue.get(block=True, timeout=1)
     assert text_command.find('MoveJointsVel') == 0
-    assert text_command.find(test_args_text) != -1
+    assert text_command.find(fake_joints_str) != -1
 
     with pytest.raises(ValueError):
         robot.MoveJointsVel(1, 2, 3)
@@ -932,23 +932,25 @@ def test_synchronous_gets(robot: mdr.Robot):
         robot.GetRtTargetCartPos(synchronous_update=True, timeout=0)
 
 
+# Helper functions for generating fake data for simulated functions like GetJoints
+def fake_data(seed, length=6):
+    return [seed] * length
+
+
+def fake_string(seed, length=6):
+    return ','.join([str(x) for x in fake_data(seed, length)])
+
+
 # Test that get commands correctly return timestamps.
 def test_synchronous_gets_legacy(robot: mdr.Robot):
     # Use a connected response that indicate a robot that does not support real-time monitoring
     connect_robot_helper(robot, supports_rt_monitoring=False)
 
-    # Helper functions for generating fake data.
-    def fake_data(seed, length=6):
-        return [seed] * length
-
-    def fake_string(seed, length=6):
-        return ','.join([str(x) for x in fake_data(seed, length)])
-
     #
     # Test legacy messages:
     #
-    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(1)))
-    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(1)))
+    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(seed=1)))
+    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(seed=1)))
 
     # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdr._TERMINATE)
@@ -961,32 +963,32 @@ def test_synchronous_gets_legacy(robot: mdr.Robot):
     with pytest.raises(mdr.InvalidStateError):
         robot.GetRtTargetCartPos(include_timestamp=True)
 
-    robot.GetRtTargetJointPos(include_timestamp=False) == fake_data(1)
-    robot.GetRtTargetCartPos(include_timestamp=False) == fake_data(1)
+    robot.GetRtTargetJointPos(include_timestamp=False) == fake_data(seed=1)
+    robot.GetRtTargetCartPos(include_timestamp=False) == fake_data(seed=1)
 
     assert not robot.GetRobotInfo().rt_message_capable
 
     # Test synchronous gets without RT messages.
     expected_command = 'GetJoints'
-    robot_response = mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(2))
+    robot_response = mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(seed=2))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
 
     fake_robot.start()
 
-    assert robot.GetRtTargetJointPos(synchronous_update=True, timeout=1) == fake_data(2)
+    assert robot.GetRtTargetJointPos(synchronous_update=True, timeout=1) == fake_data(seed=2)
     fake_robot.join()
 
     expected_command = 'GetPose'
-    robot_response = mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(2))
+    robot_response = mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(seed=2))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
 
     fake_robot.start()
 
-    assert robot.GetRtTargetCartPos(synchronous_update=True, timeout=1) == fake_data(2)
+    assert robot.GetRtTargetCartPos(synchronous_update=True, timeout=1) == fake_data(seed=2)
     fake_robot.join()
 
 
@@ -1035,20 +1037,26 @@ def test_monitor_mode(robot: mdr.Robot):
     # Check that the Meca500 response was correctly parsed to have 6 joints.
     assert robot.GetRobotInfo().num_joints == 6
 
+    # Prepare test data
+    fake_joint = fake_data(seed=1, length=6)
+    fake_joints_str = fake_string(seed=1, length=6)
+    fake_pose = fake_data(seed=2, length=6)
+    fake_pose_str = fake_string(seed=2, length=6)
+
     # Send test messages.
-    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, '1234, 1, 2, 3, 4, 5, 6'))
-    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, '1234, 7, 8, 9, 10, 11, 12'))
+    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, '1234, ' + fake_joints_str))
+    robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, '2345, ' + fake_pose_str))
 
     # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdr._TERMINATE)
     robot._monitor_handler_thread.join(timeout=5)
 
     # Check that these gets do not raise an exception.
-    assert robot.GetRtTargetJointPos() == [1, 2, 3, 4, 5, 6]
-    assert robot.GetRtTargetCartPos() == [7, 8, 9, 10, 11, 12]
+    assert robot.GetRtTargetJointPos() == fake_joint
+    assert robot.GetRtTargetCartPos() == fake_pose
 
     with pytest.raises(mdr.InvalidStateError):
-        robot.MoveJoints(1, 2, 3, 4, 5, 6)
+        robot.MoveJoints(*fake_joint)
 
 
 # Test the sending and receiving of custom commands.
@@ -1087,43 +1095,38 @@ def robot_trajectory_files_identical(file_path_1, file_path_2):
 def test_file_logger(tmp_path, robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    # The following two functions are used to mock up data to be logged.
-    def fake_data(seed, length=6):
-        return [seed] * length
-
-    def fake_string(seed, length=6):
-        return ','.join([str(x) for x in fake_data(seed, length)])
-
     # Manually set that the robot is rt-message-capable.
     robot._robot_info.rt_message_capable = True
     # Send status message to indicate that the robot is activated and homed, and idle.
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,1'))
+    robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
 
     # Start logging with context manager version of logger. record_time is False to for comparison with reference file.
     with robot.FileLogger(0.001, file_path=tmp_path, record_time=False):
         robot.MoveJoints(0, -60, 60, 0, 0, 0)
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
         for i in range(1, 4):
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(1)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(2)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_CONF, fake_string(3, 3)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_CONF_TURN, fake_string(4, 2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(seed=1)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(seed=2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_CONF, fake_string(seed=3, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_CONF_TURN, fake_string(seed=4, length=2)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_VEL, fake_string(5, 7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_VEL, fake_string(6, 7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CONF, fake_string(7, 4)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CONF_TURN, fake_string(8, 2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_VEL, fake_string(seed=5, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_VEL, fake_string(seed=6, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CONF, fake_string(seed=7, length=4)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CONF_TURN, fake_string(seed=8, length=2)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_JOINT_POS, fake_string(9, 7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CART_POS, fake_string(10, 7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_JOINT_VEL, fake_string(11, 7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_JOINT_TORQ, fake_string(12, 7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CART_VEL, fake_string(13, 7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_JOINT_POS, fake_string(seed=9, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CART_POS, fake_string(seed=10, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_JOINT_VEL, fake_string(seed=11, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_JOINT_TORQ, fake_string(seed=12, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CART_VEL, fake_string(seed=13, length=7)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CONF, fake_string(14, 4)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CONF_TURN, fake_string(15, 2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CONF, fake_string(seed=14, length=4)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CONF_TURN, fake_string(seed=15, length=2)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(16000, 3)))
+            robot._command_rx_queue.put(
+                mdr._Message(mx_def.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(seed=16000, length=3)))
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CYCLE_END, str(i)))
 
@@ -1156,13 +1159,6 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
 def test_file_logger_legacy(tmp_path, robot: mdr.Robot):
     connect_robot_helper(robot, supports_rt_monitoring=False)
 
-    # The following two functions are used to mock up data to be logged.
-    def fake_data(seed, length=6):
-        return [seed] * length
-
-    def fake_string(seed, length=6):
-        return ','.join([str(x) for x in fake_data(seed, length)])
-
     # This is explicitly set for readability, and is not necessary.
     robot._robot_info.rt_message_capable = False
     # Send status message to indicate that the robot is activated and homed, and idle.
@@ -1177,9 +1173,9 @@ def test_file_logger_legacy(tmp_path, robot: mdr.Robot):
     ):
         robot.MoveJoints(0, -60, 60, 0, 0, 0)
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
-        for i in range(1, 4):
-            robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(i)))
-            robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(i)))
+        for seed in range(1, 4):
+            robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(seed)))
+            robot._monitor_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(seed)))
 
         # Terminate queue and wait for thread to exit to ensure messages are processed.
         robot._monitor_rx_queue.put(mdr._TERMINATE)
