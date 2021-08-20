@@ -102,6 +102,202 @@ class TimeoutException(MecademicException):
     pass
 
 
+class RobotCallbacks:
+    """Class for storing possible status events for the Mecademic robot.
+
+    Attributes
+    ----------
+        on_connected : function object
+            Function to be called once connected.
+        on_disconnected : function object
+            Function to be called once disconnected.
+        on_status_updated : function object
+            Function to be called once robot status is updated.
+        on_status_gripper_updated : function object
+            Function to be called once gripper status is updated.
+        on_activated : function object
+            Function to be called once activated.
+        on_deactivated : function object
+            Function to be called once deactivated.
+        on_homed : function object
+            Function to be called once homing is complete.
+        on_error : function object
+            Function to be called if robot enters an error state.
+        on_error_reset : function object
+            Function to be called once error is reset.
+        on_p_stop : function object
+            Function to be called if PStop is activated.
+        on_p_stop_reset : function object
+            Function to be called if PStop is reset.
+        on_motion_paused : function object
+            Function to be called once motion is paused.
+        on_motion_cleared : function object
+            Function to be called once motion is cleared.
+        on_motion_resumed : function object
+            Function to be called once motion is resumed.
+        on_checkpoint_reached : function object
+            Function to be called if a checkpoint is reached.
+        on_activate_sim : function object
+            Function to be called once sim mode is activated.
+        on_deactivate_sim : function object
+            Function to be called once sim mode is deactivated.
+        on_command_message : function object
+            Function to be called each time a command response is received.
+        on_monitor_message : function object
+            Function to be called each time a monitor response is received.
+        on_offline_program_state : function object
+            Function to be called each time an offline program starts or fails to start.
+        on_end_of_cycle : function object
+            Function to be called each time end of cycle is reached"""
+
+    def __init__(self):
+        self.on_connected = None
+        self.on_disconnected = None
+
+        self.on_status_updated = None
+        self.on_status_gripper_updated = None
+
+        self.on_activated = None
+        self.on_deactivated = None
+
+        self.on_homed = None
+
+        self.on_error = None
+        self.on_error_reset = None
+        self.on_p_stop = None
+        self.on_p_stop_reset = None
+
+        self.on_motion_paused = None
+        self.on_motion_cleared = None
+        self.on_motion_resumed = None
+
+        self.on_checkpoint_reached = None
+
+        self.on_activate_sim = None
+        self.on_deactivate_sim = None
+
+        self.on_command_message = None
+        self.on_monitor_message = None
+
+        self.on_offline_program_state = None
+
+        self.on_end_of_cycle = None
+
+
+class InterruptableEvent:
+    """Extend default event class to also be able to unblock and raise an exception.
+
+    Attributes
+    ----------
+    id : int or None
+        Id for event.
+    _event : event object
+        A standard event-type object.
+    _lock : lock object
+        Used to ensure atomic operations.
+    _interrupted : boolean
+        If true, event is in an error state.
+    _interrupted_msg : string
+        User message that explains the reason of interruption
+"""
+
+    def __init__(self, id=None, data=None):
+        self._id = id
+        self._data = data
+        self._event = threading.Event()
+        self._lock = threading.Lock()
+        self._interrupted = False
+        self._interrupted_msg = ""
+
+    def wait(self, timeout: float = None):
+        """Block until event is set or should raise an exception (InterruptException or TimeoutException).
+
+        Attributes
+        ----------
+        timeout : float
+            Maximum duration to wait in seconds.
+
+        Return
+        ------
+        data : object
+            Return the data object (or None for events not returning any data)
+
+        """
+        wait_result = self._event.wait(timeout=timeout)
+        if self._interrupted:
+            if self._interrupted_msg != "":
+                raise InterruptException('Event received exception because ' + self._interrupted_msg)
+            else:
+                raise InterruptException('Event received exception, possibly because event will never be triggered.')
+        elif not wait_result:
+            raise TimeoutException()
+        return self._data
+
+    def set(self, data=None):
+        """Set the event and unblock all waits. Optionally modify data before setting.
+
+        """
+        with self._lock:
+            self._data = data
+            self._event.set()
+
+    def abort(self, message=""):
+        """Unblock any waits and raise an exception.
+
+        """
+        with self._lock:
+            if not self._event.is_set():
+                self._interrupted_msg = message
+                self._interrupted = True
+                self._event.set()
+
+    def clear(self):
+        """Reset the event to its initial state.
+
+        """
+        with self._lock:
+            self._interrupted = False
+            self._event.clear()
+
+    def is_set(self):
+        """Checks if the event is set.
+
+        Return
+        ------
+        boolean
+            False if event is not set or instance should '_interrupted'. True otherwise.
+
+        """
+        with self._lock:
+            if self._interrupted:
+                return False
+            else:
+                return self._event.is_set()
+
+    def clear_abort(self):
+        """Clears the abort.
+
+        """
+        with self._lock:
+            if self._interrupted:
+                self._interrupted = False
+                self._event.clear()
+
+    @property
+    def id(self):
+        """Make id a read-only property since it should not be changed after instantiation.
+
+        """
+        return self._id
+
+    @property
+    def data(self):
+        """Make data a read-only property and enforce that it is only assignable at construction or using set().
+
+        """
+        return self._data
+
+
 class Robot:
     """Class for controlling a Mecademic robot.
 
@@ -430,7 +626,7 @@ class Robot:
         return new_socket
 
     @staticmethod
-    def _handle_callbacks(logger, callback_queue, callbacks, timeout=None):
+    def _handle_callbacks(logger, callback_queue, callbacks, timeout: float = None):
         """Runs callbacks found in callback_queue.
 
         Parameters
@@ -469,7 +665,7 @@ class Robot:
 
     # General management functions.
 
-    def RegisterCallbacks(self, callbacks, run_callbacks_in_separate_thread):
+    def RegisterCallbacks(self, callbacks: RobotCallbacks, run_callbacks_in_separate_thread: bool):
         """Register callback functions to be executed.
 
         Parameters
@@ -536,11 +732,11 @@ class Robot:
 
     def Connect(
         self,
-        address=mx_def.MX_DEFAULT_ROBOT_IP,
-        enable_synchronous_mode=False,
-        disconnect_on_exception=True,
-        monitor_mode=False,
-        offline_mode=False,
+        address: str = mx_def.MX_DEFAULT_ROBOT_IP,
+        enable_synchronous_mode: bool = False,
+        disconnect_on_exception: bool = True,
+        monitor_mode: bool = False,
+        offline_mode: bool = False,
     ):
         """Attempt to connect to a physical Mecademic Robot.
 
@@ -678,7 +874,7 @@ class Robot:
         """
         return self._robot_events.on_connected.is_set()
 
-    def set_synchronous_mode(self, sync_mode=True):
+    def set_synchronous_mode(self, sync_mode: bool = True):
         """Enables synchronous mode. In this mode, all commands are blocking until robot's response is received.
            Note that this will apply to next API calls.
            So disabling synchronous mode will not not awake thread already awaiting on synchronous operations.
@@ -779,7 +975,7 @@ class Robot:
             self.WaitMotionCleared(timeout=self.default_timeout)
 
     @disconnect_on_exception
-    def MoveJoints(self, *args):
+    def MoveJoints(self, *args: list[float]):
         """Move the robot by specifying each joint's target angular position.
 
         Parameters
@@ -794,7 +990,7 @@ class Robot:
         self._send_motion_command('MoveJoints', args)
 
     @disconnect_on_exception
-    def MoveJointsRel(self, *args):
+    def MoveJointsRel(self, *args: list[float]):
         """Move the robot relative to current position by specifying each joint's offset angular position.
 
         Parameters
@@ -809,7 +1005,7 @@ class Robot:
         self._send_motion_command('MoveJointsRel', args)
 
     @disconnect_on_exception
-    def MoveJointsVel(self, *args):
+    def MoveJointsVel(self, *args: list[float]):
         """Moves joints to at desired velocities.
 
         Parameters
@@ -824,7 +1020,7 @@ class Robot:
         self._send_motion_command('MoveJointsVel', args)
 
     @disconnect_on_exception
-    def MovePose(self, x, y, z, alpha, beta, gamma):
+    def MovePose(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Move robot's tool to an absolute Cartesian position (non-linear move, but all joints arrive simultaneously).
 
         Parameters
@@ -838,7 +1034,7 @@ class Robot:
         self._send_motion_command('MovePose', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLin(self, x, y, z, alpha, beta, gamma):
+    def MoveLin(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Linearly move robot's tool to an absolute Cartesian position.
 
         Parameters
@@ -852,7 +1048,7 @@ class Robot:
         self._send_motion_command('MoveLin', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinRelTRF(self, x, y, z, alpha, beta, gamma):
+    def MoveLinRelTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Linearly move robot's tool to a Cartesian position relative to current TRF position.
 
         Parameters
@@ -866,7 +1062,7 @@ class Robot:
         self._send_motion_command('MoveLinRelTRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinRelWRF(self, x, y, z, alpha, beta, gamma):
+    def MoveLinRelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Linearly move robot's tool to a Cartesian position relative to a reference frame that has the same
         orientation.
 
@@ -881,7 +1077,7 @@ class Robot:
         self._send_motion_command('MoveLinRelWRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinVelTRF(self, x, y, z, alpha, beta, gamma):
+    def MoveLinVelTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Move robot's by Cartesian velocity relative to the TRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).
@@ -897,7 +1093,7 @@ class Robot:
         self._send_motion_command('MoveLinVelTRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinVelWRF(self, x, y, z, alpha, beta, gamma):
+    def MoveLinVelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Move robot's by Cartesian velocity relative to the WRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).
@@ -913,7 +1109,7 @@ class Robot:
         self._send_motion_command('MoveLinVelWRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def SetVelTimeout(self, t):
+    def SetVelTimeout(self, t: float):
         """Maximum time the robot will continue to move after a velocity move command was sent.
 
         (Can be stopped earlier by sending a velocity command with 0 velocity values.)
@@ -927,7 +1123,7 @@ class Robot:
         self._send_motion_command('SetVelTimeout', [t])
 
     @disconnect_on_exception
-    def SetConf(self, shoulder, elbow, wrist):
+    def SetConf(self, shoulder: int, elbow: int, wrist: int):
         """Manually set inverse kinematics options (and disable auto-conf).
 
         Parameters
@@ -943,7 +1139,7 @@ class Robot:
         self._send_motion_command('SetConf', [shoulder, elbow, wrist])
 
     @disconnect_on_exception
-    def SetAutoConf(self, e):
+    def SetAutoConf(self, e: int):
         """Enable or disable auto-conf (automatic selection of inverse kinematics options).
 
         Parameters
@@ -955,7 +1151,7 @@ class Robot:
         self._send_motion_command('SetAutoConf', [int(e)])
 
     @disconnect_on_exception
-    def SetConfTurn(self, n):
+    def SetConfTurn(self, n: int):
         """Manually set the last joint turn configuration parameter.
 
         Parameters
@@ -967,7 +1163,7 @@ class Robot:
         self._send_motion_command('SetConfTurn', [n])
 
     @disconnect_on_exception
-    def SetAutoConfTurn(self, e):
+    def SetAutoConfTurn(self, e: int):
         """Enable or disable auto-conf (automatic selection of inverse kinematics options) for joint 6..
 
         Parameters
@@ -979,7 +1175,7 @@ class Robot:
         self._send_motion_command('SetAutoConfTurn', [int(e)])
 
     @disconnect_on_exception
-    def SetBlending(self, p):
+    def SetBlending(self, p: float):
         """Set percentage of blending between consecutive movements in the same mode (velocity or cartesian).
 
         Note: There can't be blending between joint mode and Cartesian mode moves.
@@ -993,7 +1189,7 @@ class Robot:
         self._send_motion_command('SetBlending', [p])
 
     @disconnect_on_exception
-    def SetCartAcc(self, p):
+    def SetCartAcc(self, p: float):
         """Set target acceleration (linear and angular) during MoveLin commands.
 
         Parameters
@@ -1005,7 +1201,7 @@ class Robot:
         self._send_motion_command('SetCartAcc', [p])
 
     @disconnect_on_exception
-    def SetCartAngVel(self, w):
+    def SetCartAngVel(self, w: float):
         """Set maximum angular velocity during MoveLin commands.
 
         Parameters
@@ -1017,7 +1213,7 @@ class Robot:
         self._send_motion_command('SetCartAngVel', [w])
 
     @disconnect_on_exception
-    def SetCartLinVel(self, w):
+    def SetCartLinVel(self, w: float):
         """Set maximum linear velocity during MoveLin commands.
 
         Note: Actual linear velocity may be lower if necessary to avoid exceeding maximum angular velocity.
@@ -1045,7 +1241,7 @@ class Robot:
         self._send_motion_command('GripperClose')
 
     @disconnect_on_exception
-    def MoveGripper(self, state=GRIPPER_OPEN):
+    def MoveGripper(self, state: bool = GRIPPER_OPEN):
         """Open or close the gripper.
 
         Corresponds to text API calls "_GripperOpen" / "GripperClose".
@@ -1062,7 +1258,7 @@ class Robot:
             self.GripperClose()
 
     @disconnect_on_exception
-    def SetGripperForce(self, p):
+    def SetGripperForce(self, p: float):
         """Set the gripper's force in percent.
 
         Parameters
@@ -1074,7 +1270,7 @@ class Robot:
         self._send_motion_command('SetGripperForce', [p])
 
     @disconnect_on_exception
-    def SetGripperVel(self, p):
+    def SetGripperVel(self, p: float):
         """Set the gripper's velocity in percent.
 
         Parameters
@@ -1086,7 +1282,7 @@ class Robot:
         self._send_motion_command('SetGripperVel', [p])
 
     @disconnect_on_exception
-    def SetJointAcc(self, p):
+    def SetJointAcc(self, p: float):
         """Set target joint acceleration during MoveJoints commands.
 
         Parameters
@@ -1098,7 +1294,7 @@ class Robot:
         self._send_motion_command('SetJointAcc', [p])
 
     @disconnect_on_exception
-    def SetJointVel(self, p):
+    def SetJointVel(self, p: float):
         """Set target joint velocity during MoveJoints commands.
 
         Parameters
@@ -1110,7 +1306,7 @@ class Robot:
         self._send_motion_command('SetJointVel', [p])
 
     @disconnect_on_exception
-    def SetTRF(self, x, y, z, alpha, beta, gamma):
+    def SetTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Set the TRF (tool reference frame) Cartesian position.
 
         Parameters
@@ -1124,7 +1320,7 @@ class Robot:
         self._send_motion_command('SetTRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def SetWRF(self, x, y, z, alpha, beta, gamma):
+    def SetWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Set the WRF (world reference frame) Cartesian position.
 
         Parameters
@@ -1138,7 +1334,7 @@ class Robot:
         self._send_motion_command('SetWRF', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def SetCheckpoint(self, n):
+    def SetCheckpoint(self, n: int):
         """Set checkpoint with desired id.
 
         Parameters
@@ -1158,7 +1354,7 @@ class Robot:
             return self._set_checkpoint_impl(n)
 
     @disconnect_on_exception
-    def ExpectExternalCheckpoint(self, n):
+    def ExpectExternalCheckpoint(self, n: int):
         """Expect the robot to receive a checkpoint with given id (e.g. from saved program).
 
         Parameters
@@ -1178,7 +1374,7 @@ class Robot:
             return self._set_checkpoint_impl(n, send_to_robot=False)
 
     @disconnect_on_exception
-    def WaitForAnyCheckpoint(self, timeout=None):
+    def WaitForAnyCheckpoint(self, timeout: float = None):
         """Pause program execution until any checkpoint has been received from the robot.
 
         Parameters
@@ -1196,7 +1392,7 @@ class Robot:
         event.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitConnected(self, timeout=None):
+    def WaitConnected(self, timeout: float = None):
         """Pause program execution until robot is disconnected.
 
         Parameters
@@ -1207,7 +1403,7 @@ class Robot:
         self._robot_events.on_connected.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitDisconnected(self, timeout=None):
+    def WaitDisconnected(self, timeout: float = None):
         """Pause program execution until the robot is disconnected.
 
         Parameters
@@ -1218,7 +1414,7 @@ class Robot:
         self._robot_events.on_disconnected.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitActivated(self, timeout=None):
+    def WaitActivated(self, timeout: float = None):
         """Pause program execution until the robot is activated.
 
         Parameters
@@ -1229,7 +1425,7 @@ class Robot:
         self._robot_events.on_activated.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitDeactivated(self, timeout=None):
+    def WaitDeactivated(self, timeout: float = None):
         """Pause program execution until the robot is deactivated.
 
         Parameters
@@ -1240,7 +1436,7 @@ class Robot:
         self._robot_events.on_deactivated.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitHomed(self, timeout=None):
+    def WaitHomed(self, timeout: float = None):
         """Pause program execution until the robot is homed.
 
         Parameters
@@ -1251,7 +1447,7 @@ class Robot:
         self._robot_events.on_homed.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitSimActivated(self, timeout=None):
+    def WaitSimActivated(self, timeout: float = None):
         """Pause program execution until the robot simulation mode is activated.
 
         Parameters
@@ -1263,7 +1459,7 @@ class Robot:
         self._robot_events.on_activate_sim.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitForError(self, timeout=None):
+    def WaitForError(self, timeout: float = None):
         """Pause program execution until the robot is in error state.
 
         Parameters
@@ -1274,7 +1470,7 @@ class Robot:
         self._robot_events.on_error.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitErrorReset(self, timeout=None):
+    def WaitErrorReset(self, timeout: float = None):
         """Pause program execution until the robot is not in an error state.
 
         Parameters
@@ -1285,7 +1481,7 @@ class Robot:
         self._robot_events.on_error_reset.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitSimDeactivated(self, timeout=None):
+    def WaitSimDeactivated(self, timeout: float = None):
         """Pause program execution until the robot simulation mode is deactivated.
 
         Parameters
@@ -1296,7 +1492,7 @@ class Robot:
         self._robot_events.on_deactivate_sim.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitMotionResumed(self, timeout=None):
+    def WaitMotionResumed(self, timeout: float = None):
         """Pause program execution until the robot motion is resumed.
 
         Parameters
@@ -1307,7 +1503,7 @@ class Robot:
         self._robot_events.on_motion_resumed.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitMotionPaused(self, timeout=None):
+    def WaitMotionPaused(self, timeout: float = None):
         """Pause program execution until the robot motion is paused.
 
         Parameters
@@ -1318,7 +1514,7 @@ class Robot:
         self._robot_events.on_motion_paused.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitMotionCleared(self, timeout=None):
+    def WaitMotionCleared(self, timeout: float = None):
         """Pause program execution until all pending request to clear motion have been acknowledged.
 
         Parameters
@@ -1330,7 +1526,7 @@ class Robot:
         self._robot_events.on_motion_cleared.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitEndOfCycle(self, timeout=None):
+    def WaitEndOfCycle(self, timeout: float = None):
         """Pause program execution until all messages in a message cycle are received
 
         Parameters
@@ -1344,7 +1540,7 @@ class Robot:
         self._robot_events.on_end_of_cycle.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitIdle(self, timeout=None):
+    def WaitIdle(self, timeout: float = None):
         """Pause program execution until robot is idle.
 
         Parameters
@@ -1394,7 +1590,7 @@ class Robot:
             self._robot_events.on_p_stop_reset.wait()
 
     @disconnect_on_exception
-    def Delay(self, t):
+    def Delay(self, t: float):
         """Set a delay between motion commands.
 
         Parameters
@@ -1415,7 +1611,7 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def SendCustomCommand(self, command, expected_responses=None):
+    def SendCustomCommand(self, command: str, expected_responses: bool = None):
         """Send custom command to robot.
 
         Parameters
@@ -1435,7 +1631,7 @@ class Robot:
         return self._send_custom_command(command, expected_responses, skip_internal_check=True)
 
     @disconnect_on_exception
-    def StartOfflineProgram(self, n, timeout=None):
+    def StartOfflineProgram(self, n: int, timeout: float = None):
         """Start an offline program.
 
         Offline programs need to be recorded using the robot's Web Portal (or text API).
@@ -1463,7 +1659,10 @@ class Robot:
     # Non-motion commands.
 
     @disconnect_on_exception
-    def GetRtTargetJointPos(self, include_timestamp=False, synchronous_update=False, timeout=None):
+    def GetRtTargetJointPos(self,
+                            include_timestamp: bool = False,
+                            synchronous_update: bool = False,
+                            timeout: float = None):
         """Returns the real-time target joint positions of the robot.
 
         Parameters
@@ -1500,12 +1699,15 @@ class Robot:
 
             return copy.deepcopy(self._robot_rt_data.rt_target_joint_pos.data)
 
-    def GetJoints(self, synchronous_update=False, timeout=None):
+    def GetJoints(self, synchronous_update: bool = False, timeout: float = None):
         """Legacy command. Please use GetRtTargetJointPos instead"""
         return self.GetRtTargetJointPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
-    def GetRtTargetCartPos(self, include_timestamp=False, synchronous_update=False, timeout=None):
+    def GetRtTargetCartPos(self,
+                           include_timestamp: bool = False,
+                           synchronous_update: bool = False,
+                           timeout: float = None):
         """Returns the current end-effector pose of the robot. WARNING: NOT UNIQUE.
 
         Parameters
@@ -1540,12 +1742,12 @@ class Robot:
 
             return copy.deepcopy(self._robot_rt_data.rt_target_cart_pos.data)
 
-    def GetPose(self, synchronous_update=False, timeout=None):
+    def GetPose(self, synchronous_update: bool = False, timeout: float = None):
         """Legacy command. Please use GetRtTargetCartPos instead"""
         return self.GetRtTargetCartPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
-    def SetMonitoringInterval(self, t):
+    def SetMonitoringInterval(self, t: float):
         """Sets the rate at which the monitoring port sends data.
 
         Parameters
@@ -1559,7 +1761,7 @@ class Robot:
             self._send_command('SetMonitoringInterval', [t])
 
     @disconnect_on_exception
-    def SetRealTimeMonitoring(self, *events):
+    def SetRealTimeMonitoring(self, *events: list):
         """Configure which real-time monitoring events to enable.
 
         Parameters
@@ -1577,7 +1779,7 @@ class Robot:
             self._send_command('SetRealTimeMonitoring', events)
 
     @disconnect_on_exception
-    def SetRTC(self, t):
+    def SetRTC(self, t: int):
         """Sets the rate at which the monitoring port sends data.
 
         Parameters
@@ -1609,7 +1811,7 @@ class Robot:
             self._send_command('DeactivateSim')
 
     @disconnect_on_exception
-    def ActivateBrakes(self, activated=True):
+    def ActivateBrakes(self, activated: bool = True):
         """Enable/disable the brakes. These commands are only available when the robot is deactivated.
 
         By default, brakes are enabled until robot is activated (brakes are automatically disabled upon activation).
@@ -1659,7 +1861,7 @@ class Robot:
             return copy.deepcopy(self._robot_rt_data_stable)
 
     @disconnect_on_exception
-    def GetStatusRobot(self, synchronous_update=False, timeout=None):
+    def GetStatusRobot(self, synchronous_update: bool = False, timeout: float = None):
         """Return a copy of the current robot status
 
         Parameters
@@ -1682,7 +1884,7 @@ class Robot:
             return copy.deepcopy(self._robot_status)
 
     @disconnect_on_exception
-    def GetStatusGripper(self, synchronous_update=True, timeout=None):
+    def GetStatusGripper(self, synchronous_update: bool = True, timeout: float = None):
         """Return a copy of the current gripper status
 
         Parameters
@@ -1706,7 +1908,7 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._gripper_status)
 
-    def LogTrace(self, trace):
+    def LogTrace(self, trace: str):
         """Send a text trace that is printed in the robot's log internal file (which can be retrieved from robot's Web
            portal under menu "Options -> Get Log").
            (useful for clearly identifying steps of a program within robot's log when reporting problems to
@@ -1721,7 +1923,12 @@ class Robot:
         trace = trace.replace('"', '\"')
         self.SendCustomCommand(f"LogTrace({trace})")
 
-    def StartLogging(self, monitoringInterval, file_name=None, file_path=None, fields=None, record_time=True):
+    def StartLogging(self,
+                     monitoringInterval: float,
+                     file_name: str = None,
+                     file_path: str = None,
+                     fields: list[str] = None,
+                     record_time: bool = True):
         """Start logging robot state to file.
 
         Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
@@ -1787,7 +1994,12 @@ class Robot:
         return file_name
 
     @contextlib.contextmanager
-    def FileLogger(self, monitoringInterval, file_name=None, file_path=None, fields=None, record_time=True):
+    def FileLogger(self,
+                   monitoringInterval: float,
+                   file_name: str = None,
+                   file_path: str = None,
+                   fields: list[str] = None,
+                   record_time: bool = True):
         """Contextmanager interface for file logger.
 
         Parameters
@@ -1884,7 +2096,7 @@ class Robot:
 
         self._check_monitor_threads()
 
-    def _send_command(self, command, arg_list=None):
+    def _send_command(self, command: str, arg_list: list = None):
         """Assembles and sends the command string to the Mecademic robot.
 
         Parameters
@@ -1907,7 +2119,7 @@ class Robot:
         if self._file_logger:
             self._file_logger.command_queue.put(command)
 
-    def _send_sync_command(self, command, event, timeout):
+    def _send_sync_command(self, command: str, event: InterruptableEvent, timeout: float):
         """Send a command and wait for corresponding response
            (this function handles well-known commands which have their corresponding 'wait' event in this class,
             use _send_custom_command to perform synchronous operations on other commands)
@@ -1940,7 +2152,10 @@ class Robot:
         # Wait until response is received (this will throw TimeoutException if appropriate)
         event.wait(timeout=timeout)
 
-    def _send_custom_command(self, command, expected_responses=None, skip_internal_check=False):
+    def _send_custom_command(self,
+                             command: str,
+                             expected_responses: list[int] = None,
+                             skip_internal_check: bool = False):
         """Internal version of SendCustomCommand with option to skip internal state check (so it can be used
            during connetion)
         """
@@ -2432,13 +2647,13 @@ class Robot:
             if response.id == mx_def.MX_ST_GET_JOINTS:
                 self._robot_rt_data.rt_target_joint_pos.data = _string_to_numbers(response.data)
                 self._robot_rt_data.rt_target_joint_pos.enabled = True
-                if self._is_in_sync():
+                if self._is_get_sync():
                     self._robot_events.on_joints_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_POSE:
                 self._robot_rt_data.rt_target_cart_pos.data = _string_to_numbers(response.data)
                 self._robot_rt_data.rt_target_cart_pos.enabled = True
-                if self._is_in_sync():
+                if self._is_get_sync():
                     self._robot_events.on_pose_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_CONF:
@@ -2460,12 +2675,12 @@ class Robot:
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
             self._robot_rt_data.rt_target_joint_pos.update_from_csv(response.data)
-            if self._is_in_sync():
+            if self._is_get_sync():
                 self._robot_events.on_joints_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_TARGET_CART_POS:
             self._robot_rt_data.rt_target_cart_pos.update_from_csv(response.data)
-            if self._is_in_sync():
+            if self._is_get_sync():
                 self._robot_events.on_pose_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
@@ -2613,7 +2828,7 @@ class Robot:
                 self._robot_events.on_end_of_block.clear()
             self._robot_status.end_of_block_status = status_flags[5]
 
-        if self._is_in_sync():
+        if self._is_get_sync():
             self._robot_events.on_status_updated.set()
         self._callback_queue.put('on_status_updated')
 
@@ -2636,7 +2851,7 @@ class Robot:
         self._gripper_status.error_status = status_flags[4]
         self._gripper_status.overload_error = status_flags[5]
 
-        if self._is_in_sync():
+        if self._is_get_sync():
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
 
@@ -2742,7 +2957,7 @@ class Robot:
 
         self._rx_sync = _string_to_numbers(response.data)[0]
 
-    def _is_in_sync(self):
+    def _is_get_sync(self):
         """Tells if we're in sync with the latest "get" operation (i.e. we've received the response to the most recent
            "Sync" request to the robot, meaning that the "get" response we just got is up-to-date)
 
@@ -2752,88 +2967,6 @@ class Robot:
             True if "in sync" ("get" response we just received matches the "get" request we've just made)
         """
         return (self._rx_sync == self._tx_sync)
-
-
-class RobotCallbacks:
-    """Class for storing possible status events for the Mecademic robot.
-
-    Attributes
-    ----------
-        on_connected : function object
-            Function to be called once connected.
-        on_disconnected : function object
-            Function to be called once disconnected.
-        on_status_updated : function object
-            Function to be called once robot status is updated.
-        on_status_gripper_updated : function object
-            Function to be called once gripper status is updated.
-        on_activated : function object
-            Function to be called once activated.
-        on_deactivated : function object
-            Function to be called once deactivated.
-        on_homed : function object
-            Function to be called once homing is complete.
-        on_error : function object
-            Function to be called if robot enters an error state.
-        on_error_reset : function object
-            Function to be called once error is reset.
-        on_p_stop : function object
-            Function to be called if PStop is activated.
-        on_p_stop_reset : function object
-            Function to be called if PStop is reset.
-        on_motion_paused : function object
-            Function to be called once motion is paused.
-        on_motion_cleared : function object
-            Function to be called once motion is cleared.
-        on_motion_resumed : function object
-            Function to be called once motion is resumed.
-        on_checkpoint_reached : function object
-            Function to be called if a checkpoint is reached.
-        on_activate_sim : function object
-            Function to be called once sim mode is activated.
-        on_deactivate_sim : function object
-            Function to be called once sim mode is deactivated.
-        on_command_message : function object
-            Function to be called each time a command response is received.
-        on_monitor_message : function object
-            Function to be called each time a monitor response is received.
-        on_offline_program_state : function object
-            Function to be called each time an offline program starts or fails to start.
-        on_end_of_cycle : function object
-            Function to be called each time end of cycle is reached"""
-
-    def __init__(self):
-        self.on_connected = None
-        self.on_disconnected = None
-
-        self.on_status_updated = None
-        self.on_status_gripper_updated = None
-
-        self.on_activated = None
-        self.on_deactivated = None
-
-        self.on_homed = None
-
-        self.on_error = None
-        self.on_error_reset = None
-        self.on_p_stop = None
-        self.on_p_stop_reset = None
-
-        self.on_motion_paused = None
-        self.on_motion_cleared = None
-        self.on_motion_resumed = None
-
-        self.on_checkpoint_reached = None
-
-        self.on_activate_sim = None
-        self.on_deactivate_sim = None
-
-        self.on_command_message = None
-        self.on_monitor_message = None
-
-        self.on_offline_program_state = None
-
-        self.on_end_of_cycle = None
 
 
 class TimestampedData:
@@ -3217,120 +3350,6 @@ class RobotInfo:
             raise ValueError(f'Could not parse robot info string "{input_string}"')
 
 
-class InterruptableEvent:
-    """Extend default event class to also be able to unblock and raise an exception.
-
-    Attributes
-    ----------
-    id : int or None
-        Id for event.
-    _event : event object
-        A standard event-type object.
-    _lock : lock object
-        Used to ensure atomic operations.
-    _interrupted : boolean
-        If true, event is in an error state.
-    _interrupted_msg : string
-        User message that explains the reason of interruption
-"""
-
-    def __init__(self, id=None, data=None):
-        self._id = id
-        self._data = data
-        self._event = threading.Event()
-        self._lock = threading.Lock()
-        self._interrupted = False
-        self._interrupted_msg = ""
-
-    def wait(self, timeout=None):
-        """Block until event is set or should raise an exception (InterruptException or TimeoutException).
-
-        Attributes
-        ----------
-        timeout : float
-            Maximum duration to wait in seconds.
-
-        Return
-        ------
-        data : object
-            Return the data object (or None for events not returning any data)
-
-        """
-        wait_result = self._event.wait(timeout=timeout)
-        if self._interrupted:
-            if self._interrupted_msg != "":
-                raise InterruptException('Event received exception because ' + self._interrupted_msg)
-            else:
-                raise InterruptException('Event received exception, possibly because event will never be triggered.')
-        elif not wait_result:
-            raise TimeoutException()
-        return self._data
-
-    def set(self, data=None):
-        """Set the event and unblock all waits. Optionally modify data before setting.
-
-        """
-        with self._lock:
-            self._data = data
-            self._event.set()
-
-    def abort(self, message=""):
-        """Unblock any waits and raise an exception.
-
-        """
-        with self._lock:
-            if not self._event.is_set():
-                self._interrupted_msg = message
-                self._interrupted = True
-                self._event.set()
-
-    def clear(self):
-        """Reset the event to its initial state.
-
-        """
-        with self._lock:
-            self._interrupted = False
-            self._event.clear()
-
-    def is_set(self):
-        """Checks if the event is set.
-
-        Return
-        ------
-        boolean
-            False if event is not set or instance should '_interrupted'. True otherwise.
-
-        """
-        with self._lock:
-            if self._interrupted:
-                return False
-            else:
-                return self._event.is_set()
-
-    def clear_abort(self):
-        """Clears the abort.
-
-        """
-        with self._lock:
-            if self._interrupted:
-                self._interrupted = False
-                self._event.clear()
-
-    @property
-    def id(self):
-        """Make id a read-only property since it should not be changed after instantiation.
-
-        """
-        return self._id
-
-    @property
-    def data(self):
-        """Make data a read-only property and enforce that it is only assignable at construction or using set().
-
-        """
-        return self._data
-
-
 class _Message:
     """Class for storing a response message from a Mecademic robot.
 
@@ -3549,7 +3568,7 @@ class _CallbackQueue():
         if callback_name in self._registered_callbacks or callback_name == _TERMINATE:
             self._queue.put((callback_name, data))
 
-    def get(self, block=False, timeout=None):
+    def get(self, block=False, timeout: float = None):
         """Get the next callback in the queue.
 
         Parameters
