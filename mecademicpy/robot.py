@@ -1927,7 +1927,7 @@ class Robot:
                      monitoringInterval: float,
                      file_name: str = None,
                      file_path: str = None,
-                     fields: list[str] = None,
+                     fields: list = None,
                      record_time: bool = True):
         """Start logging robot state to file.
 
@@ -1998,7 +1998,7 @@ class Robot:
                    monitoringInterval: float,
                    file_name: str = None,
                    file_path: str = None,
-                   fields: list[str] = None,
+                   fields: list = None,
                    record_time: bool = True):
         """Contextmanager interface for file logger.
 
@@ -2647,13 +2647,13 @@ class Robot:
             if response.id == mx_def.MX_ST_GET_JOINTS:
                 self._robot_rt_data.rt_target_joint_pos.data = _string_to_numbers(response.data)
                 self._robot_rt_data.rt_target_joint_pos.enabled = True
-                if self._is_get_sync():
+                if self._is_in_sync():
                     self._robot_events.on_joints_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_POSE:
                 self._robot_rt_data.rt_target_cart_pos.data = _string_to_numbers(response.data)
                 self._robot_rt_data.rt_target_cart_pos.enabled = True
-                if self._is_get_sync():
+                if self._is_in_sync():
                     self._robot_events.on_pose_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_CONF:
@@ -2675,12 +2675,12 @@ class Robot:
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
             self._robot_rt_data.rt_target_joint_pos.update_from_csv(response.data)
-            if self._is_get_sync():
+            if self._is_in_sync():
                 self._robot_events.on_joints_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_TARGET_CART_POS:
             self._robot_rt_data.rt_target_cart_pos.update_from_csv(response.data)
-            if self._is_get_sync():
+            if self._is_in_sync():
                 self._robot_events.on_pose_updated.set()
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
@@ -2828,7 +2828,7 @@ class Robot:
                 self._robot_events.on_end_of_block.clear()
             self._robot_status.end_of_block_status = status_flags[5]
 
-        if self._is_get_sync():
+        if self._is_in_sync():
             self._robot_events.on_status_updated.set()
         self._callback_queue.put('on_status_updated')
 
@@ -2851,7 +2851,7 @@ class Robot:
         self._gripper_status.error_status = status_flags[4]
         self._gripper_status.overload_error = status_flags[5]
 
-        if self._is_get_sync():
+        if self._is_in_sync():
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
 
@@ -2957,7 +2957,7 @@ class Robot:
 
         self._rx_sync = _string_to_numbers(response.data)[0]
 
-    def _is_get_sync(self):
+    def _is_in_sync(self):
         """Tells if we're in sync with the latest "get" operation (i.e. we've received the response to the most recent
            "Sync" request to the robot, meaning that the "get" response we just got is up-to-date)
 
