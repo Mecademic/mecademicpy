@@ -208,6 +208,8 @@ MX_ST_RT_CONF = 2218
 MX_ST_RT_CONF_TURN = 2219
 MX_ST_RT_ACCELEROMETER = 2220
 MX_ST_RT_GRIPPER_TORQ = 2221
+MX_ST_RT_WRF = 2228
+MX_ST_RT_TRF = 2229
 MX_ST_RT_CYCLE_END = 2230
 MX_ST_CONNECTED = 3000
 MX_ST_USER_ALREADY = 3001
@@ -482,6 +484,10 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MX_ST_RT_ACCELEROMETER, "MX_ST_RT_ACCELEROMETER", is_error=False),
     MX_ST_RT_GRIPPER_TORQ:
     RobotStatusCodeInfo(MX_ST_RT_GRIPPER_TORQ, "MX_ST_RT_GRIPPER_TORQ", is_error=False),
+    MX_ST_RT_WRF:
+    RobotStatusCodeInfo(MX_ST_RT_WRF, "MX_ST_RT_WRF", is_error=False),
+    MX_ST_RT_TRF:
+    RobotStatusCodeInfo(MX_ST_RT_TRF, "MX_ST_RT_TRF", is_error=False),
     MX_ST_RT_CYCLE_END:
     RobotStatusCodeInfo(MX_ST_RT_CYCLE_END, "MX_ST_RT_CYCLE_END", is_error=False),
     MX_ST_CONNECTED:
