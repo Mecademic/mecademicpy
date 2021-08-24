@@ -29,6 +29,9 @@ robot_rt_data_to_real_time_monit = {
     'rt_conf_turn': (mx_def.MX_ST_RT_CONF_TURN, 'ConfTurn'),
     'rt_accelerometer': (mx_def.MX_ST_RT_ACCELEROMETER, 'Accel'),
     'rt_gripper_torq': (mx_def.MX_ST_RT_GRIPPER_TORQ, 'GripperTorq'),  # Unused in RobotState right now
+    'rt_wrf': (mx_def.MX_ST_RT_WRF, 'Wrf'),
+    'rt_trf': (mx_def.MX_ST_RT_TRF, 'Trf'),
+    'rt_checkpoint': (mx_def.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
     '': (mx_def.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
 }
 
@@ -62,11 +65,11 @@ class _RobotTrajectoryLogger:
     def __init__(self,
                  robot_info,
                  robot_rt_data,
-                 fields=None,
-                 file_name=None,
-                 file_path=None,
-                 record_time=True,
-                 monitoring_interval=None):
+                 fields: list[str] = None,
+                 file_name: str = None,
+                 file_path: str = None,
+                 record_time: bool = True,
+                 monitoring_interval: float = None):
         """Initialize class.
 
         Parameters
@@ -186,7 +189,7 @@ class _RobotTrajectoryLogger:
             if (key.endswith('joint_pos') or key.endswith('joint_vel') or key.endswith('joint_torq')):
                 # Write field name followed by joint number. For example: "TargetJointPos_1".
                 self.expanded_fields.extend(assemble_with_prefix(value, range(robot_info.num_joints)))
-            elif key.endswith('cart_pos'):
+            elif key.endswith('cart_pos') or key.endswith('wrf') or key.endswith('trf'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['X', 'Y', 'Z', 'Alpha', 'Beta', 'Gamma']))
             elif key.endswith('cart_vel'):
                 self.expanded_fields.extend(
@@ -197,6 +200,8 @@ class _RobotTrajectoryLogger:
                 self.expanded_fields.append(value)
             elif key.endswith('conf'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['Shoulder', 'Elbow', 'Wrist']))
+            elif key.endswith('checkpoint'):
+                self.expanded_fields.append(value)
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 

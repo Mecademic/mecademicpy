@@ -2722,6 +2722,15 @@ class Robot:
                 self._robot_rt_data.rt_accelerometer[index].timestamp = timestamp
                 self._robot_rt_data.rt_accelerometer[index].data = measurements
 
+        elif response.id == mx_def.MX_ST_RT_WRF:
+            self._robot_rt_data.rt_wrf.update_from_csv(response.data)
+
+        elif response.id == mx_def.MX_ST_RT_TRF:
+            self._robot_rt_data.rt_wrf.update_from_csv(response.data)
+
+        elif response.id == mx_def.MX_ST_RT_CHECKPOINT:
+            self._robot_rt_data.rt_checkpoint.update_from_csv(response.data)
+
         elif response.id == mx_def.MX_ST_IMPOSSIBLE_RESET_ERR:
             message = "Robot indicated that this error cannot be reset"
             self.logger.error(message)
@@ -2935,6 +2944,14 @@ class Robot:
                 self._robot_rt_data.rt_conf.enabled = True
             if event_id == mx_def.MX_ST_RT_CONF_TURN:
                 self._robot_rt_data.rt_conf_turn.enabled = True
+            if event_id == mx_def.MX_ST_RT_WRF:
+                self._robot_rt_data.rt_wrf.enabled = True
+            if event_id == mx_def.MX_ST_RT_TRF:
+                self._robot_rt_data.rt_trf.enabled = True
+            if event_id == mx_def.MX_ST_RT_CHECKPOINT:
+                self._robot_rt_data.rt_checkpoint.enabled = True
+            if event_id == mx_def.MX_ST_RT_WRF:
+                self._robot_rt_data.rt_wrf.enabled = True
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
                 for accelerometer in self._robot_rt_data.rt_accelerometer.values():
                     accelerometer.enabled = True
@@ -3136,6 +3153,10 @@ class RobotRtData:
         # Contains dictionary of accelerometers stored in the robot indexed by joint number.
         # For example, Meca500 currently only reports the accelerometer in joint 5.
         self.rt_accelerometer = dict()  # 16000 = 1g
+
+        self.rt_wrf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_trf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_checkpoint = TimestampedData.zeros(1)  # microseconds timestamp, checkpointId
 
         self.max_queue_size = 0
 
