@@ -1,5 +1,4 @@
-![Mecademic](./docs/logo/mecademic_logo.jpg  "Mecademic")
-
+![Mecademic](https://github.com/Mecademic/mecademicpy/blob/main/docs/logo/mecademic_logo.jpg?raw=true  "Mecademic")
 # Mecademic Python API
 
 A python module designed for robot products from Mecademic. The module offers tools that give access to the features of the Mecademic Robots such as MoveLin and MoveJoints available through the TCP/IP text interface. The module can be started from a terminal or a python application and controls the Mecademic products. 
@@ -174,29 +173,18 @@ If the robot motion command queue is cleared (using `ClearMotion()` for example)
 
 ### Callbacks
 
-The `Robot` class supports user-provided callback functions on a variety of events. These callbacks are entirely optional and are not required. The available events are listed in the `RobotCallbacks` class. Currently, they are:
+The `Robot` class supports user-provided callback functions on a variety of events. These callbacks are entirely optional and are not required, but useful to implement asynchronous applications. The available events are listed in the `RobotCallbacks` class. Here are some of these callbacks:
 
 - `on_connected`
 - `on_disconnected`
-- `on_status_updated`
 - `on_activated`
 - `on_deactivated`
 - `on_homed`
 - `on_error`
-- `on_error_reset`
-- `on_p_stop`
-- `on_p_stop_reset`
-- `on_motion_paused`
-- `on_motion_cleared`
-- `on_motion_resumed`
 - `on_checkpoint_reached`
-- `on_activate_sim`
-- `on_deactivate_sim`
-- `on_command_message`
-- `on_monitor_message`
-- `on_offline_program_state`
+- etc... (refer to class `RobotCallbacks` for exhaustive list of callbacks)
 
-Note that `on_checkpoint_reached` passes the ID of the checkpoint, and `on_command_message` and `on_monitor_message` passes a `mecademicpy.robot.Message` object. All other callbacks do not pass any arguments.
+Note that some callbacks pass arguments. For example `on_checkpoint_reached` passes the ID of the checkpoint, `on_command_message` and `on_monitor_message` passes a `mecademicpy.robot.Message` object. Refer to class documentation for details.
 
 A simple usage example:
 
@@ -218,13 +206,13 @@ If the user does not want to automatically run callbacks in a separate thread, s
 
 Running any callback in a separate thread (either through the `Robot` class or otherwise) requires that the callback function is thread-safe and uses the proper locks when accessing shared state. Calling any public method of the `Robot` class is thread-safe.
 
-Note that user-provided callback functions will be run in the **same process** as the rest of the `Robot` class. As such, callbacks which require non-trivial computation may interfere with the function of the API, especially when processing many monitoring messages at high frequency.
+Note that, due to a Python limitation, all Python threads share the same CPU core and will not take advantage of parallelism and multiple CPU cores of a PC. Unfortunately, this means that an application performing heavy computations (in callback thread or in any other thread) may impact the performance of the `Robot` class (especially when processing many monitoring messages at high frequency).
 
 If non-trivial computation and high-frequency monitoring are both necessary, the user may offload computation into a separate python process using the built-in [multiprocessing](https://docs.python.org/3/library/multiprocessing.html) library.
 
 ### Handling Robot Errors
 
-If the robot encounters an error during use, the robot will go into error mode. In this mode, the module will block any command to the robot unless the error is reset. If the robot is in an error state, `GetRobotStatus().error_status` will return `True`. To properly reset errors on the robot, the following function must be run:
+If the robot encounters an error during use, the robot will go into error mode. In this mode, the module will refuse any command to the robot unless the error is reset. If the robot is in an error state, `GetStatusRobot().error_status` will return `True`. To properly reset errors on the robot, the following function must be run:
 
 ```python
 robot.ResetError()
@@ -236,9 +224,9 @@ The `on_error` callback can also be used to manage robot errors.
 
 Improper use of the class can also cause exceptions to be raised. For example, calling `MoveJoints()` without any arguments will raise an exception. 
 
-If the user is waiting on an event or checkpoint that the `Robot` class later determines will never occur, the event will unblock and raise an exception. For example, if the user is waiting on a checkpoint, but calls `Disconnect()` or `ClearMotion()` before the checkpoint is received, the checkpoint will unblock and raise an exception. Events and checkpoints will also unblock with exception on robot error state.
+If the user is waiting on an event or checkpoint that the `Robot` class later determines will never occur, the event will unblock and raise an exception. For example, if the user is waiting on a checkpoint (`WaitCheckpoint`), but calls `Disconnect()` or `ClearMotion()` before the checkpoint is received, the checkpoint will unblock and raise an exception. Events and checkpoints will also unblock with exception on robot error state.
 
-The user should use python's built-in `try...except` blocks to handle exceptions.
+The user should use python's built-in `try...except` blocks to handle appropriate exceptions.
 
 ### Preserved State on Disconnection
 
@@ -283,22 +271,22 @@ The `FileLogger` context will automatically end logging after either completing 
 
 The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
 
-- "TargetJointPos" 
-- "TargetCartPos"
-- "TargetJointVel"
-- "TargetCartVel"
-- "TargetConf"
-- "TargetConfTurn"
+- `"TargetJointPos"` 
+- `"TargetCartPos"`
+- `"TargetJointVel"`
+- `"TargetCartVel"`
+- `"TargetConf"`
+- `"TargetConfTurn"`
 
-- "JointPos"
-- "CartPos"
-- "JointVel" 
-- "JointTorq" 
-- "CartVel" 
-- "Conf" 
-- "ConfTurn"
+- `"JointPos"`
+- `"CartPos"`
+- `"JointVel"` 
+- `"JointTorq"` 
+- `"CartVel"` 
+- `"Conf"` 
+- `"ConfTurn"`
 
-- "Accel"
+- `"Accel"`
 
 
 These strings should be placed into the list given to the `fields` parameter.
@@ -328,7 +316,7 @@ import mecademicpy.mx_robot_def as mdr_def
 
 response_codes = [mdr_def.MX_ST_ERROR_RESET, mdr_def.MX_ST_NO_ERROR_RESET]
 response_event = robot.SendCustomCommand('ResetError', expected_responses=response_codes)
-response = response_event.wait_for_data(timeout=10)
+response = response_event.wait(timeout=10)
 ```
 
 Although raw numerical response codes can also be used, it is recommended to use the named aliases provided in `mx_robot_def.py` for clarity.
@@ -340,7 +328,8 @@ For a complete list of available methods and further documentation, use the help
 ```python
 >>> import mecademicpy.robot as mdr
 >>> help(mdr.Robot)
->>> help(mdr.RobotInfo)
+>>> help(mdr.Message)
+>>> help(mdr.RobotCallbacks)
 ```
 
 ## Getting Help
