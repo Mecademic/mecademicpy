@@ -1106,11 +1106,13 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
         robot.MoveJoints(0, -60, 60, 0, 0, 0)
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
         for i in range(1, 4):
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(seed=1)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(seed=2)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_CONF, fake_string(seed=3, length=3)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_CONF_TURN, fake_string(seed=4, length=2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_JOINTS, fake_string(seed=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_POSE, fake_string(seed=4)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_CONF, fake_string(seed=102, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_CONF_TURN, fake_string(seed=103, length=2)))
 
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, fake_string(seed=3, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, fake_string(seed=4, length=7)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_VEL, fake_string(seed=5, length=7)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_VEL, fake_string(seed=6, length=7)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TARGET_CONF, fake_string(seed=7, length=4)))
@@ -1128,7 +1130,11 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
             robot._command_rx_queue.put(
                 mdr._Message(mx_def.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(seed=16000, length=3)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CYCLE_END, str(i)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_WRF, fake_string(seed=17, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TRF, fake_string(seed=18, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CHECKPOINT, fake_string(seed=19, length=2)))
+
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CYCLE_END, str(i * 100)))
 
         # Terminate queue and wait for thread to exit to ensure messages are processed.
         robot._command_rx_queue.put(mdr._TERMINATE)
