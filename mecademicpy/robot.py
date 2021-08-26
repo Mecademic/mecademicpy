@@ -3306,7 +3306,7 @@ class RobotInfo:
         if self.is_at_least(8, 4):
             self.rt_message_capable = True
         # Check if this robot supports real-time monitoring on control port (8.4.3+)
-        if self.is_at_least(8, 4, 3):
+        if self.is_at_least(8, 5):
             self.rt_on_ctrl_port_capable = True
 
     def is_at_least(self, major, minor=0, patch=0):
