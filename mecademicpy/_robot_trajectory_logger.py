@@ -9,7 +9,7 @@ import mecademicpy.mx_robot_def as mx_def
 from .robot_trajectory_files import RobotTrajectories
 from pathlib import PurePath
 
-# 2nd values of this dict are taken directly from controller.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
+# 2nd values of this dict are taken from controller.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
 # values)
 robot_kinematics_to_real_time_monit = {

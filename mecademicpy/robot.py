@@ -523,15 +523,13 @@ class Robot:
 
     # Robot control functions.
 
-    def Connect(
-        self,
-        address=mx_def.MX_DEFAULT_ROBOT_IP,
-        enable_synchronous_mode=False,
-        disconnect_on_exception=True,
-        monitor_mode=False,
-        offline_mode=False,
-        timeout=0.1
-    ):
+    def Connect(self,
+                address=mx_def.MX_DEFAULT_ROBOT_IP,
+                enable_synchronous_mode=False,
+                disconnect_on_exception=True,
+                monitor_mode=False,
+                offline_mode=False,
+                timeout=0.1):
         """Attempt to connect to a physical Mecademic Robot.
 
         Parameters
@@ -608,9 +606,9 @@ class Robot:
                     'GetRealTimeMonitoring', expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING])
                 real_time_monitoring_response.wait(timeout=self.default_timeout)
 
-            full_version_request = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
-            full_version_request.wait_for_data()
-            full_version = full_version_request.data.data
+            full_version_responce = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
+            full_version_responce.wait(timeout=self.default_timeout)
+            full_version = full_version_responce.data.data
             self._robot_info.version.update_version(full_version)
 
     def Disconnect(self):
@@ -2051,8 +2049,8 @@ class Robot:
         self._robot_info = RobotInfo.from_command_response_string(response.data)
 
         # Check if current robot version supports real-time monitoring messages (8.4+)
-        if (self._robot_info.fw_major_rev >= 9) or (self._robot_info.fw_major_rev == 8
-                                                    and self._robot_info.fw_minor_rev >= 4):
+        if (self._robot_info.version.major == 8
+                and self._robot_info.version.minor >= 4) or (self._robot_info.version.major >= 9):
             self._robot_info.rt_message_capable = True
 
         self._robot_kinematics = RobotKinematics(self._robot_info.num_joints)
@@ -2851,6 +2849,7 @@ class Robot:
 
         self.logger.info(f"Installation of {current_version} sucessfully completed")
 
+
 class RobotCallbacks:
     """Class for storing possible status events for the Mecademic robot.
 
@@ -3203,12 +3202,8 @@ class RobotInfo:
         Robot revision.
     is_virtual : bool
         True if is a virtual robot.
-    fw_major_rev : int
-        Major firmware revision number.
-    fw_minor_rev : int
-        Minor firmware revision number.
-    fw_patch_num : int
-        Firmware patch number.
+    version : RobotVersion object
+        robot firmware revision number.
     serial : string
         Serial identifier of robot.
     rt_message_capable : bool
@@ -3217,12 +3212,7 @@ class RobotInfo:
         Number of joints on the robot.
 """
 
-    def __init__(self,
-                 model=None,
-                 revision=None,
-                 is_virtual=None,
-                 version=None,
-                 serial=None):
+    def __init__(self, model=None, revision=None, is_virtual=None, version=None, serial=None):
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
@@ -3312,10 +3302,10 @@ class InterruptableEvent:
             if self._interrupted_msg != "":
                 raise InterruptException('Event received exception because ' + self._interrupted_msg)
             else:
-            raise InterruptException('Event received exception, possibly because event will never be triggered.')
+                raise InterruptException('Event received exception, possibly because event will never be triggered.')
         elif not wait_result:
             raise TimeoutException()
-            return self._data
+        return self._data
 
     def set(self, data=None):
         """Set the event and unblock all waits. Optionally modify data before setting.
