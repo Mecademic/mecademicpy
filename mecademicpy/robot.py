@@ -1966,8 +1966,8 @@ class Robot:
             else:
                 self.SetRealTimeMonitoring(*fields)
 
-            # Use a synchronous "GetRealTimeMonitoring" to ensure that we've started receiving data for all the requested
-            # real-time monitoring fields we just enabled
+            # Use a synchronous "GetRealTimeMonitoring" to ensure that we've started receiving data for all the
+            # requested real-time monitoring fields we just enabled
             response = self._send_custom_command('GetRealTimeMonitoring',
                                                  expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
                                                  skip_internal_check=True)
@@ -2726,7 +2726,7 @@ class Robot:
             self._robot_rt_data.rt_wrf.update_from_csv(response.data)
 
         elif response.id == mx_def.MX_ST_RT_TRF:
-            self._robot_rt_data.rt_wrf.update_from_csv(response.data)
+            self._robot_rt_data.rt_trf.update_from_csv(response.data)
 
         elif response.id == mx_def.MX_ST_RT_CHECKPOINT:
             self._robot_rt_data.rt_checkpoint.update_from_csv(response.data)
@@ -2950,8 +2950,6 @@ class Robot:
                 self._robot_rt_data.rt_trf.enabled = True
             if event_id == mx_def.MX_ST_RT_CHECKPOINT:
                 self._robot_rt_data.rt_checkpoint.enabled = True
-            if event_id == mx_def.MX_ST_RT_WRF:
-                self._robot_rt_data.rt_wrf.enabled = True
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
                 for accelerometer in self._robot_rt_data.rt_accelerometer.values():
                     accelerometer.enabled = True
