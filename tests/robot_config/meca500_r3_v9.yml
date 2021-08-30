@@ -14,15 +14,15 @@ expected_connection_message: "Connected to Meca500 R3 v9.1.147"
 #
 # Each command is composed of:
 #   - name: Name of the command (just like in the web)
-#   - number: Command return code.
+#   - response_code: Command return code.
 #   - response: String return by the 'fake' to the Python API
 expected_connect_commands:
   - name: "GetRobotSerial"
-    number: 2083
+    response_code: 2083
     response: 'm500-99999999'
   - name: "GetRealTimeMonitoring"
-    number: 2117
+    response_code: 2117
     response: ''
   - name: "GetFwVersionFull"
-    number: 2082
+    response_code: 2082
     response: '9.147.0.1213-tests'

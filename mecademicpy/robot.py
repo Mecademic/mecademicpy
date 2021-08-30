@@ -6,7 +6,7 @@ import functools
 import ipaddress
 import json
 import logging
-# from os import path
+import math
 import pathlib
 import queue
 import re
@@ -400,7 +400,7 @@ class Robot:
         """
         logger.debug(f'Attempting to connect to {address}:{port}')
 
-        connect_loops = round(socket_timeout / 0.1)
+        connect_loops = math.ceil(socket_timeout / 0.1)
         for _ in range(connect_loops):
             # Create socket and attempt connection.
             new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -2727,7 +2727,7 @@ class Robot:
 
         firmware_file_version = RobotVersion(firmware_file.name)
 
-        if self.GetRobotStatus().activation_state:
+        if self.GetStatusRobot().activation_state:
             self.logger.info(f'Robot is activated, will attempt to deactivate before updating firmware')
             if self._monitor_mode:
                 self.logger.info(f'Connected to robot in monitoring mode only, attempting connection in command mode'
@@ -2833,7 +2833,7 @@ class Robot:
         else:
             expected_version = firmware_file_version.full_version
 
-        if firmware_file_version.full_version == expected_version:
+        if str(current_version) == expected_version:
             self.logger.info(f"robot is now running version {current_version}")
         else:
             error_msg = f"Fail to install robot properly. current version {current_version}, " \
@@ -2841,7 +2841,7 @@ class Robot:
             self.logger.error(error_msg)
             raise AssertionError(error_msg)
 
-        robot_status = self.GetRobotStatus()
+        robot_status = self.GetStatusRobot()
         if robot_status.error_status:
             error_msg = f"Robot is in error on version {current_version}"
             self.logger.error(error_msg)
@@ -3611,6 +3611,31 @@ class _CallbackQueue():
 class RobotVersion:
     """
         Robot utility class to handle firmware version.
+
+    Attributes
+    ----------
+
+    build : integer
+        Build firmware version value, None if unvailable
+
+    extra : string
+        Extra firmware version name, None if unvailable
+
+    full_version : string
+        Full firmware version containing major.minor.path.build-extra
+
+    major : integer
+        Major firmware version value
+
+    minor : integer
+        Minor firmware version value
+
+    patch : interger
+        Patch firmware version value
+
+    short_version : string
+        Firmware version containing major.minor.patch only
+
     """
 
     REGEX_VERSION_BUILD = r"(?P<version>\d+\.\d+\.\d+)\.?(?P<build>\d+)?-?(?P<extra>[0-9a-zA-Z_-]*).*"
@@ -3627,7 +3652,10 @@ class RobotVersion:
         return self.full_version
 
     def update_version(self, version):
+        """Update object firmware version values.
 
+        :param version: New version of firmware. Supports multiple version formats
+        """
         regex_version = re.search(self.REGEX_VERSION_BUILD, version)
         self.short_version = regex_version.group("version")
         splitted_version = self.short_version.split(".")

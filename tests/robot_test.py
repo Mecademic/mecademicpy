@@ -79,7 +79,7 @@ def connect_robot_helper(robot: mdr.Robot,
         robot_config_commands = robot_config["expected_connect_commands"]
         for transaction in robot_config_commands:
             expected_commands.append(transaction["name"])
-            robot_responses.append(mdr._Message(transaction["number"], transaction["response"]))
+            robot_responses.append(mdr._Message(transaction["response_code"], transaction["response"]))
 
         # Start the fake robot thread (that will simulate response to expected requests)
         fake_robot = threading.Thread(target=simple_response_handler,
