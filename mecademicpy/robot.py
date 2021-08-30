@@ -391,6 +391,8 @@ class Robot:
             Address to use.
         port : int
             Port number to use.
+        socket_timeout: seconds
+            Time allocated (in seconds) to connect to robot
 
         Returns
         -------
@@ -404,18 +406,24 @@ class Robot:
         for _ in range(connect_loops):
             # Create socket and attempt connection.
             new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            new_socket.settimeout(socket_timeout)  # 100ms
+            new_socket.settimeout(100)
             try:
                 new_socket.connect((address, port))
                 break
-            except socket.timeout:
+            except (socket.timeout, TimeoutError) as e:
                 logger.debug(f'Timeout connecting to {address}:{port}.')
                 continue
+            except ConnectionRefusedError:
+                logger.debug(f'Connection refused to {address}:{port}, retrying in 100ms.')
+                time.sleep(0.1)
+                continue
             except Exception as exception:
-                logger.error(f'Unable to connect to {address}:{port}, exception: {exception}')
-                return None
+                raise TimeoutError(f'Unable to connect to {address}:{port}, exception: {exception}')
 
-        logger.debug(f'Connected to {address}:{port}.')
+        if new_socket is None:
+            raise TimeoutError(f'Timeout while connecting to {address}:{port}.')
+
+        logger.info(f'Connected to {address}:{port}.')
         return new_socket
 
     @staticmethod
@@ -2710,12 +2718,18 @@ class Robot:
                 for accelerometer in self._robot_kinematics.rt_accelerometer.values():
                     accelerometer.enabled = True
 
-    def update_robot(self, firmware):
+    def update_robot(self, firmware, address=None):
         """
         Install a new firmware and verifies robot version afterward.
 
+        Parameters
+        ----------
+        firmware: pathlib object or string
+            Path of robot firmware file
 
-        :param firmware: RobotFirmwareFile object.
+        address: string
+            Robot IP address (optional if already connected)
+
         """
         firmware_file = None
         if type(firmware) == pathlib.WindowsPath or type(firmware) == pathlib.PosixPath:
@@ -2727,16 +2741,28 @@ class Robot:
 
         firmware_file_version = RobotVersion(firmware_file.name)
 
-        if self.GetStatusRobot().activation_state:
+        # Validates robot IP address is available to script
+        if address is None and not self.IsConnected():
+            raise ArgumentError(f"address parameter can't be None and not connected to a robot.")
+        if address is None:
+            address = self._address
+        elif address != self._address:
+            raise ArgumentError(f"Trying to update robot at IP {address} but currently connected to {self._address}")
+
+        # Making sure we can send command to robot
+        if not self.IsConnected():
+            self.Connect(address=address)
+        elif self._monitor_mode:
+            self.logger.info(f'Connected to robot in monitoring mode only, attempting connection in command mode'
+                             'to deactivate robot')
+            self.Connect(address=address)
+
+        if self.GetStatusRobot(synchronous_update=True).activation_state:
             self.logger.info(f'Robot is activated, will attempt to deactivate before updating firmware')
-            if self._monitor_mode:
-                self.logger.info(f'Connected to robot in monitoring mode only, attempting connection in command mode'
-                                 'to deactivate robot')
-                self.Connect(address=self._address)
             self.DeactivateRobot()
         self.Disconnect()
 
-        robot_url = f"http://{self._address}/"
+        robot_url = f"http://{address}/"
 
         self.logger.info(f"Installing firmware: {firmware_file.absolute()}")
 
@@ -2824,8 +2850,8 @@ class Robot:
 
         # need to wait to make sure the robot shutdown before attempting to ping it.
         time.sleep(15)
-        tools.ping_robot(self._address)
-        self.Connect(self._address, timeout=60)
+        tools.ping_robot(address)
+        self.Connect(address, timeout=60)
 
         current_version = self.GetRobotInfo().version
         if current_version.major < 8.0:
@@ -2841,7 +2867,7 @@ class Robot:
             self.logger.error(error_msg)
             raise AssertionError(error_msg)
 
-        robot_status = self.GetStatusRobot()
+        robot_status = self.GetStatusRobot(synchronous_update=True)
         if robot_status.error_status:
             error_msg = f"Robot is in error on version {current_version}"
             self.logger.error(error_msg)
@@ -3654,7 +3680,9 @@ class RobotVersion:
     def update_version(self, version):
         """Update object firmware version values.
 
-        :param version: New version of firmware. Supports multiple version formats
+        :param version: string
+            New version of firmware. Supports multiple version formats
+            ie. 8.1.9, 8.4.3.1805-official
         """
         regex_version = re.search(self.REGEX_VERSION_BUILD, version)
         self.short_version = regex_version.group("version")
