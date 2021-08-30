@@ -411,7 +411,7 @@ class Robot:
                 new_socket.connect((address, port))
                 break
             except (socket.timeout, TimeoutError) as e:
-                logger.debug(f'Timeout connecting to {address}:{port}.')
+                logger.debug(f'Timeout connecting to {address}:{port}, retrying in 100ms.')
                 continue
             except ConnectionRefusedError:
                 logger.debug(f'Connection refused to {address}:{port}, retrying in 100ms.')

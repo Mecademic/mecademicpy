@@ -13,10 +13,10 @@ def ping_robot(ip_address, timeout=90):
     """
     logger = logging.getLogger(__name__)
     logger.info(f"Attempting to ping {ip_address} for {timeout} seconds")
-    robot_reachable = False
     timeout_time = time.monotonic() + timeout
-    while not robot_reachable:
-        robot_reachable = _ping(ip_address)
+    while True:
+        if _ping(ip_address):
+            break
         if time.monotonic() > timeout_time:
             error_msg = f"Timeout while waiting to ping robot: {ip_address}"
             logger.error(error_msg)
