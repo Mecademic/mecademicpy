@@ -798,12 +798,8 @@ class Robot:
             # Start callback thread if necessary
             self._start_callback_thread()
 
-        if self._robot_info.version.major < 8:
-            self.logger.warning('Python API not supported for firmware under version 8')
-            return
-
         connect_to_monitoring_port = True
-        if not self._monitor_mode:
+        if not self._monitor_mode and self._robot_info.version.major >= 8:
             # Fetch the robot serial number
             serial_response = self._send_custom_command('GetRobotSerial',
                                                         expected_responses=[mx_def.MX_ST_GET_ROBOT_SERIAL],
@@ -833,8 +829,11 @@ class Robot:
 
         if connect_to_monitoring_port:
             with self._main_lock:
-                self._initialize_monitoring_socket()
+                self._initialize_monitoring_socket(timeout)
                 self._initialize_monitoring_connection()
+
+        if self._robot_info.version.major < 8:
+            self.logger.warning('Python API not supported for firmware under version 8')
 
         self._robot_events.on_connected.set()
         self._callback_queue.put('on_connected')
@@ -3449,46 +3448,11 @@ class RobotInfo:
             raise ValueError(f'Invalid robot model: {self.model}')
 
         # Check if this robot supports real-time monitoring events
-        if self.is_at_least(8, 4):
+        if self.version.is_at_least(8, 4):
             self.rt_message_capable = True
         # Check if this robot supports real-time monitoring on control port (8.4.3+)
-        if self.is_at_least(8, 5):
+        if self.version.is_at_least(9, 0):
             self.rt_on_ctrl_port_capable = True
-
-    def is_at_least(self, major, minor=0, patch=0):
-        """Tells if this RobotInfo instance's version is at least the specified version
-
-        Parameters
-        ----------
-        major : integer
-            Minimum desired major version
-        minor : integer
-            Minimum desired minor version
-        patch : integer
-            Minimum desired patch version
-
-        Returns
-        -------
-        boolean
-            True if this RobotInfo instance's version is at least the specified version
-        """
-        # Check major
-        if self.fw_major_rev > major:
-            return True
-        elif self.fw_major_rev < major:
-            return False
-
-        # Same major, check minor
-        if self.fw_minor_rev > minor:
-            return True
-        elif self.fw_minor_rev < minor:
-            return False
-
-        # Same minor, check patch
-        if self.fw_patch_num >= patch:
-            return True
-
-        return False
 
     @classmethod
     def from_command_response_string(cls, input_string):
@@ -3798,7 +3762,7 @@ class RobotVersion:
     def __str__(self):
         return self.full_version
 
-    def update_version(self, version):
+    def update_version(self, version: str):
         """Update object firmware version values.
 
         :param version: New version of firmware. Supports multiple version formats
@@ -3822,3 +3786,38 @@ class RobotVersion:
 
         if self.extra:
             self.full_version += f"-{self.extra}"
+
+    def is_at_least(self, major, minor=0, patch=0):
+        """Tells if this RobotInfo instance's version is at least the specified version
+
+        Parameters
+        ----------
+        major : integer
+            Minimum desired major version
+        minor : integer
+            Minimum desired minor version
+        patch : integer
+            Minimum desired patch version
+
+        Returns
+        -------
+        boolean
+            True if this RobotInfo instance's version is at least the specified version
+        """
+        # Check major
+        if self.major > major:
+            return True
+        elif self.major < major:
+            return False
+
+        # Same major, check minor
+        if self.minor > minor:
+            return True
+        elif self.minor < minor:
+            return False
+
+        # Same minor, check patch
+        if self.patch >= patch:
+            return True
+
+        return False

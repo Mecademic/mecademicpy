@@ -20,7 +20,6 @@ import mecademicpy.robot_trajectory_files as robot_files
 
 TEST_IP = '127.0.0.1'
 MECA500_CONNECTED_RESPONSE = 'Connected to Meca500 R3 v9.0.0'
-SCARA_SERIAL = 'scara-87654321'
 DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
 #####################################################################################
@@ -57,14 +56,13 @@ def robot():
 
 # Automates sending the welcome message and responding to the robot serial query. Do not use for monitor_mode=True.
 def connect_robot_helper(robot: mdr.Robot,
-                         model="meca500",
+                         yaml_filename='meca500_r3_v9.yml',
                          monitor_mode=False,
                          offline_mode=True,
                          disconnect_on_exception=False,
                          enable_synchronous_mode=False):
 
     file_path = pathlib.Path.cwd().joinpath("tests", "robot_config")
-    yaml_filename = f"{model.lower()}_r{str(revision)}_v{str(major_verion)}.yml"
     yaml_file_full_path = pathlib.Path.joinpath(file_path, yaml_filename)
 
     with open(yaml_file_full_path, "r") as file_stream:
@@ -76,12 +74,11 @@ def connect_robot_helper(robot: mdr.Robot,
 
         expected_commands = []
         robot_responses = []
-        # Set robot command responses
-        robot_config_commands = robot_config["expected_connect_commands"]
-        for transaction in robot_config_commands:
-            expected_commands.append(transaction["name"])
-            robot_responses.append(mdr._Message(transaction["response_code"], transaction["response"]))
-            robot_responses.append(mdr._Message(mx_def.MX_ST_SET_CTRL_PORT_MONIT, ''))
+        if not monitor_mode and robot_config["expected_connect_commands"]:
+            # Set robot command responses
+            for transaction in robot_config["expected_connect_commands"]:
+                expected_commands.append(transaction["name"])
+                robot_responses.append(mdr._Message(transaction["response_code"], transaction["response"]))
 
         # Start the fake robot thread (that will simulate response to expected requests)
         fake_robot = threading.Thread(target=simple_response_handler,
@@ -102,9 +99,12 @@ def connect_robot_helper(robot: mdr.Robot,
 
 
 # Function for exchanging one message with queue.
-def simple_response_handler(queue_in, queue_out, expected_in, desired_out):
+def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expected_in: list[str],
+                            desired_out: list[mdr._Message]):
     if isinstance(expected_in, list):
         for i in range(len(expected_in)):
+            if queue_in.empty():
+                queue_in = queue_in  # debugAlain
             event = queue_in.get(block=True, timeout=1)
             assert event == expected_in[i]
             queue_out.put(desired_out[i])
@@ -187,9 +187,10 @@ def test_connection_no_robot(robot: mdr.Robot):
 # **** On failure, first check that virtual robot is not running!
 def test_successful_connection_full_socket_legacy(robot: mdr.Robot):
 
-    command_server_thread = run_fake_server(
-        TEST_IP, mx_def.MX_ROBOT_TCP_PORT_CONTROL,
-        ['[3000][Connected to Meca500 R3-virtual v8.3.10]\0', '[2083][m500-99999]\0'])
+    command_server_thread = run_fake_server(TEST_IP, mx_def.MX_ROBOT_TCP_PORT_CONTROL, [
+        '[3000][Connected to Meca500 R3-virtual v8.3.10]\0', '[2083][m500-99999]\0',
+        '[2082][v8.3.10.9876-unit-test-fake]\0'
+    ])
     monitor_server_thread = run_fake_server(TEST_IP, mx_def.MX_ROBOT_TCP_PORT_FEED, [])
 
     with pytest.raises(mdr.TimeoutException):
@@ -201,9 +202,10 @@ def test_successful_connection_full_socket_legacy(robot: mdr.Robot):
     assert robot.GetRobotInfo().model == 'Meca500'
     assert robot.GetRobotInfo().revision == 3
     assert robot.GetRobotInfo().is_virtual is True
-    assert robot.GetRobotInfo().fw_major_rev == 8
-    assert robot.GetRobotInfo().fw_minor_rev == 3
-    assert robot.GetRobotInfo().fw_patch_num == 10
+    assert robot.GetRobotInfo().version.major == 8
+    assert robot.GetRobotInfo().version.minor == 3
+    assert robot.GetRobotInfo().version.patch == 10
+    assert robot.GetRobotInfo().version.build == 9876
     assert robot.GetRobotInfo().serial == 'm500-99999'
 
     robot.Disconnect()
@@ -231,13 +233,72 @@ def test_successful_connection_split_response():
 # Test that we can connect to a Scara robot.
 def test_scara_connection(robot: mdr.Robot):
     cur_dir = os.getcwd()
-    connect_robot_helper(robot, model="scara", revision=1)
+    connect_robot_helper(robot, yaml_filename='scara_r1_v9.yml')
     assert not robot.GetStatusRobot().activation_state
     assert robot.GetRobotInfo().model == 'Scara'
     assert robot.GetRobotInfo().num_joints == 4
     assert robot.GetRobotInfo().version.major == 9
     assert robot.GetRobotInfo().rt_message_capable
-    assert robot.GetRobotInfo().serial == SCARA_SERIAL
+    assert robot.GetRobotInfo().serial == 'scara-87654321'
+
+
+# Test that we can connect to a M500 robot running older version 7.0.6
+def test_7_0_connection(robot: mdr.Robot):
+    cur_dir = os.getcwd()
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v7_0.yml')
+    assert not robot.GetStatusRobot().activation_state
+    assert robot.GetRobotInfo().model == 'Meca500'
+    assert robot.GetRobotInfo().num_joints == 6
+    assert robot.GetRobotInfo().version.major == 7
+    assert robot.GetRobotInfo().version.minor == 0
+    assert robot.GetRobotInfo().version.patch == 6
+    assert not robot.GetRobotInfo().rt_message_capable
+    assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert robot.GetRobotInfo().serial == None
+
+
+# Test that we can connect to a M500 robot running older version 8.3
+def test_8_3_connection(robot: mdr.Robot):
+    cur_dir = os.getcwd()
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v8_3.yml')
+    assert not robot.GetStatusRobot().activation_state
+    assert robot.GetRobotInfo().model == 'Meca500'
+    assert robot.GetRobotInfo().num_joints == 6
+    assert robot.GetRobotInfo().version.major == 8
+    assert robot.GetRobotInfo().version.minor == 3
+    assert not robot.GetRobotInfo().rt_message_capable
+    assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert robot.GetRobotInfo().serial == 'm500-83'
+
+
+# Test that we can connect to a M500 robot running older version 8.4
+def test_8_4_connection(robot: mdr.Robot):
+    cur_dir = os.getcwd()
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v8_4.yml')
+    assert not robot.GetStatusRobot().activation_state
+    assert robot.GetRobotInfo().model == 'Meca500'
+    assert robot.GetRobotInfo().num_joints == 6
+    assert robot.GetRobotInfo().version.major == 8
+    assert robot.GetRobotInfo().version.minor == 4
+    assert robot.GetRobotInfo().rt_message_capable
+    assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert robot.GetRobotInfo().serial == 'm500-84'
+
+
+# Test that we can connect to a M500 robot running older version 8.4
+def test_9_0_connection(robot: mdr.Robot):
+    cur_dir = os.getcwd()
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
+    assert not robot.GetStatusRobot().activation_state
+    assert robot.GetRobotInfo().model == 'Meca500'
+    assert robot.GetRobotInfo().num_joints == 6
+    assert robot.GetRobotInfo().version.major == 9
+    assert robot.GetRobotInfo().version.minor == 147
+    assert robot.GetRobotInfo().version.patch == 0
+    assert robot.GetRobotInfo().version.build == 1213
+    assert robot.GetRobotInfo().rt_message_capable
+    assert robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert robot.GetRobotInfo().serial == 'm500-99999999'
 
 
 # Ensure user can reconnect to robot after disconnection or failure to connect.
@@ -904,7 +965,7 @@ def fake_string(seed, length=6):
 # Test that get commands correctly return timestamps.
 def test_synchronous_gets_legacy(robot: mdr.Robot):
     # Use a connected response that indicate a robot that does not support real-time monitoring
-    connect_robot_helper(robot, major_version=8)
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v8_3.yml')
 
     #
     # Test legacy messages:
@@ -1121,10 +1182,9 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
 # Test ability to log robot state for legacy (non rt monitoring message capable) platforms.
 # Logging with legacy platforms use system time. To ensure consistency across tests, mock system time call to always
 # return the same time (in nanoseconds).
-@pytest.mark.skip('Skip for now')
 @mock.patch('time.time_ns', mock.MagicMock(return_value=1621277770487091))
 def test_file_logger_legacy(tmp_path, robot: mdr.Robot):
-    connect_robot_helper(robot, major_verion=8)
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v8_3.yml')
 
     # This is explicitly set for readability, and is not necessary.
     robot._robot_info.rt_message_capable = False

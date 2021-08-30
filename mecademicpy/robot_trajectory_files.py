@@ -388,8 +388,7 @@ class RobotTrajectories:
 
             robot_trajectories = RobotTrajectories()
 
-            base = PurePath(filepath).name
-            base_name = base.split('.')[0]
+            base_name = PurePath(filepath).stem  # Keep file name without extension
 
             files = Path(base_dir).glob('*')  # .glob from Path
 
@@ -397,8 +396,7 @@ class RobotTrajectories:
 
             for file in files:
                 if file.name.endswith('.csv'):
-                    base_file = file.name  # .name from PurePath
-                    base_name_file = base_file.split('.')[0]
+                    base_name_file = PurePath(file.name).stem  # Keep file name without extension
                     base_name_file = base_name_file.removeprefix(base_name + '_')
                     df_dict[base_name_file] = RobotDfHist.from_file(PurePath.joinpath(PurePath(base_dir), file))
                 elif file.name.endswith('.json'):

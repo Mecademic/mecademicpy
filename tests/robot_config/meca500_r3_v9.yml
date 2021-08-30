@@ -20,9 +20,12 @@ expected_connect_commands:
   - name: "GetRobotSerial"
     response_code: 2083
     response: 'm500-99999999'
-  - name: "GetRealTimeMonitoring"
-    response_code: 2117
-    response: ''
   - name: "GetFwVersionFull"
     response_code: 2082
     response: '9.147.0.1213-tests'
+  - name: "GetRealTimeMonitoring"
+    response_code: 2117
+    response: ''
+  - name: "SetCtrlPortMonitoring(1)"
+    response_code: 2096
+    response: 'Monitoring on control port enabled/disabled'

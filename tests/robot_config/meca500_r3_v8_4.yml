@@ -1,12 +1,12 @@
 # Robot model
-model: "scara"
+model: "meca500"
 # Robot model revision
-revision: 1
+revision: 3
 # Boolean indicating of the robot is virtual or not. (virtual is different from fake robot)
-virtual: True
+virtual: False
 
 # This is the connection string returned to the Python API when you connect to a 'fake' robot
-expected_connection_message: "Connected to Scara R1-virtual v9.1.147"
+expected_connection_message: "Connected to Meca500 R3 v8.4.3"
 
 #
 # expected_connect_commands is a list of commands send by the Python API on connect
@@ -19,13 +19,10 @@ expected_connection_message: "Connected to Scara R1-virtual v9.1.147"
 expected_connect_commands:
   - name: "GetRobotSerial"
     response_code: 2083
-    response: 'scara-87654321'
+    response: 'm500-84'
   - name: "GetFwVersionFull"
     response_code: 2082
-    response: '9.147.0.1213-tests'
+    response: '8.4.3.8430-tests'
   - name: "GetRealTimeMonitoring"
     response_code: 2117
     response: ''
-  - name: "SetCtrlPortMonitoring(1)"
-    response_code: 2096
-    response: 'Monitoring on control port enabled/disabled'
