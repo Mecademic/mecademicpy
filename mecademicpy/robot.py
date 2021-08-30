@@ -3090,7 +3090,9 @@ class Robot:
 
         # need to wait to make sure the robot shutdown before attempting to ping it.
         time.sleep(15)
+        # Use ping function (default timeout is long, this will block)
         tools.ping_robot(self._address)
+        # Now that robot responds to ping, wait until it accepts new connections
         self.Connect(self._address, timeout=60)
 
         current_version = self.GetRobotInfo().version
@@ -3765,7 +3767,7 @@ class RobotVersion:
     def update_version(self, version: str):
         """Update object firmware version values.
 
-        :param version: New version of firmware. Supports multiple version formats
+        :param version: New version of firmware as reported by GetFwVersion or GetFwVersionFull.
         """
         regex_version = re.search(self.REGEX_VERSION_BUILD, version)
         self.short_version = regex_version.group("version")
