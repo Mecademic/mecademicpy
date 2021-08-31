@@ -301,6 +301,348 @@ class InterruptableEvent:
         return self._data
 
 
+class _Message:
+    """Class for storing a response message from a Mecademic robot.
+
+    Attributes
+    ----------
+    id : integer
+        The id of the message, representing the type of message.
+    data : string
+        The raw payload of the message.
+"""
+
+    def __init__(self, id, data):
+        self.id = id
+        self.data = data
+
+    def __repr__(self):
+        return "Message with id={}, data={}".format(self.id, self.data)
+
+    @classmethod
+    def from_string(cls, input):
+        """Construct message object from raw string input.
+
+        Parameters
+        ----------
+        input : string
+            Input string to convert to message.
+
+        """
+        id_start = input.find('[') + 1
+        id_end = input.find(']', id_start)
+        id = int(input[id_start:id_end])
+        # Find next square brackets (contains data).
+        data_start = input.find('[', id_end) + 1
+        data_end = input.find(']', data_start)
+
+        data = ''
+        if data_start != -1 and data_end != -1:
+            data = input[data_start:data_end]
+
+        return cls(id, data)
+
+
+class _RobotEvents:
+    """Class for storing possible status events for the Mecademic robot.
+
+    Attributes
+    ----------
+    on_connected : event
+        Set if robot is connected.
+    on_disconnected : event
+        Set if robot is disconnected.
+    on_status_updated : event
+        Set if robot status is updated.
+     on_status_gripper_updated : event
+        Set if gripper status is updated.
+    on_activated : event
+        Set if robot is activated.
+    on_deactivated : event
+        Set if robot is deactivated.
+    on_homed : event
+        Set if robot is homed.
+    on_error : event
+        Set if robot is in error.
+    on_error_reset : event
+        Set if robot error has been reset.
+    on_p_stop : event
+        Set if robot receives p_stop.
+    on_p_stop_reset : event
+        Set if p_stop is reset.
+    on_motion_paused : event
+        Set if robot motion is paused.
+    on_motion_resumed : event
+        Set if robot motion is not paused.
+    on_motion_cleared : event
+        Set if there are no pending ClearMotion commands.
+    on_activate_sim : event
+        Set if robot is in sim mode.
+    on_deactivate_sim : event
+        Set if robot is not in sim mode.
+    on_joints_updated : event
+        Set if joint angles has been updated.
+    on_pose_updated : event
+        Set if robot pose has been updated.
+    on_brakes_activated : event
+        Set if brakes are activated.
+    on_brakes_deactivated : event
+        Set if brakes are deactivated.
+    on_offline_program_started : event
+        Set if there has been a change in the offline program state.
+    on_end_of_block : event
+        Set if end of block has been reached.
+    on_end_of_cycle: event
+        Set if end of cycle has been reached
+"""
+
+    def __init__(self):
+        self.on_connected = InterruptableEvent()
+        self.on_disconnected = InterruptableEvent()
+
+        self.on_status_updated = InterruptableEvent()
+        self.on_status_gripper_updated = InterruptableEvent()
+
+        self.on_activated = InterruptableEvent()
+        self.on_deactivated = InterruptableEvent()
+
+        self.on_homed = InterruptableEvent()
+
+        self.on_error = InterruptableEvent()
+        self.on_error_reset = InterruptableEvent()
+        self.on_p_stop = InterruptableEvent()
+        self.on_p_stop_reset = InterruptableEvent()
+
+        self.on_motion_paused = InterruptableEvent()
+        self.on_motion_resumed = InterruptableEvent()
+        self.on_motion_cleared = InterruptableEvent()
+
+        self.on_activate_sim = InterruptableEvent()
+        self.on_deactivate_sim = InterruptableEvent()
+
+        self.on_joints_updated = InterruptableEvent()
+        self.on_pose_updated = InterruptableEvent()
+
+        self.on_brakes_activated = InterruptableEvent()
+        self.on_brakes_deactivated = InterruptableEvent()
+
+        self.on_offline_program_started = InterruptableEvent()
+
+        self.on_end_of_block = InterruptableEvent()
+        self.on_end_of_cycle = InterruptableEvent()
+
+        self.on_disconnected.set()
+        self.on_deactivated.set()
+        self.on_error_reset.set()
+        self.on_p_stop_reset.set()
+        self.on_motion_resumed.set()
+        self.on_deactivate_sim.set()
+
+        self.on_status_updated.set()
+        self.on_status_gripper_updated.set()
+        self.on_joints_updated.set()
+        self.on_pose_updated.set()
+        self.on_brakes_activated.set()
+
+    def clear_all(self):
+        """Clear all events.
+
+        """
+        for attr in self.__dict__:
+            self.__dict__[attr].clear()
+
+    def abort_all(self, skipped_events=[], message=""):
+        """Abort all events, except for events in skipped_events list.
+
+        """
+        for attr in self.__dict__:
+            if attr not in skipped_events:
+                self.__dict__[attr].abort(message)
+
+    def abort_all_on_error(self, message=""):
+        """Abort all events in the specific case where the robot has reported an error.
+
+        """
+        self.abort_all(
+            skipped_events=[
+                'on_connected',  # Don't abort a wait for "on_connected" (should be done by now anyways)
+                'on_status_updated',  # Don't abort a wait for "on_status_updated", that's what we're doing!
+                'on_error_reset',  # Don't abort a wait for "on_error_reset" because we got an error
+                'on_end_of_cycle'  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
+            ],
+            message=message)
+
+    def clear_abort_all(self):
+        """Clear aborts for all events.
+
+        """
+        for attr in self.__dict__:
+            self.__dict__[attr].clear_abort()
+
+
+class _CallbackQueue():
+    """Queue class for storing triggered callbacks. Only registered callbacks are added to the queue.
+
+    Attributes
+    ----------
+    _queue : queue
+        Queue to use to store callback names and associated data.
+    _registered_callbacks : set
+        Set of names of registered callbacks.
+"""
+
+    def __init__(self, robot_callbacks):
+        self._queue = queue.Queue()
+        self._registered_callbacks = set()
+
+        for attr in robot_callbacks.__dict__:
+            if robot_callbacks.__dict__[attr] is not None:
+                self._registered_callbacks.add(attr)
+
+    def qsize(self):
+        """Returns the queue size.
+
+        """
+        return self._queue.qsize()
+
+    def put(self, callback_name, data=None):
+        """Put the callback name and associated data into the queue if is registered.
+
+        Parameters
+        ----------
+        callback_name : str
+            Name of callback.
+        data : any object type
+            Associated data.
+
+        """
+        if callback_name in self._registered_callbacks or callback_name == _TERMINATE:
+            self._queue.put((callback_name, data))
+
+    def get(self, block=False, timeout: float = None):
+        """Get the next callback in the queue.
+
+        Parameters
+        ----------
+        block : bool
+            Block on next available callback if true.
+        timeout : float
+            Maximum time to wait on a callback.
+
+        Returns
+        -------
+        tuple of callback name and data
+
+        """
+        return self._queue.get(block=block, timeout=timeout)
+
+
+class RobotVersion:
+    """
+        Robot utility class to handle firmware version.
+
+    Attributes
+    ----------
+
+    build : integer
+        Build firmware version value, None if unavailable
+
+    extra : string
+        Extra firmware version name, None if unavailable
+
+    full_version : string
+        Full firmware version containing major.minor.path.build-extra
+
+    major : integer
+        Major firmware version value
+
+    minor : integer
+        Minor firmware version value
+
+    patch : interger
+        Patch firmware version value
+
+    short_version : string
+        Firmware version containing major.minor.patch only
+
+    """
+
+    REGEX_VERSION_BUILD = r"(?P<version>\d+\.\d+\.\d+)\.?(?P<build>\d+)?-?(?P<extra>[0-9a-zA-Z_-]*).*"
+
+    def __init__(self, version):
+        """Creates
+
+        :param version: version of firmware. Supports multiple version formats
+        """
+        self.full_version = version
+        self.update_version(self.full_version)
+
+    def __str__(self):
+        return self.full_version
+
+    def update_version(self, version: str):
+        """Update object firmware version values.
+
+        :param version: string
+            New version of firmware. Supports multiple version formats
+            ie. 8.1.9, 8.4.3.1805-official
+        """
+        regex_version = re.search(self.REGEX_VERSION_BUILD, version)
+        self.short_version = regex_version.group("version")
+        splitted_version = self.short_version.split(".")
+        self.major = int(splitted_version[0])
+        self.minor = int(splitted_version[1])
+        self.patch = int(splitted_version[2])
+        self.build = None
+        self.extra = None
+        if regex_version.group("build"):
+            self.build = int(regex_version.group("build"))
+        if regex_version.group("extra"):
+            self.extra = regex_version.group("extra")
+
+        self.full_version = self.short_version
+        if self.build:
+            self.full_version += f".{self.build}"
+
+        if self.extra:
+            self.full_version += f"-{self.extra}"
+
+    def is_at_least(self, major, minor=0, patch=0):
+        """Tells if this RobotInfo instance's version is at least the specified version
+
+        Parameters
+        ----------
+        major : integer
+            Minimum desired major version
+        minor : integer
+            Minimum desired minor version
+        patch : integer
+            Minimum desired patch version
+
+        Returns
+        -------
+        boolean
+            True if this RobotInfo instance's version is at least the specified version
+        """
+        # Check major
+        if self.major > major:
+            return True
+        elif self.major < major:
+            return False
+
+        # Same major, check minor
+        if self.minor > minor:
+            return True
+        elif self.minor < minor:
+            return False
+
+        # Same minor, check patch
+        if self.patch >= patch:
+            return True
+
+        return False
+
+
 class Robot:
     """Class for controlling a Mecademic robot.
 
@@ -505,7 +847,7 @@ class Robot:
     #####################################################################################
 
     @staticmethod
-    def _deactivate_on_exception(func, command_socket, *args, **kwargs):
+    def _deactivate_on_exception(func, command_socket: socket.socket, *args, **kwargs):
         """Wrap input function to send deactivate signal to command_socket on exception.
 
         Parameters
@@ -525,7 +867,7 @@ class Robot:
             raise e
 
     @staticmethod
-    def _handle_socket_rx(robot_socket, rx_queue, logger):
+    def _handle_socket_rx(robot_socket: socket.socket, rx_queue: queue.Queue, logger):
         """Handle received data on the socket.
 
         Parameters
@@ -569,7 +911,7 @@ class Robot:
                 rx_queue.put(_Message.from_string(response))
 
     @staticmethod
-    def _handle_socket_tx(robot_socket, tx_queue, logger):
+    def _handle_socket_tx(robot_socket: socket.socket, tx_queue: queue.Queue, logger):
         """Handle sending data on the socket.
 
         Parameters
@@ -596,7 +938,7 @@ class Robot:
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
-    def _connect_socket(logger, address, port, socket_timeout=0.1):
+    def _connect_socket(logger, address: str, port: int, socket_timeout=0.1):
         """Connects to an arbitrary socket.
 
         Parameters
@@ -643,7 +985,7 @@ class Robot:
         return new_socket
 
     @staticmethod
-    def _handle_callbacks(logger, callback_queue, callbacks, timeout: float = None):
+    def _handle_callbacks(logger, callback_queue: _CallbackQueue, callbacks: RobotCallbacks, timeout: float = None):
         """Runs callbacks found in callback_queue.
 
         Parameters
@@ -2058,6 +2400,165 @@ class Robot:
         finally:
             self.EndLogging()
 
+    def update_robot(self, firmware: str, address: str = None):
+        """
+        Install a new firmware and verifies robot version afterward.
+
+        Parameters
+        ----------
+        firmware: pathlib object or string
+            Path of robot firmware file
+
+        address: string
+            Robot IP address (optional if already connected)
+
+        """
+        firmware_file = None
+        if type(firmware) == pathlib.WindowsPath or type(firmware) == pathlib.PosixPath:
+            firmware_file = firmware
+        elif type(firmware) == str:
+            firmware_file = pathlib.Path(firmware)
+        else:
+            raise ArgumentError(f'Unsupported firmware type. received: {type(firmware)}, expecting pathlib or str')
+
+        firmware_file_version = RobotVersion(firmware_file.name)
+
+        # Validates robot IP address is available to script
+        if address is None and not self.IsConnected():
+            raise ArgumentError(f"address parameter can't be None and not connected to a robot.")
+        if address is None:
+            address = self._address
+        elif address != self._address:
+            raise ArgumentError(f"Trying to update robot at IP {address} but currently connected to {self._address}")
+
+        # Making sure we can send command to robot
+        if not self.IsConnected():
+            self.Connect(address=address)
+        elif self._monitor_mode:
+            self.logger.info(f'Connected to robot in monitoring mode only, attempting connection in command mode'
+                             'to deactivate robot')
+            self.Connect(address=address)
+
+        if self.GetStatusRobot(synchronous_update=True).activation_state:
+            self.logger.info(f'Robot is activated, will attempt to deactivate before updating firmware')
+            self.DeactivateRobot()
+        self.Disconnect()
+
+        robot_url = f"http://{address}/"
+
+        self.logger.info(f"Installing firmware: {firmware_file.absolute()}")
+
+        with open(firmware_file.absolute(), 'rb') as firmware_file:
+            firmware_data = firmware_file.read()
+            firmware_data_size = str(len(firmware_data))
+
+        headers = {
+            'Connection': 'keep-alive',
+            'Content-type': 'application/x-gzip',
+            'Content-Length': firmware_data_size
+        }
+
+        self.logger.info(f"Uploading firmware")
+        request_post = requests.post(robot_url, data=firmware_data, headers=headers)
+        try:
+            request_post.raise_for_status()
+        except requests.exceptions as e:
+            self.logger.error(f"Upgrade post request error: {e}")
+            raise
+
+        if not request_post.ok:
+            error_message = f"Firmware upload request failed"
+            raise RuntimeError(error_message)
+
+        self.logger.info(f"Upgrading the robot")
+        update_done = False
+        progress = ''
+        last_progress = ''
+        while not update_done:
+            # Give time to the web server restart, the function doesn't handle well errors.
+            time.sleep(2)
+
+            request_get = requests.get(robot_url, 'update', timeout=10)
+            try:
+                request_get.raise_for_status()
+            except requests.exceptions as e:
+                self.logger.error(f'Upgrade get request error: {e}')
+                raise
+
+            # get only correct answer (http code 200)
+            if request_get.status_code == 200:
+                request_response = request_get.text
+            else:
+                request_response = None
+            # while the json file is note created, get function will return 0
+            if request_response is None or request_response == '0':
+                continue
+
+            try:
+                request_answer = json.loads(request_response)
+            except Exception as e:
+                self.logger.info(f'Error retrieving json from request_response: {e}')
+                continue
+
+            if not request_answer:
+                self.logger.info(f'Answer is empty')
+                continue
+
+            if request_answer['STATUS']:
+                status_code = int(request_answer['STATUS']['Code'])
+                status_msg = request_answer['STATUS']['MSG']
+
+            if status_code in [0, 1]:
+                keys = sorted(request_answer['LOG'].keys())
+                if keys:
+                    last_progress = progress
+                    progress = request_answer['LOG'][keys[-1]]
+                    new_progress = progress.replace(last_progress, '')
+                    if '#' in new_progress:
+                        self.logger.info(new_progress)
+                    elif '100%' in new_progress:
+                        self.logger.info(new_progress)
+                    else:
+                        self.logger.debug(new_progress)
+                if status_code == 0:
+                    update_done = True
+                    self.logger.info(f'status_msg {status_msg}')
+            else:
+                error_message = f"error while updating: {status_msg}"
+                self.logger.error(error_message)
+                raise RuntimeError(error_message)
+
+        self.logger.info(f"Update completed, waiting for robot to reboot")
+
+        # need to wait to make sure the robot shutdown before attempting to ping it.
+        time.sleep(15)
+        # Use ping function (default timeout is long, this will block)
+        tools.ping_robot(address)
+        # Now that robot responds to ping, wait until it accepts new connections
+        self.Connect(address, timeout=60)
+
+        current_version = self.GetRobotInfo().version
+        if current_version.major < 8.0:
+            expected_version = firmware_file_version.short_version
+        else:
+            expected_version = firmware_file_version.full_version
+
+        if str(current_version) == expected_version:
+            self.logger.info(f"robot is now running version {current_version}")
+        else:
+            error_msg = f"Fail to install robot properly. current version {current_version}, " \
+                        f"expecting: {expected_version}"
+            self.logger.error(error_msg)
+            raise AssertionError(error_msg)
+
+        robot_status = self.GetStatusRobot(synchronous_update=True)
+        if robot_status.error_status:
+            error_msg = f"Robot is in error on version {current_version}"
+            self.logger.error(error_msg)
+            raise AssertionError(error_msg)
+
+        self.logger.info(f"Installation of {current_version} successfully completed")
+
     #####################################################################################
     # Private methods.
     #####################################################################################
@@ -2291,7 +2792,7 @@ class Robot:
             self.Disconnect()
             raise
 
-    def _receive_welcome_message(self, message_queue, from_command_port):
+    def _receive_welcome_message(self, message_queue: queue.Queue, from_command_port: bool):
         """Receive and parse a welcome message in order to set _robot_info and _robot_rt_data.
 
         Parameters
@@ -2344,7 +2845,7 @@ class Robot:
 
         Returns
         -------
-        status : boolean
+        status : bool
             Returns the status of the connection, true for success, false for failure.
 
         """
@@ -2492,7 +2993,7 @@ class Robot:
 
         self._internal_checkpoint_counter = mx_def.MX_CHECKPOINT_ID_MAX + 1
 
-    def _send_motion_command(self, command, arg_list=None):
+    def _send_motion_command(self, command: str, arg_list=None):
         """Send generic motion command with support for synchronous mode and locking.
 
         Parameters
@@ -2618,7 +3119,7 @@ class Robot:
                 else:
                     self._handle_common_messages(response)
 
-    def _handle_common_messages(self, response):
+    def _handle_common_messages(self, response: _Message):
         """Handle response messages which are received on the command and monitor port, and are processed the same way.
 
         Parameters
@@ -2768,7 +3269,7 @@ class Robot:
         elif response.id == mx_def.MX_ST_SYNC:
             self._handle_sync_response(response)
 
-    def _parse_response_bool(self, response):
+    def _parse_response_bool(self, response: _Message):
         """ Parse standard robot response, returns array of boolean values
         """
         if response.data.strip == '':
@@ -2776,7 +3277,7 @@ class Robot:
         else:
             return [bool(int(x)) for x in response.data.split(',')]
 
-    def _parse_response_int(self, response):
+    def _parse_response_int(self, response: _Message):
         """ Parse standard robot response, returns array of integer values
         """
         if response.data.strip() == '':
@@ -2784,7 +3285,7 @@ class Robot:
         else:
             return [int(x) for x in response.data.split(',')]
 
-    def _handle_robot_status_response(self, response):
+    def _handle_robot_status_response(self, response: _Message):
         """Parse robot status response and update status fields and events.
 
         Parameters
@@ -2867,7 +3368,7 @@ class Robot:
             self._robot_events.on_status_updated.set()
         self._callback_queue.put('on_status_updated')
 
-    def _handle_gripper_status_response(self, response):
+    def _handle_gripper_status_response(self, response: _Message):
         """Parse gripper status response and update status fields and events.
 
         Parameters
@@ -2890,7 +3391,7 @@ class Robot:
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
 
-    def _handle_checkpoint_response(self, response):
+    def _handle_checkpoint_response(self, response: _Message):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.
 
         Parameters
@@ -2924,7 +3425,7 @@ class Robot:
         else:
             self.logger.warning('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
 
-    def _handle_get_realtime_monitoring_response(self, response):
+    def _handle_get_realtime_monitoring_response(self, response: _Message):
         """Parse robot response to "get" or "set" real-time monitoring.
            This function identifies which real-time events are expected, and which are not enabled.
 
@@ -2984,166 +3485,7 @@ class Robot:
         # Make sure to clear values that we should no more received
         self._robot_rt_data._clear_if_disabled()
 
-    def update_robot(self, firmware, address=None):
-        """
-        Install a new firmware and verifies robot version afterward.
-
-        Parameters
-        ----------
-        firmware: pathlib object or string
-            Path of robot firmware file
-
-        address: string
-            Robot IP address (optional if already connected)
-
-        """
-        firmware_file = None
-        if type(firmware) == pathlib.WindowsPath or type(firmware) == pathlib.PosixPath:
-            firmware_file = firmware
-        elif type(firmware) == str:
-            firmware_file = pathlib.Path(firmware)
-        else:
-            raise ArgumentError(f'Unsupported firmware type. received: {type(firmware)}, expecting pathlib or str')
-
-        firmware_file_version = RobotVersion(firmware_file.name)
-
-        # Validates robot IP address is available to script
-        if address is None and not self.IsConnected():
-            raise ArgumentError(f"address parameter can't be None and not connected to a robot.")
-        if address is None:
-            address = self._address
-        elif address != self._address:
-            raise ArgumentError(f"Trying to update robot at IP {address} but currently connected to {self._address}")
-
-        # Making sure we can send command to robot
-        if not self.IsConnected():
-            self.Connect(address=address)
-        elif self._monitor_mode:
-            self.logger.info(f'Connected to robot in monitoring mode only, attempting connection in command mode'
-                             'to deactivate robot')
-            self.Connect(address=address)
-
-        if self.GetStatusRobot(synchronous_update=True).activation_state:
-            self.logger.info(f'Robot is activated, will attempt to deactivate before updating firmware')
-            self.DeactivateRobot()
-        self.Disconnect()
-
-        robot_url = f"http://{address}/"
-
-        self.logger.info(f"Installing firmware: {firmware_file.absolute()}")
-
-        with open(firmware_file.absolute(), 'rb') as firmware_file:
-            firmware_data = firmware_file.read()
-            firmware_data_size = str(len(firmware_data))
-
-        headers = {
-            'Connection': 'keep-alive',
-            'Content-type': 'application/x-gzip',
-            'Content-Length': firmware_data_size
-        }
-
-        self.logger.info(f"Uploading firmware")
-        request_post = requests.post(robot_url, data=firmware_data, headers=headers)
-        try:
-            request_post.raise_for_status()
-        except requests.exceptions as e:
-            self.logger.error(f"Upgrade post request error: {e}")
-            raise
-
-        if not request_post.ok:
-            error_message = f"Firmware upload request failed"
-            raise RuntimeError(error_message)
-
-        self.logger.info(f"Upgrading the robot")
-        update_done = False
-        progress = ''
-        last_progress = ''
-        while not update_done:
-            # Give time to the web server restart, the function doesn't handle well errors.
-            time.sleep(2)
-
-            request_get = requests.get(robot_url, 'update', timeout=10)
-            try:
-                request_get.raise_for_status()
-            except requests.exceptions as e:
-                self.logger.error(f'Upgrade get request error: {e}')
-                raise
-
-            # get only correct answer (http code 200)
-            if request_get.status_code == 200:
-                request_response = request_get.text
-            else:
-                request_response = None
-            # while the json file is note created, get function will return 0
-            if request_response is None or request_response == '0':
-                continue
-
-            try:
-                request_answer = json.loads(request_response)
-            except Exception as e:
-                self.logger.info(f'Error retrieving json from request_response: {e}')
-                continue
-
-            if not request_answer:
-                self.logger.info(f'Answer is empty')
-                continue
-
-            if request_answer['STATUS']:
-                status_code = int(request_answer['STATUS']['Code'])
-                status_msg = request_answer['STATUS']['MSG']
-
-            if status_code in [0, 1]:
-                keys = sorted(request_answer['LOG'].keys())
-                if keys:
-                    last_progress = progress
-                    progress = request_answer['LOG'][keys[-1]]
-                    new_progress = progress.replace(last_progress, '')
-                    if '#' in new_progress:
-                        self.logger.info(new_progress)
-                    elif '100%' in new_progress:
-                        self.logger.info(new_progress)
-                    else:
-                        self.logger.debug(new_progress)
-                if status_code == 0:
-                    update_done = True
-                    self.logger.info(f'status_msg {status_msg}')
-            else:
-                error_message = f"error while updating: {status_msg}"
-                self.logger.error(error_message)
-                raise RuntimeError(error_message)
-
-        self.logger.info(f"Update completed, waiting for robot to reboot")
-
-        # need to wait to make sure the robot shutdown before attempting to ping it.
-        time.sleep(15)
-        # Use ping function (default timeout is long, this will block)
-        tools.ping_robot(address)
-        # Now that robot responds to ping, wait until it accepts new connections
-        self.Connect(address, timeout=60)
-
-        current_version = self.GetRobotInfo().version
-        if current_version.major < 8.0:
-            expected_version = firmware_file_version.short_version
-        else:
-            expected_version = firmware_file_version.full_version
-
-        if str(current_version) == expected_version:
-            self.logger.info(f"robot is now running version {current_version}")
-        else:
-            error_msg = f"Fail to install robot properly. current version {current_version}, " \
-                        f"expecting: {expected_version}"
-            self.logger.error(error_msg)
-            raise AssertionError(error_msg)
-
-        robot_status = self.GetStatusRobot(synchronous_update=True)
-        if robot_status.error_status:
-            error_msg = f"Robot is in error on version {current_version}"
-            self.logger.error(error_msg)
-            raise AssertionError(error_msg)
-
-        self.logger.info(f"Installation of {current_version} sucessfully completed")
-
-    def _handle_sync_response(self, response):
+    def _handle_sync_response(self, response: _Message):
         """Parse robot response to "Sync" request
            This class uses the "Sync" request/response to ensure synchronous "Get" operations have received the
            expected response from the robot (and not a response/event sent by the robot prior to our "Get" request).
@@ -3164,7 +3506,7 @@ class Robot:
 
         Returns
         -------
-        boolean
+        bool
             True if "in sync" ("get" response we just received matches the "get" request we've just made)
         """
         return (self._rx_sync == self._tx_sync)
@@ -3181,7 +3523,7 @@ class TimestampedData:
         Data to be stored.
 """
 
-    def __init__(self, timestamp, data):
+    def __init__(self, timestamp: int, data: list[float]):
         self.timestamp = timestamp
         self.data = data
         self.enabled = False
@@ -3193,7 +3535,7 @@ class TimestampedData:
             self.timestamp = 0
             self.data = TimestampedData.zeros(len(self.data)).data
 
-    def update_from_csv(self, input_string):
+    def update_from_csv(self, input_string: str):
         """Update from comma-separated string, only if timestamp is newer.
 
         Parameters
@@ -3211,7 +3553,7 @@ class TimestampedData:
             self.timestamp = numbs[0]
             self.data = numbs[1:]
 
-    def update_from_data(self, timestamp, data):
+    def update_from_data(self, timestamp: int, data: list[float]):
         """Update with data if timestamp is newer.
 
         Parameters
@@ -3227,7 +3569,7 @@ class TimestampedData:
             self.data = data
 
     @classmethod
-    def zeros(cls, length):
+    def zeros(cls, length: int):
         """ Construct empty TimestampedData object of specified length.
 
         Parameters
@@ -3317,7 +3659,7 @@ class RobotRtData:
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
 """
 
-    def __init__(self, num_joints):
+    def __init__(self, num_joints: int):
         self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
         self.rt_target_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
         self.rt_target_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
@@ -3379,17 +3721,17 @@ class RobotStatus:
 
     Attributes
     ----------
-    activation_state : boolean
+    activation_state : bool
         True if the robot is activated.
-    homing_state : boolean
+    homing_state : bool
         True if the robot is homed.
-    simulation_mode : boolean
+    simulation_mode : bool
         True if the robot is in simulation-only mode.
-    error_status : boolean
+    error_status : bool
         True if the robot is in error.
-    pause_motion_status : boolean
+    pause_motion_status : bool
         True if motion is currently paused.
-    end_of_block_status : boolean
+    end_of_block_status : bool
         True if robot is not moving and motion queue is empty.
 """
 
@@ -3409,17 +3751,17 @@ class GripperStatus:
 
     Attributes
     ----------
-    present : boolean
+    present : bool
         True if the gripper is present on the robot.
-    homing_state : boolean
+    homing_state : bool
         True if the robot is homed.
-    homing_state : boolean
+    homing_state : bool
         True if the gripper has been homed (ready to be used).
-    holding_part : boolean
+    holding_part : bool
         True if the gripper is currently holding a part.
-    limit_reached : boolean
+    limit_reached : bool
         True if the gripper is at a limit (fully opened or closed).
-    overload_error : boolean
+    overload_error : bool
         True if the gripper is in overload error state.
 """
 
@@ -3457,7 +3799,12 @@ class RobotInfo:
         Number of joints on the robot.
 """
 
-    def __init__(self, model=None, revision=None, is_virtual=None, version=None, serial=None):
+    def __init__(self,
+                 model: str = None,
+                 revision: int = None,
+                 is_virtual: bool = None,
+                 version: RobotVersion = None,
+                 serial: str = None):
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
@@ -3483,7 +3830,7 @@ class RobotInfo:
             self.rt_on_ctrl_port_capable = True
 
     @classmethod
-    def from_command_response_string(cls, input_string):
+    def from_command_response_string(cls, input_string: str):
         """Generate robot information from standard robot connection response string.
 
         String format should be "Connected to {model} R{revision}{-virtual} v{fw_major_num}.{fw_minor_num}.{patch_num}"
@@ -3509,345 +3856,3 @@ class RobotInfo:
             return cls(model=model, revision=revision, is_virtual=virtual, version=robot_info_regex.group('version'))
         except Exception as exception:
             raise ValueError(f'Could not parse robot info string "{input_string}", error: {exception}')
-
-
-class _Message:
-    """Class for storing a response message from a Mecademic robot.
-
-    Attributes
-    ----------
-    id : integer
-        The id of the message, representing the type of message.
-    data : string
-        The raw payload of the message.
-"""
-
-    def __init__(self, id, data):
-        self.id = id
-        self.data = data
-
-    def __repr__(self):
-        return "Message with id={}, data={}".format(self.id, self.data)
-
-    @classmethod
-    def from_string(cls, input):
-        """Construct message object from raw string input.
-
-        Parameters
-        ----------
-        input : string
-            Input string to convert to message.
-
-        """
-        id_start = input.find('[') + 1
-        id_end = input.find(']', id_start)
-        id = int(input[id_start:id_end])
-        # Find next square brackets (contains data).
-        data_start = input.find('[', id_end) + 1
-        data_end = input.find(']', data_start)
-
-        data = ''
-        if data_start != -1 and data_end != -1:
-            data = input[data_start:data_end]
-
-        return cls(id, data)
-
-
-class _RobotEvents:
-    """Class for storing possible status events for the Mecademic robot.
-
-    Attributes
-    ----------
-    on_connected : event
-        Set if robot is connected.
-    on_disconnected : event
-        Set if robot is disconnected.
-    on_status_updated : event
-        Set if robot status is updated.
-     on_status_gripper_updated : event
-        Set if gripper status is updated.
-    on_activated : event
-        Set if robot is activated.
-    on_deactivated : event
-        Set if robot is deactivated.
-    on_homed : event
-        Set if robot is homed.
-    on_error : event
-        Set if robot is in error.
-    on_error_reset : event
-        Set if robot error has been reset.
-    on_p_stop : event
-        Set if robot receives p_stop.
-    on_p_stop_reset : event
-        Set if p_stop is reset.
-    on_motion_paused : event
-        Set if robot motion is paused.
-    on_motion_resumed : event
-        Set if robot motion is not paused.
-    on_motion_cleared : event
-        Set if there are no pending ClearMotion commands.
-    on_activate_sim : event
-        Set if robot is in sim mode.
-    on_deactivate_sim : event
-        Set if robot is not in sim mode.
-    on_joints_updated : event
-        Set if joint angles has been updated.
-    on_pose_updated : event
-        Set if robot pose has been updated.
-    on_brakes_activated : event
-        Set if brakes are activated.
-    on_brakes_deactivated : event
-        Set if brakes are deactivated.
-    on_offline_program_started : event
-        Set if there has been a change in the offline program state.
-    on_end_of_block : event
-        Set if end of block has been reached.
-    on_end_of_cycle: event
-        Set if end of cycle has been reached
-"""
-
-    def __init__(self):
-        self.on_connected = InterruptableEvent()
-        self.on_disconnected = InterruptableEvent()
-
-        self.on_status_updated = InterruptableEvent()
-        self.on_status_gripper_updated = InterruptableEvent()
-
-        self.on_activated = InterruptableEvent()
-        self.on_deactivated = InterruptableEvent()
-
-        self.on_homed = InterruptableEvent()
-
-        self.on_error = InterruptableEvent()
-        self.on_error_reset = InterruptableEvent()
-        self.on_p_stop = InterruptableEvent()
-        self.on_p_stop_reset = InterruptableEvent()
-
-        self.on_motion_paused = InterruptableEvent()
-        self.on_motion_resumed = InterruptableEvent()
-        self.on_motion_cleared = InterruptableEvent()
-
-        self.on_activate_sim = InterruptableEvent()
-        self.on_deactivate_sim = InterruptableEvent()
-
-        self.on_joints_updated = InterruptableEvent()
-        self.on_pose_updated = InterruptableEvent()
-
-        self.on_brakes_activated = InterruptableEvent()
-        self.on_brakes_deactivated = InterruptableEvent()
-
-        self.on_offline_program_started = InterruptableEvent()
-
-        self.on_end_of_block = InterruptableEvent()
-        self.on_end_of_cycle = InterruptableEvent()
-
-        self.on_disconnected.set()
-        self.on_deactivated.set()
-        self.on_error_reset.set()
-        self.on_p_stop_reset.set()
-        self.on_motion_resumed.set()
-        self.on_deactivate_sim.set()
-
-        self.on_status_updated.set()
-        self.on_status_gripper_updated.set()
-        self.on_joints_updated.set()
-        self.on_pose_updated.set()
-        self.on_brakes_activated.set()
-
-    def clear_all(self):
-        """Clear all events.
-
-        """
-        for attr in self.__dict__:
-            self.__dict__[attr].clear()
-
-    def abort_all(self, skipped_events=[], message=""):
-        """Abort all events, except for events in skipped_events list.
-
-        """
-        for attr in self.__dict__:
-            if attr not in skipped_events:
-                self.__dict__[attr].abort(message)
-
-    def abort_all_on_error(self, message=""):
-        """Abort all events in the specific case where the robot has reported an error.
-
-        """
-        self.abort_all(
-            skipped_events=[
-                'on_connected',  # Don't abort a wait for "on_connected" (should be done by now anyways)
-                'on_status_updated',  # Don't abort a wait for "on_status_updated", that's what we're doing!
-                'on_error_reset',  # Don't abort a wait for "on_error_reset" because we got an error
-                'on_end_of_cycle'  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
-            ],
-            message=message)
-
-    def clear_abort_all(self):
-        """Clear aborts for all events.
-
-        """
-        for attr in self.__dict__:
-            self.__dict__[attr].clear_abort()
-
-
-class _CallbackQueue():
-    """Queue class for storing triggered callbacks. Only registered callbacks are added to the queue.
-
-    Attributes
-    ----------
-    _queue : queue
-        Queue to use to store callback names and associated data.
-    _registered_callbacks : set
-        Set of names of registered callbacks.
-"""
-
-    def __init__(self, robot_callbacks):
-        self._queue = queue.Queue()
-        self._registered_callbacks = set()
-
-        for attr in robot_callbacks.__dict__:
-            if robot_callbacks.__dict__[attr] is not None:
-                self._registered_callbacks.add(attr)
-
-    def qsize(self):
-        """Returns the queue size.
-
-        """
-        return self._queue.qsize()
-
-    def put(self, callback_name, data=None):
-        """Put the callback name and associated data into the queue if is registered.
-
-        Parameters
-        ----------
-        callback_name : str
-            Name of callback.
-        data : any object type
-            Associated data.
-
-        """
-        if callback_name in self._registered_callbacks or callback_name == _TERMINATE:
-            self._queue.put((callback_name, data))
-
-    def get(self, block=False, timeout: float = None):
-        """Get the next callback in the queue.
-
-        Parameters
-        ----------
-        block : bool
-            Block on next available callback if true.
-        timeout : float
-            Maximum time to wait on a callback.
-
-        Returns
-        -------
-        tuple of callback name and data
-
-        """
-        return self._queue.get(block=block, timeout=timeout)
-
-
-class RobotVersion:
-    """
-        Robot utility class to handle firmware version.
-
-    Attributes
-    ----------
-
-    build : integer
-        Build firmware version value, None if unvailable
-
-    extra : string
-        Extra firmware version name, None if unvailable
-
-    full_version : string
-        Full firmware version containing major.minor.path.build-extra
-
-    major : integer
-        Major firmware version value
-
-    minor : integer
-        Minor firmware version value
-
-    patch : interger
-        Patch firmware version value
-
-    short_version : string
-        Firmware version containing major.minor.patch only
-
-    """
-
-    REGEX_VERSION_BUILD = r"(?P<version>\d+\.\d+\.\d+)\.?(?P<build>\d+)?-?(?P<extra>[0-9a-zA-Z_-]*).*"
-
-    def __init__(self, version):
-        """Creates
-
-        :param version: version of firmware. Supports multiple version formats
-        """
-        self.full_version = version
-        self.update_version(self.full_version)
-
-    def __str__(self):
-        return self.full_version
-
-    def update_version(self, version: str):
-        """Update object firmware version values.
-
-        :param version: string
-            New version of firmware. Supports multiple version formats
-            ie. 8.1.9, 8.4.3.1805-official
-        """
-        regex_version = re.search(self.REGEX_VERSION_BUILD, version)
-        self.short_version = regex_version.group("version")
-        splitted_version = self.short_version.split(".")
-        self.major = int(splitted_version[0])
-        self.minor = int(splitted_version[1])
-        self.patch = int(splitted_version[2])
-        self.build = None
-        self.extra = None
-        if regex_version.group("build"):
-            self.build = int(regex_version.group("build"))
-        if regex_version.group("extra"):
-            self.extra = regex_version.group("extra")
-
-        self.full_version = self.short_version
-        if self.build:
-            self.full_version += f".{self.build}"
-
-        if self.extra:
-            self.full_version += f"-{self.extra}"
-
-    def is_at_least(self, major, minor=0, patch=0):
-        """Tells if this RobotInfo instance's version is at least the specified version
-
-        Parameters
-        ----------
-        major : integer
-            Minimum desired major version
-        minor : integer
-            Minimum desired minor version
-        patch : integer
-            Minimum desired patch version
-
-        Returns
-        -------
-        boolean
-            True if this RobotInfo instance's version is at least the specified version
-        """
-        # Check major
-        if self.major > major:
-            return True
-        elif self.major < major:
-            return False
-
-        # Same major, check minor
-        if self.minor > minor:
-            return True
-        elif self.minor < minor:
-            return False
-
-        # Same minor, check patch
-        if self.patch >= patch:
-            return True
-
-        return False
