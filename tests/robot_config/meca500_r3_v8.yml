@@ -1,0 +1,25 @@
+# Robot model
+model: "meca500"
+# Robot model revision
+revision: 3
+# Boolean indicating of the robot is virtual or not. (virtual is different from fake robot)
+virtual: False
+
+# This is the connection string returned to the Python API when you connect to a 'fake' robot
+expected_connection_message: "Connected to Meca500 R3 v8.3.0"
+
+#
+# expected_connect_commands is a list of commands send by the Python API on connect
+# That list is used by the 'fake' robot to answer those command properly
+#
+# Each command is composed of:
+#   - name: Name of the command (just like in the web)
+#   - response_code: Command return code.
+#   - response: String return by the 'fake' to the Python API
+expected_connect_commands:
+  - name: "GetRobotSerial"
+    response_code: 2083
+    response: 'm500-99999999'
+  - name: "GetFwVersionFull"
+    response_code: 2082
+    response: '8.3.0.4142-tests'

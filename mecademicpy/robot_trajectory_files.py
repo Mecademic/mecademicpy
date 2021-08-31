@@ -1,7 +1,7 @@
 """Classes in this file are used to store raw or manipulated data about Mecademic robots.
 
-Correct usage would be to build a RobotTrajectories object, and give it to ZipFileLogger.create_and_zip_files() to store data
-in a file.
+Correct usage would be to build a RobotTrajectories object, and give it to ZipFileLogger.create_and_zip_files() to
+store data in a file.
 
 RobotTrajectories objects can then be reconstructed from those files using ZipFileLogger.unzip_and_open_files().
 
@@ -330,8 +330,8 @@ class RobotTrajectories:
         This object, when produced by the logger, should contain only one dataframe, in the output_dfs list, associating
         timestamps to robot kinematics through time
 
-        All other dataframes in this object could be produced by subsequent tests and manipulations made on the data from
-        the first dataframe
+        All other dataframes in this object could be produced by subsequent tests and manipulations made on the data
+        from the first dataframe
     """
     robot_context: RobotContext = field(default_factory=RobotContext)
     robot_df_hist: RobotDfHist = field(default_factory=RobotDfHist)

@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
+from argparse import ArgumentError
 import contextlib
 import copy
 import functools
 import ipaddress
+import json
 import logging
+import math
+import pathlib
 import queue
 import re
+import requests
 import socket
 import threading
 import time
-from pathlib import PurePath
-
-import pandas as pd
 
 import mecademicpy.mx_robot_def as mx_def
+import mecademicpy.tools as tools
 
 from ._robot_trajectory_logger import _RobotTrajectoryLogger
 
@@ -377,7 +380,7 @@ class Robot:
                 robot_socket.sendall((command + '\0').encode('ascii'))
 
     @staticmethod
-    def _connect_socket(logger, address, port):
+    def _connect_socket(logger, address, port, socket_timeout=0.1):
         """Connects to an arbitrary socket.
 
         Parameters
@@ -388,6 +391,8 @@ class Robot:
             Address to use.
         port : int
             Port number to use.
+        socket_timeout: seconds
+            Time allocated (in seconds) to connect to robot
 
         Returns
         -------
@@ -395,18 +400,30 @@ class Robot:
             Successfully-connected socket object.
 
         """
-        logger.debug('Attempting to connect to %s:%s', address, port)
+        logger.debug(f'Attempting to connect to {address}:{port}')
 
-        # Create socket and attempt connection.
-        new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        new_socket.settimeout(0.1)  # 100ms
-        try:
-            new_socket.connect((address, port))
-        except Exception as exception:
-            logger.error('Unable to connect to %s:%s.', address, port)
-            return None
+        connect_loops = math.ceil(socket_timeout / 0.1)
+        for _ in range(connect_loops):
+            # Create socket and attempt connection.
+            new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            new_socket.settimeout(100)
+            try:
+                new_socket.connect((address, port))
+                break
+            except (socket.timeout, TimeoutError) as e:
+                logger.debug(f'Timeout connecting to {address}:{port}, retrying in 100ms.')
+                continue
+            except ConnectionRefusedError:
+                logger.debug(f'Connection refused to {address}:{port}, retrying in 100ms.')
+                time.sleep(0.1)
+                continue
+            except Exception as exception:
+                raise TimeoutError(f'Unable to connect to {address}:{port}, exception: {exception}')
 
-        logger.debug('Connected to %s:%s.', address, port)
+        if new_socket is None:
+            raise TimeoutError(f'Timeout while connecting to {address}:{port}.')
+
+        logger.info(f'Connected to {address}:{port}.')
         return new_socket
 
     @staticmethod
@@ -514,14 +531,13 @@ class Robot:
 
     # Robot control functions.
 
-    def Connect(
-        self,
-        address=mx_def.MX_DEFAULT_ROBOT_IP,
-        enable_synchronous_mode=False,
-        disconnect_on_exception=True,
-        monitor_mode=False,
-        offline_mode=False,
-    ):
+    def Connect(self,
+                address=mx_def.MX_DEFAULT_ROBOT_IP,
+                enable_synchronous_mode=False,
+                disconnect_on_exception=True,
+                monitor_mode=False,
+                offline_mode=False,
+                timeout=0.1):
         """Attempt to connect to a physical Mecademic Robot.
 
         Parameters
@@ -555,10 +571,10 @@ class Robot:
             self._monitor_mode = monitor_mode
 
             if not self._monitor_mode:
-                self._initialize_command_socket()
+                self._initialize_command_socket(timeout)
                 self._initialize_command_connection()
 
-            self._initialize_monitoring_socket()
+            self._initialize_monitoring_socket(timeout)
             self._initialize_monitoring_connection()
 
             self._robot_events.clear_all()
@@ -580,7 +596,11 @@ class Robot:
             # Start callback thread if necessary
             self._start_callback_thread()
 
-        # Once connected, we fetch some information required by this Robot class (outside main lock).
+        if self._robot_info.version.major < 8:
+            self.logger.warning('Python API not supported for firmware under version 8')
+            return
+
+        # Fetching the serial number must occur outside main_lock.
         if not self._monitor_mode:
             # Fetch the robot serial number
             serial_response = self.SendCustomCommand('GetRobotSerial',
@@ -593,6 +613,11 @@ class Robot:
                 real_time_monitoring_response = self.SendCustomCommand(
                     'GetRealTimeMonitoring', expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING])
                 real_time_monitoring_response.wait(timeout=self.default_timeout)
+
+            full_version_responce = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
+            full_version_responce.wait(timeout=self.default_timeout)
+            full_version = full_version_responce.data.data
+            self._robot_info.version.update_version(full_version)
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
@@ -1324,7 +1349,7 @@ class Robot:
             # Can't wait if robot is in error (already "idle")
             if self._robot_status.error_status:
                 raise InterruptException('Robot is in error')
-            checkpoint = self._set_checkpoint_internal()
+        checkpoint = self._set_checkpoint_internal()
 
         start_time = time.time()
         checkpoint.wait(timeout=timeout)
@@ -1926,7 +1951,7 @@ class Robot:
         thread.start()
         return thread
 
-    def _initialize_command_socket(self):
+    def _initialize_command_socket(self, timeout=0.1):
         """Establish the command socket and the associated thread.
 
         """
@@ -1937,7 +1962,8 @@ class Robot:
             raise InvalidStateError('Cannot connect since existing command socket exists.')
 
         try:
-            self._command_socket = self._connect_socket(self.logger, self._address, mx_def.MX_ROBOT_TCP_PORT_CONTROL)
+            self._command_socket = self._connect_socket(self.logger, self._address, mx_def.MX_ROBOT_TCP_PORT_CONTROL,
+                                                        timeout)
 
             if self._command_socket is None:
                 raise CommunicationError('Command socket could not be created. Is the IP address correct?')
@@ -1963,7 +1989,7 @@ class Robot:
             self.Disconnect()
             raise
 
-    def _initialize_monitoring_socket(self):
+    def _initialize_monitoring_socket(self, timeout):
         """Establish the monitoring socket and the associated thread.
 
         """
@@ -1974,7 +2000,8 @@ class Robot:
             raise InvalidStateError('Cannot connect since existing monitor socket exists.')
 
         try:
-            self._monitor_socket = self._connect_socket(self.logger, self._address, mx_def.MX_ROBOT_TCP_PORT_FEED)
+            self._monitor_socket = self._connect_socket(self.logger, self._address, mx_def.MX_ROBOT_TCP_PORT_FEED,
+                                                        timeout)
 
             if self._monitor_socket is None:
                 raise CommunicationError('Monitor socket could not be created. Is the IP address correct?')
@@ -2030,8 +2057,8 @@ class Robot:
         self._robot_info = RobotInfo.from_command_response_string(response.data)
 
         # Check if current robot version supports real-time monitoring messages (8.4+)
-        if (self._robot_info.fw_major_rev >= 9) or (self._robot_info.fw_major_rev == 8
-                                                    and self._robot_info.fw_minor_rev >= 4):
+        if (self._robot_info.version.major == 8
+                and self._robot_info.version.minor >= 4) or (self._robot_info.version.major >= 9):
             self._robot_info.rt_message_capable = True
 
         self._robot_kinematics = RobotKinematics(self._robot_info.num_joints)
@@ -2397,14 +2424,14 @@ class Robot:
             if response.id == mx_def.MX_ST_GET_JOINTS:
                 self._robot_kinematics.rt_target_joint_pos.data = _string_to_numbers(response.data)
                 self._robot_kinematics.rt_target_joint_pos.enabled = True
-                if is_command_response:
-                    self._robot_events.on_joints_updated.set()
+            if is_command_response:
+                self._robot_events.on_joints_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_POSE:
                 self._robot_kinematics.rt_target_cart_pos.data = _string_to_numbers(response.data)
                 self._robot_kinematics.rt_target_cart_pos.enabled = True
-                if is_command_response:
-                    self._robot_events.on_pose_updated.set()
+            if is_command_response:
+                self._robot_events.on_pose_updated.set()
 
             elif response.id == mx_def.MX_ST_GET_CONF:
                 self._robot_kinematics.rt_target_conf.data = _string_to_numbers(response.data)
@@ -2644,6 +2671,7 @@ class Robot:
         """Parse robot response to "get" or "set" real-time monitoring.
            This function identifies which real-time events are expected, and which are not enabled.
 
+
         Parameters
         ----------
         response : Message object
@@ -2689,6 +2717,163 @@ class Robot:
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
                 for accelerometer in self._robot_kinematics.rt_accelerometer.values():
                     accelerometer.enabled = True
+
+    def update_robot(self, firmware, address=None):
+        """
+        Install a new firmware and verifies robot version afterward.
+
+        Parameters
+        ----------
+        firmware: pathlib object or string
+            Path of robot firmware file
+
+        address: string
+            Robot IP address (optional if already connected)
+
+        """
+        firmware_file = None
+        if type(firmware) == pathlib.WindowsPath or type(firmware) == pathlib.PosixPath:
+            firmware_file = firmware
+        elif type(firmware) == str:
+            firmware_file = pathlib.Path(firmware)
+        else:
+            raise ArgumentError(f'Unsupported firmware type. received: {type(firmware)}, expecting pathlib or str')
+
+        firmware_file_version = RobotVersion(firmware_file.name)
+
+        # Validates robot IP address is available to script
+        if address is None and not self.IsConnected():
+            raise ArgumentError(f"address parameter can't be None and not connected to a robot.")
+        if address is None:
+            address = self._address
+        elif address != self._address:
+            raise ArgumentError(f"Trying to update robot at IP {address} but currently connected to {self._address}")
+
+        # Making sure we can send command to robot
+        if not self.IsConnected():
+            self.Connect(address=address)
+        elif self._monitor_mode:
+            self.logger.info(f'Connected to robot in monitoring mode only, attempting connection in command mode'
+                             'to deactivate robot')
+            self.Connect(address=address)
+
+        if self.GetStatusRobot(synchronous_update=True).activation_state:
+            self.logger.info(f'Robot is activated, will attempt to deactivate before updating firmware')
+            self.DeactivateRobot()
+        self.Disconnect()
+
+        robot_url = f"http://{address}/"
+
+        self.logger.info(f"Installing firmware: {firmware_file.absolute()}")
+
+        with open(firmware_file.absolute(), 'rb') as firmware_file:
+            firmware_data = firmware_file.read()
+            firmware_data_size = str(len(firmware_data))
+
+        headers = {
+            'Connection': 'keep-alive',
+            'Content-type': 'application/x-gzip',
+            'Content-Length': firmware_data_size
+        }
+
+        self.logger.info(f"Uploading firmware")
+        request_post = requests.post(robot_url, data=firmware_data, headers=headers)
+        try:
+            request_post.raise_for_status()
+        except requests.exceptions as e:
+            self.logger.error(f"Upgrade post request error: {e}")
+            raise
+
+        if not request_post.ok:
+            error_message = f"Firmware upload request failed"
+            raise RuntimeError(error_message)
+
+        self.logger.info(f"Upgrading the robot")
+        update_done = False
+        progress = ''
+        last_progress = ''
+        while not update_done:
+            # Give time to the web server restart, the function doesn't handle well errors.
+            time.sleep(2)
+
+            request_get = requests.get(robot_url, 'update', timeout=10)
+            try:
+                request_get.raise_for_status()
+            except requests.exceptions as e:
+                self.logger.error(f'Upgrade get request error: {e}')
+                raise
+
+            # get only correct answer (http code 200)
+            if request_get.status_code == 200:
+                request_response = request_get.text
+            else:
+                request_response = None
+            # while the json file is note created, get function will return 0
+            if request_response is None or request_response == '0':
+                continue
+
+            try:
+                request_answer = json.loads(request_response)
+            except Exception as e:
+                self.logger.info(f'Error retrieving json from request_response: {e}')
+                continue
+
+            if not request_answer:
+                self.logger.info(f'Answer is empty')
+                continue
+
+            if request_answer['STATUS']:
+                status_code = int(request_answer['STATUS']['Code'])
+                status_msg = request_answer['STATUS']['MSG']
+
+            if status_code in [0, 1]:
+                keys = sorted(request_answer['LOG'].keys())
+                if keys:
+                    last_progress = progress
+                    progress = request_answer['LOG'][keys[-1]]
+                    new_progress = progress.replace(last_progress, '')
+                    if '#' in new_progress:
+                        self.logger.info(new_progress)
+                    elif '100%' in new_progress:
+                        self.logger.info(new_progress)
+                    else:
+                        self.logger.debug(new_progress)
+                if status_code == 0:
+                    update_done = True
+                    self.logger.info(f'status_msg {status_msg}')
+            else:
+                error_message = f"error while updating: {status_msg}"
+                self.logger.error(error_message)
+                raise RuntimeError(error_message)
+
+        self.logger.info(f"Update completed, waiting for robot to reboot")
+
+        # need to wait to make sure the robot shutdown before attempting to ping it.
+        time.sleep(15)
+        tools.ping_robot(address)
+        self.Connect(address, timeout=60)
+
+        current_version = self.GetRobotInfo().version
+        if current_version.major < 8.0:
+            expected_version = firmware_file_version.short_version
+        else:
+            expected_version = firmware_file_version.full_version
+
+        if str(current_version) == expected_version:
+            self.logger.info(f"robot is now running version {current_version}")
+        else:
+            error_msg = f"Fail to install robot properly. current version {current_version}, " \
+                        f"expecting: {expected_version}"
+            self.logger.error(error_msg)
+            raise AssertionError(error_msg)
+
+        robot_status = self.GetStatusRobot(synchronous_update=True)
+        if robot_status.error_status:
+            error_msg = f"Robot is in error on version {current_version}"
+            self.logger.error(error_msg)
+            raise AssertionError(error_msg)
+
+        self.logger.info(f"Installation of {current_version} sucessfully completed")
 
 
 class RobotCallbacks:
@@ -3043,12 +3228,8 @@ class RobotInfo:
         Robot revision.
     is_virtual : bool
         True if is a virtual robot.
-    fw_major_rev : int
-        Major firmware revision number.
-    fw_minor_rev : int
-        Minor firmware revision number.
-    fw_patch_num : int
-        Firmware patch number.
+    version : RobotVersion object
+        robot firmware revision number.
     serial : string
         Serial identifier of robot.
     rt_message_capable : bool
@@ -3057,20 +3238,11 @@ class RobotInfo:
         Number of joints on the robot.
 """
 
-    def __init__(self,
-                 model=None,
-                 revision=None,
-                 is_virtual=None,
-                 fw_major_rev=None,
-                 fw_minor_rev=None,
-                 fw_patch_num=None,
-                 serial=None):
+    def __init__(self, model=None, revision=None, is_virtual=None, version=None, serial=None):
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
-        self.fw_major_rev = fw_major_rev
-        self.fw_minor_rev = fw_minor_rev
-        self.fw_patch_num = fw_patch_num
+        self.version = RobotVersion(version)
         self.serial = serial
         self.rt_message_capable = False
 
@@ -3081,7 +3253,7 @@ class RobotInfo:
         elif self.model is None:
             self.num_joints = 1
         else:
-            raise ValueError('Invalid robot model: {}'.format(self.model))
+            raise ValueError(f'Invalid robot model: {self.model}')
 
     @classmethod
     def from_command_response_string(cls, input_string):
@@ -3095,17 +3267,21 @@ class RobotInfo:
             Input string to be parsed.
 
         """
-        robot_info_regex = re.compile(r'Connected to (\b.*\b) R(\d)(-virtual)? v(\d+)\.(\d+)\.(\d+)')
+        ROBOT_CONNECTION_STRING = \
+            r"Connected to (?P<model>\w+) ?R?(?P<revision>\d)?(?P<virtual>-virtual)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
+
+        virtual = False
         try:
-            matches = robot_info_regex.match(input_string).groups()
-            return cls(model=matches[0],
-                       revision=int(matches[1]),
-                       is_virtual=(matches[2] is not None),
-                       fw_major_rev=int(matches[3]),
-                       fw_minor_rev=int(matches[4]),
-                       fw_patch_num=int(matches[5]))
+            robot_info_regex = re.search(ROBOT_CONNECTION_STRING, input_string)
+            if robot_info_regex.group('model'):
+                model = robot_info_regex.group('model')
+            if robot_info_regex.group('revision'):
+                revision = int(robot_info_regex.group('revision'))
+            if robot_info_regex.group('virtual'):
+                virtual = True
+            return cls(model=model, revision=revision, is_virtual=virtual, version=robot_info_regex.group('version'))
         except Exception as exception:
-            raise ValueError(f'Could not parse robot info string "{input_string}"')
+            raise ValueError(f'Could not parse robot info string "{input_string}", error: {exception}')
 
 
 class InterruptableEvent:
@@ -3277,7 +3453,7 @@ class _RobotEvents:
         Set if robot status is updated.
      on_status_gripper_updated : event
         Set if gripper status is updated.
-   on_activated : event
+    on_activated : event
         Set if robot is activated.
     on_deactivated : event
         Set if robot is deactivated.
@@ -3456,6 +3632,77 @@ class _CallbackQueue():
 
         """
         return self._queue.get(block=block, timeout=timeout)
+
+
+class RobotVersion:
+    """
+        Robot utility class to handle firmware version.
+
+    Attributes
+    ----------
+
+    build : integer
+        Build firmware version value, None if unvailable
+
+    extra : string
+        Extra firmware version name, None if unvailable
+
+    full_version : string
+        Full firmware version containing major.minor.path.build-extra
+
+    major : integer
+        Major firmware version value
+
+    minor : integer
+        Minor firmware version value
+
+    patch : interger
+        Patch firmware version value
+
+    short_version : string
+        Firmware version containing major.minor.patch only
+
+    """
+
+    REGEX_VERSION_BUILD = r"(?P<version>\d+\.\d+\.\d+)\.?(?P<build>\d+)?-?(?P<extra>[0-9a-zA-Z_-]*).*"
+
+    def __init__(self, version):
+        """Creates
+
+        :param version: version of firmware. Supports multiple version formats
+        """
+        self.full_version = version
+        self.update_version(self.full_version)
+
+    def __str__(self):
+        return self.full_version
+
+    def update_version(self, version):
+        """Update object firmware version values.
+
+        :param version: string
+            New version of firmware. Supports multiple version formats
+            ie. 8.1.9, 8.4.3.1805-official
+        """
+        regex_version = re.search(self.REGEX_VERSION_BUILD, version)
+        self.short_version = regex_version.group("version")
+        splitted_version = self.short_version.split(".")
+        self.major = int(splitted_version[0])
+        self.minor = int(splitted_version[1])
+        self.patch = int(splitted_version[2])
+        self.build = None
+        self.extra = None
+        if regex_version.group("build"):
+            self.build = int(regex_version.group("build"))
+        if regex_version.group("extra"):
+            self.extra = regex_version.group("extra")
+
+        self.full_version = self.short_version
+        if self.build:
+            self.full_version += f".{self.build}"
+
+        if self.extra:
+            self.full_version += f"-{self.extra}"
 
 
 # Map used to provide information about robot return codes
