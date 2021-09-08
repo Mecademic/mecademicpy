@@ -7,6 +7,10 @@ A python module designed for robot products from Mecademic. The module offers to
 
  * Meca500 R1, R2, R3
 
+#### Supported Firmware Versions
+
+ * 8.3 and up
+
 ## Prerequisites
 
 Please read the [user programming manual](https://mecademic.com/resources/documentation) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).

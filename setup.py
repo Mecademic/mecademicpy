@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
     long_description = fh.read()
 
 setuptools.setup(name='mecademicpy',
-                 version='0.0.1',
+                 version='1.0.0',
                  author='Mecademic',
                  author_email='support@mecademic.com',
                  license='MIT',
