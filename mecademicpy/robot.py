@@ -2178,7 +2178,7 @@ class Robot:
 
     @disconnect_on_exception
     def SetGripperSim(self, activated: bool = True):
-        """Enables/disable gripper simulation mode, allowing GripperOpen/Close commands on a robot without a gripper."""
+        """Enable/disable gripper simulation mode, allowing GripperOpen/Close commands on a robot without a gripper."""
         with self._main_lock:
             self._check_internal_states()
             if activated:
