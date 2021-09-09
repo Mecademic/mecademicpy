@@ -5,13 +5,17 @@ A python module designed for robot products from Mecademic. The module offers to
 
 #### Supported Robots
 
- * Meca500 R1, R2, R3
+ * Meca500 R2, R3
+
+#### Supported Firmware Versions
+
+ * 8.3 and up
 
 ## Prerequisites
 
 Please read the [user programming manual](https://mecademic.com/resources/documentation) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
 
-To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is required to use python version 3.7 or higher. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
+To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is required to use python version 3.7 or higher. We recommend using Python 3.9 since this is the version on which this module is actively tested. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
 
 The user can validate their python installation by running `python --version` in a terminal.
 
