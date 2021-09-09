@@ -21,4 +21,5 @@ setuptools.setup(name='mecademicpy',
                      'License :: OSI Approved :: MIT License',
                      'Operating System :: OS Independent',
                  ],
+                 python_requires='>=3.7',
                  install_requires=['dataclasses_json>=0.5.4', 'pandas'])

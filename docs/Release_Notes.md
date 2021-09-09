@@ -19,5 +19,5 @@ Copyright &copy; 2021 by Mecademic Inc.
 - Robot Event Callbacks
 - Preserved State on Disconnection
 - Robot command and state logging
-- Robot state updates at 1kHz frequency with all messages enabled
+- Robot state updates up to 1kHz frequency
 - Multithreading/Multiprocessing compatible
