@@ -131,6 +131,8 @@ MX_ST_RESUME_MOTION = 2043
 MX_ST_CLEAR_MOTION = 2044
 MX_ST_SIM_ON = 2045
 MX_ST_SIM_OFF = 2046
+MX_ST_GRIPPER_SIM_ON = 2047
+MX_ST_GRIPPER_SIM_OFF = 2048
 MX_ST_EOM_ON = 2052
 MX_ST_EOM_OFF = 2053
 MX_ST_EOB_ON = 2054
@@ -363,6 +365,10 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MX_ST_SIM_ON, "MX_ST_SIM_ON", is_error=False),
     MX_ST_SIM_OFF:
     RobotStatusCodeInfo(MX_ST_SIM_OFF, "MX_ST_SIM_OFF", is_error=False),
+    MX_ST_GRIPPER_SIM_ON:
+    RobotStatusCodeInfo(MX_ST_GRIPPER_SIM_ON, "MX_ST_GRIPPER_SIM_ON", is_error=False),
+    MX_ST_GRIPPER_SIM_OFF:
+    RobotStatusCodeInfo(MX_ST_GRIPPER_SIM_OFF, "MX_ST_GRIPPER_SIM_OFF", is_error=False),
     MX_ST_EOM_ON:
     RobotStatusCodeInfo(MX_ST_EOM_ON, "MX_ST_EOM_ON", is_error=False),
     MX_ST_EOM_OFF:
