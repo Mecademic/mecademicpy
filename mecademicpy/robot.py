@@ -2212,7 +2212,7 @@ class Robot:
             else:
                 self._robot_events.on_brakes_deactivated.wait()
 
-    def GetRobotInfo(self):
+    def GetRobotInfo(self) -> RobotVersion:
         """Return a copy of the known robot information.
 
         Return
@@ -2348,6 +2348,10 @@ class Robot:
                                                  expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
                                                  skip_internal_check=True)
             response.wait(timeout=self.default_timeout)
+            if not self._robot_info.rt_on_ctrl_port_capable:
+                # Older version -> can't be sure that monitoring and control port are in sync, let's wait few
+                for loop in range(10):
+                    self.WaitEndOfCycle()
 
         self._file_logger = _RobotTrajectoryLogger(self._robot_info,
                                                    self._robot_rt_data,
