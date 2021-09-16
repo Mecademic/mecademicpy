@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 from argparse import ArgumentError
 import contextlib
 import copy
