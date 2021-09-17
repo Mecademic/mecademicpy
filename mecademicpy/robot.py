@@ -1160,9 +1160,9 @@ class Robot:
             self._robot_info.serial = serial_response_message.data
 
             # Fetch full version
-            full_version_responce = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
-            full_version_responce.wait(timeout=self.default_timeout)
-            full_version = full_version_responce.data.data
+            full_version_response = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
+            full_version_response.wait(timeout=self.default_timeout)
+            full_version = full_version_response.data.data
             self._robot_info.version.update_version(full_version)
 
             # Fetch the current real-time monitoring settings
@@ -2543,7 +2543,7 @@ class Robot:
                 raise RuntimeError(error_message)
 
             if time.monotonic() > start_time + self._UPDATE_TIMEOUT:
-                error_message = f"Timeout while waiting for update done responce, after {self._UPDATE_TIMEOUT} seconds"
+                error_message = f"Timeout while waiting for update done response, after {self._UPDATE_TIMEOUT} seconds"
                 raise TimeoutError(error_message)
 
         self.logger.info(f"Update completed, waiting for robot to reboot")
