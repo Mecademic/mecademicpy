@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 from argparse import ArgumentError
 import contextlib
 import copy
@@ -1076,6 +1077,7 @@ class Robot:
     _rx_sync : integer
         Most recent response to "Sync" (MX_ST_SYNC) received from the robot
 """
+    _UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
 
     def __init__(self):
         """Constructor for an instance of the Robot class.
@@ -1504,9 +1506,9 @@ class Robot:
             self._robot_info.serial = serial_response_message.data
 
             # Fetch full version
-            full_version_responce = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
-            full_version_responce.wait(timeout=self.default_timeout)
-            full_version = full_version_responce.data.data
+            full_version_response = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
+            full_version_response.wait(timeout=self.default_timeout)
+            full_version = full_version_response.data.data
             self._robot_info.version.update_version(full_version)
 
             # Fetch the current real-time monitoring settings
@@ -2834,6 +2836,8 @@ class Robot:
         update_done = False
         progress = ''
         last_progress = ''
+
+        start_time = time.monotonic()
         while not update_done:
             # Give time to the web server restart, the function doesn't handle well errors.
             time.sleep(2)
@@ -2887,6 +2891,10 @@ class Robot:
                 error_message = f"error while updating: {status_msg}"
                 self.logger.error(error_message)
                 raise RuntimeError(error_message)
+
+            if time.monotonic() > start_time + self._UPDATE_TIMEOUT:
+                error_message = f"Timeout while waiting for update done response, after {self._UPDATE_TIMEOUT} seconds"
+                raise TimeoutError(error_message)
 
         self.logger.info(f"Update completed, waiting for robot to reboot")
 
