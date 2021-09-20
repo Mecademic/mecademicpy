@@ -2719,6 +2719,9 @@ class Robot:
         file_name = self._file_logger.end_log()
         self._file_logger = None
 
+        # Restore default slower monitoring interval
+        self.SetMonitoringInterval(1.0 / 60)  # 60Hz
+
         return file_name
 
     @contextlib.contextmanager
