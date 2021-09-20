@@ -2725,8 +2725,9 @@ class Robot:
             response.wait(timeout=self.default_timeout)
             if not self._robot_info.rt_on_ctrl_port_capable:
                 # Older version -> can't be sure that monitoring and control port are in sync, let's wait few
-                for loop in range(10):
-                    self.WaitEndOfCycle()
+                self.WaitEndOfCycle()
+                time.sleep(0.01)
+                self.WaitEndOfCycle()
 
         self._file_logger = _RobotTrajectoryLogger(self._robot_info,
                                                    self._robot_rt_data,
