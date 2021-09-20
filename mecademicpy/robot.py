@@ -1040,6 +1040,8 @@ class Robot:
 
     _file_logger : RobotDataLogger object
         Collects RobotInformation, all RobotRtData and SentCommands during determined period
+    _monitoring_interval : float
+        Initial monitoring interval to restore after logging session
 
     _robot_callbacks : RobotCallbacks instance
         Stores user-defined callback functions.
@@ -1157,6 +1159,8 @@ class Robot:
         self._robot_events = _RobotEvents()
 
         self._file_logger = None
+        self._monitoring_interval = None
+        self._monitoring_interval_to_restore = None
 
         self._reset_disconnect_attributes()
 
@@ -1518,6 +1522,15 @@ class Robot:
                     expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
                     skip_internal_check=True)
                 real_time_monitoring_response.wait(timeout=self.default_timeout)
+
+                # Get initial monitoring interval
+                monitoring_interval_response = self._send_custom_command(
+                    'GetMonitoringInterval',
+                    expected_responses=[mx_def.MX_ST_GET_MONITORING_INTERVAL],
+                    skip_internal_check=True)
+                result = monitoring_interval_response.wait(timeout=self.default_timeout)
+                self._monitoring_interval = float(result.data)
+                self._monitoring_interval_to_restore = self._monitoring_interval
 
             # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid race
             # conditions between the two sockets causing potential problems with this API)
@@ -2460,6 +2473,19 @@ class Robot:
         """Legacy command. Please use GetRtTargetCartPos instead"""
         return self.GetRtTargetCartPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
+    def _set_monitoring_internval_internal(self, t: float):
+        """Sets the rate at which the monitoring port sends data.
+
+        Parameters
+        ----------
+        t : float
+            Monitoring interval duration in seconds.
+
+        """
+        with self._main_lock:
+            self._send_command('SetMonitoringInterval', [t])
+            self._monitoring_interval = t
+
     @disconnect_on_exception
     def SetMonitoringInterval(self, t: float):
         """Sets the rate at which the monitoring port sends data.
@@ -2472,7 +2498,8 @@ class Robot:
         """
         with self._main_lock:
             self._check_internal_states()
-            self._send_command('SetMonitoringInterval', [t])
+            self._set_monitoring_internval_internal(t)
+            self._monitoring_interval_to_restore = t
 
     @disconnect_on_exception
     def SetRealTimeMonitoring(self, *events: list):
@@ -2683,7 +2710,7 @@ class Robot:
         if self._file_logger is not None:
             raise InvalidStateError('Another file logging operation is in progress.')
 
-        self.SetMonitoringInterval(monitoringInterval)
+        self._set_monitoring_internval_internal(monitoringInterval)
         if self._robot_info.rt_message_capable:
             if fields is None:
                 self.SetRealTimeMonitoring('all')
@@ -2720,8 +2747,9 @@ class Robot:
         self._file_logger.stop_logging_commands()
 
         if self._robot_info.rt_message_capable:
-            # Restore default slower monitoring interval
-            self.SetMonitoringInterval(1.0 / 60)  # 60Hz
+            if self._monitoring_interval_to_restore != self._monitoring_interval:
+                # Restore default slower monitoring interval
+                self._set_monitoring_internval_internal(self._monitoring_interval_to_restore)
 
             # Send a synchronous command to ensure we've received all monitoring data for this test
             response = self._send_custom_command('GetRealTimeMonitoring',
