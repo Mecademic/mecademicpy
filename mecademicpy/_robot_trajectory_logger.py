@@ -55,6 +55,8 @@ class _RobotTrajectoryLogger:
         Each timestamp will have this width
     done_logging: bool
         'write_fields' wont log more robot states when this is True. Set to True by 'end_log'
+    logging_commands: bool
+        Indicate if sent commands are being logged
     expanded_fields:
         Elements of 'fields', but expanded to have a name for each sub-element of corresponding robot states
     data_dict:
@@ -132,6 +134,7 @@ class _RobotTrajectoryLogger:
         self.element_width = 10
         self.timestamp_element_width = 15
         self.done_logging = False
+        self.logging_commands = True
         self.expanded_fields = []
         self.data_dict = dict()  # Key: timestamp, Value: List of all corresponding robot_rt_data values
         self.robot_trajectories = RobotTrajectories()
@@ -229,6 +232,10 @@ class _RobotTrajectoryLogger:
             if ts_data is None:
                 continue
             self.data_dict[formatted_tim].extend([f'{x:{self.element_width}}' for x in ts_data.data])
+
+    def stop_logging_commands(self):
+        """Stops saving sent commands to log"""
+        self.logging_commands = False
 
     def end_log(self, ignore_checkpoints=True):
         """ Write all accumulated sent commands and close file.

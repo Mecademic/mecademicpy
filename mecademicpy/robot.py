@@ -2716,11 +2716,21 @@ class Robot:
         if self._file_logger is None:
             raise InvalidStateError('No existing logger to stop.')
 
+        # Deactivate logging to avoid logging the following SetMonitoringInterval
+        self._file_logger.stop_logging_commands()
+
+        if self._robot_info.rt_message_capable:
+            # Restore default slower monitoring interval
+            self.SetMonitoringInterval(1.0 / 60)  # 60Hz
+
+            # Send a synchronous command to ensure we've received all monitoring data for this test
+            response = self._send_custom_command('GetRealTimeMonitoring',
+                                                 expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
+                                                 skip_internal_check=True)
+            response.wait(timeout=self.default_timeout)
+
         file_name = self._file_logger.end_log()
         self._file_logger = None
-
-        # Restore default slower monitoring interval
-        self.SetMonitoringInterval(1.0 / 60)  # 60Hz
 
         return file_name
 
@@ -3012,7 +3022,7 @@ class Robot:
         self._command_tx_queue.put(command)
 
         # If logging is enabled, send command to logger.
-        if self._file_logger:
+        if self._file_logger and self._file_logger.logging_commands:
             self._file_logger.command_queue.put(command)
 
     def _send_sync_command(self, command: str, event: InterruptableEvent, timeout: float):
