@@ -103,8 +103,6 @@ def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expec
                             desired_out: list[mdr._Message]):
     if isinstance(expected_in, list):
         for i in range(len(expected_in)):
-            if queue_in.empty():
-                queue_in = queue_in  # debugAlain
             event = queue_in.get(block=True, timeout=1)
             assert event == expected_in[i]
             queue_out.put(desired_out[i])
@@ -254,7 +252,7 @@ def test_7_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.patch == 6
     assert not robot.GetRobotInfo().rt_message_capable
     assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
-    assert robot.GetRobotInfo().serial == None
+    assert robot.GetRobotInfo().serial is None
 
 
 # Test that we can connect to a M500 robot running older version 8.3
@@ -1167,11 +1165,16 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CYCLE_END, str(i * 100)))
 
+        # Simulate response to last "SetRealTimeMonitoring" performed automatically at end of logging
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
+
         # Terminate queue and wait for thread to exit to ensure messages are processed.
         robot._command_rx_queue.put(mdr._TERMINATE)
-        robot._command_response_handler_thread.join(timeout=5)
-        # Restart the monitoring connection to ensure the API is in a good state.
-        robot._initialize_monitoring_connection()
+
+    robot._command_response_handler_thread.join(timeout=5)
+
+    # Restart the monitoring connection to ensure the API is in a good state.
+    robot._initialize_monitoring_connection()
 
     # Ensure one log file is created.
     directory = os.listdir(tmp_path)
