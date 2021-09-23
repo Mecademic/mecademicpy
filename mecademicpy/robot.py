@@ -145,6 +145,14 @@ class RobotCallbacks:
             Function to be called once sim mode is activated.
         on_deactivate_sim : function object
             Function to be called once sim mode is deactivated.
+        on_activate_gripper_sim : function object
+            Function to be called once gripper sim mode is activated.
+        on_deactivate_gripper_sim : function object
+            Function to be called once gripper sim mode is deactivated.
+        on_activate_recovery_mode : function object
+            Function to be called once recovery mode is activated.
+        on_deactivate_recovery_mode : function object
+            Function to be called once recovery mode is deactivated.
         on_command_message : function object
             Function to be called each time a command response is received.
         on_monitor_message : function object
@@ -179,6 +187,12 @@ class RobotCallbacks:
 
         self.on_activate_sim = None
         self.on_deactivate_sim = None
+
+        self.on_activate_gripper_sim = None
+        self.on_deactivate_gripper_sim = None
+
+        self.on_activate_recovery_mode = None
+        self.on_deactivate_recovery_mode = None
 
         self.on_command_message = None
         self.on_monitor_message = None
@@ -381,6 +395,14 @@ class _RobotEvents:
         Set if robot is in sim mode.
     on_deactivate_sim : event
         Set if robot is not in sim mode.
+    on_activate_gripper_sim : event
+        Set if robot is in gripper sim mode.
+    on_deactivate_gripper_sim : event
+        Set if robot is not in gripper sim mode.
+    on_activate_recovery_mode : event
+        Set if robot is in recovery mode.
+    on_deactivate_recovery_mode : event
+        Set if robot is not in recovery mode.
     on_joints_updated : event
         Set if joint angles has been updated.
     on_pose_updated : event
@@ -420,6 +442,12 @@ class _RobotEvents:
 
         self.on_activate_sim = InterruptableEvent()
         self.on_deactivate_sim = InterruptableEvent()
+
+        self.on_activate_gripper_sim = InterruptableEvent()
+        self.on_deactivate_gripper_sim = InterruptableEvent()
+
+        self.on_activate_recovery_mode = InterruptableEvent()
+        self.on_deactivate_recovery_mode = InterruptableEvent()
 
         self.on_joints_updated = InterruptableEvent()
         self.on_pose_updated = InterruptableEvent()
@@ -2168,6 +2196,8 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             self._send_command('ActivateSim')
+        if self._enable_synchronous_mode:
+            self._robot_events.on_activate_sim.wait()
 
     @disconnect_on_exception
     def DeactivateSim(self):
@@ -2177,6 +2207,8 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             self._send_command('DeactivateSim')
+        if self._enable_synchronous_mode:
+            self._robot_events.on_deactivate_sim.wait()
 
     @disconnect_on_exception
     def SetGripperSim(self, activated: bool = True):
@@ -2187,6 +2219,27 @@ class Robot:
                 self._send_command('SetGripperSim', [1])
             else:
                 self._send_command('SetGripperSim', [0])
+        if self._enable_synchronous_mode:
+            if activated:
+                self._robot_events.on_activate_gripper_sim.wait()
+            else:
+                self._robot_events.on_deactivate_gripper_sim.wait()
+
+    @disconnect_on_exception
+    def SetRecoveryMode(self, activated: bool = True):
+        """Enable/disable recovery mode, allowing robot to move (slowly) without homing and without joint limits."""
+        with self._main_lock:
+            self._check_internal_states()
+            if activated:
+                self._send_command('SetRecoveryMode', [1])
+            else:
+                self._send_command('SetRecoveryMode', [0])
+
+        if self._enable_synchronous_mode:
+            if activated:
+                self._robot_events.on_activate_recovery_mode.wait()
+            else:
+                self._robot_events.on_deactivate_recovery_mode.wait()
 
     @disconnect_on_exception
     def ActivateBrakes(self, activated: bool = True):
@@ -3218,6 +3271,18 @@ class Robot:
         elif response.id == mx_def.MX_ST_GET_STATUS_GRIPPER:
             self._handle_gripper_status_response(response)
 
+        elif response.id == mx_def.MX_ST_GRIPPER_SIM_ON:
+            self._handle_gripper_sim_status(True)
+
+        elif response.id == mx_def.MX_ST_GRIPPER_SIM_OFF:
+            self._handle_gripper_sim_status(False)
+
+        elif response.id == mx_def.MX_ST_RECOVERY_MODE_ON:
+            self._handle_recovery_mode_status(True)
+
+        elif response.id == mx_def.MX_ST_RECOVERY_MODE_OFF:
+            self._handle_recovery_mode_status(False)
+
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
             self._robot_rt_data.rt_target_joint_pos.update_from_csv(response.data)
             if self._is_in_sync():
@@ -3408,6 +3473,42 @@ class Robot:
         if self._is_in_sync():
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
+
+    def _handle_gripper_sim_status(self, enabled: bool):
+        """Handle gripper sim mode status change event.
+
+        Parameters
+        ----------
+        enabled : bool
+            Gripper simulation mode enabled or not.
+
+        """
+        if enabled:
+            self._robot_events.on_deactivate_gripper_sim.clear()
+            self._robot_events.on_activate_gripper_sim.set()
+            self._callback_queue.put('on_activate_gripper_sim')
+        else:
+            self._robot_events.on_activate_gripper_sim.clear()
+            self._robot_events.on_deactivate_gripper_sim.set()
+            self._callback_queue.put('on_deactivate_gripper_sim')
+
+    def _handle_recovery_mode_status(self, enabled: bool):
+        """Handle recovery mode status change event.
+
+        Parameters
+        ----------
+        enabled : bool
+            Recovery mode enabled or not.
+
+        """
+        if enabled:
+            self._robot_events.on_deactivate_recovery_mode.clear()
+            self._robot_events.on_activate_recovery_mode.set()
+            self._callback_queue.put('on_activate_recovery_mode')
+        else:
+            self._robot_events.on_activate_recovery_mode.clear()
+            self._robot_events.on_deactivate_recovery_mode.set()
+            self._callback_queue.put('on_deactivate_recovery_mode')
 
     def _handle_checkpoint_response(self, response: _Message):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.

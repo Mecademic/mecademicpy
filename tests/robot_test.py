@@ -797,6 +797,16 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
         robot.DeactivateSim()
 
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GRIPPER_SIM_ON, ''))
+        robot.SetGripperSim(True)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GRIPPER_SIM_OFF, ''))
+        robot.SetGripperSim(False)
+
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_ON, ''))
+        robot.SetRecoveryMode(True)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_OFF, ''))
+        robot.SetRecoveryMode(False)
+
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_OFFLINE_START, ''))
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '0,0,0,0,0,0,0'))
