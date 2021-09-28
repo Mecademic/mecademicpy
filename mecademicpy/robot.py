@@ -1620,16 +1620,18 @@ class Robot:
         self._stop_callback_thread()
 
     def IsConnected(self) -> bool:
-        """Tells if we're actually connected to the robot
-
-        Returns
-        -------
-        boolean
-            true if connected to the robot
-        """
+        """Tells if we're actually connected to the robot"""
         return self._robot_events.on_connected.is_set()
 
-    def set_synchronous_mode(self, sync_mode: bool = True):
+    def IsAllowedToMove(self) -> bool:
+        """Tells if the robot is currently allowed to be moved (i.e. homed, or activated in recovery mode)"""
+        can_move = False
+        with self._main_lock:
+            can_move = self._robot_status.homing_state or (self._robot_status.activation_state
+                                                           and self._robot_events.on_activate_recovery_mode.is_set())
+        return can_move
+
+    def SetSynchronousMode(self, sync_mode: bool = True):
         """Enables synchronous mode. In this mode, all commands are blocking until robot's response is received.
            Note that this will apply to next API calls.
            So disabling synchronous mode will not not awake thread already awaiting on synchronous operations.
