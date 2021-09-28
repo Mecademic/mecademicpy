@@ -2859,7 +2859,7 @@ class Robot:
         finally:
             self.EndLogging()
 
-    def update_robot(self, firmware: str, address: str = None):
+    def UpdateRobot(self, firmware: str, address: str = None):
         """
         Install a new firmware and verifies robot version afterward.
 
