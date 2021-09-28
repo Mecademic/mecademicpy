@@ -850,7 +850,7 @@ def test_event_with_exception():
 def test_motion_commands(robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel']
+    skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode']
 
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
