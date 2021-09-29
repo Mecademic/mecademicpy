@@ -357,6 +357,12 @@ class _RobotEvents:
         Set if robot status is updated.
      on_status_gripper_updated : event
         Set if gripper status is updated.
+    on_external_tool_status_updated: event
+        Set if external tool status has been updated.
+    on_gripper_state_updated: event
+        Set if gripper state has been updated.
+    on_valve_state_updated: event
+        Set if pneumatic module valve state has been updated.
     on_activated : event
         Set if robot is activated.
     on_deactivated : event
@@ -395,6 +401,7 @@ class _RobotEvents:
         Set if end of block has been reached.
     on_end_of_cycle: event
         Set if end of cycle has been reached
+
 """
 
     def __init__(self):
@@ -403,6 +410,10 @@ class _RobotEvents:
 
         self.on_status_updated = InterruptableEvent()
         self.on_status_gripper_updated = InterruptableEvent()
+
+        self.on_external_tool_status_updated = InterruptableEvent()
+        self.on_gripper_state_updated = InterruptableEvent()
+        self.on_valve_state_updated = InterruptableEvent()
 
         self.on_activated = InterruptableEvent()
         self.on_deactivated = InterruptableEvent()
@@ -441,6 +452,11 @@ class _RobotEvents:
 
         self.on_status_updated.set()
         self.on_status_gripper_updated.set()
+
+        self.on_external_tool_status_updated.set()
+        self.on_gripper_state_updated.set()
+        self.on_valve_state_updated.set()
+
         self.on_joints_updated.set()
         self.on_pose_updated.set()
         self.on_brakes_activated.set()
@@ -689,6 +705,12 @@ class Robot:
         Stores most current robot status
     _gripper_status: GripperStatus object
         Stores most current gripper status
+    _external_tool_status: ExtToolStatus object
+        Stores most current external tool status
+    _gripper_state: GripperState object
+        Stores most current gripper state
+    _valve_state: ValveState object
+        Stores most current pneumatic valve state
     _robot_events : RobotEvents object
         Stores events related to the robot state.
 
@@ -808,6 +830,9 @@ class Robot:
         self._robot_rt_data_stable = None
         self._robot_status = RobotStatus()
         self._gripper_status = GripperStatus()
+        self._external_tool_status = ExtToolStatus()
+        self._gripper_state = GripperState()
+        self._valve_state = ValveState()
         self._robot_events = _RobotEvents()
 
         self._file_logger = None
@@ -1144,6 +1169,10 @@ class Robot:
 
             self._robot_events.on_status_updated.set()
             self._robot_events.on_status_gripper_updated.set()
+            self._robot_events.on_external_tool_status_updated.set()
+            self._robot_events.on_gripper_state_updated.set()
+            self._robot_events.on_valve_state_updated.set()
+
             self._robot_events.on_joints_updated.set()
             self._robot_events.on_pose_updated.set()
 
@@ -1650,6 +1679,19 @@ class Robot:
         self._send_motion_command('SetGripperVel', [p])
 
     @disconnect_on_exception
+    def SetValveState(self, *args: list[int]):
+        """Set the pneumatic module valve states.
+
+        Parameters
+        ----------
+        valve_1...valve_n : int
+            The desired state for valve (-1.MX_VALVE_STATE_STAY, 0.MX_VALVE_STATE_CLOSE, 1.MX_VALVE_STATE_OPEN).
+            MPM500 pneumatic module has 2 valves.
+
+        """
+        self._send_motion_command('SetValveState', args)
+
+    @disconnect_on_exception
     def SetJointAcc(self, p: float):
         """Set target joint acceleration during MoveJoints commands.
 
@@ -2025,6 +2067,96 @@ class Robot:
                 raise InvalidStateError('Offline program start not confirmed. Does program {} exist?'.format(n))
 
     # Non-motion commands.
+
+    @disconnect_on_exception
+    def GetRtExtToolStatus(self,
+                           include_timestamp: bool = False,
+                           synchronous_update: bool = False,
+                           timeout: float = None):
+        """Return a copy of the current external tool status
+
+        Parameters
+        ----------
+        include_timestamp : bool
+            If true, return a TimestampedData object, otherwise just return states.
+        synchronous_update: boolean
+            True -> Synchronously get updated external tool status. False -> Get latest known status.
+        timeout: float
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        TimestampedData or ExtToolStatus
+            Object containing the current external tool status
+
+        """
+        if synchronous_update:
+            self._send_sync_command('GetRtExtToolStatus', self._robot_events.on_external_tool_status_updated, timeout)
+
+        with self._main_lock:
+            if include_timestamp:
+                return copy.deepcopy(self._robot_rt_data.rt_external_tool_status)
+            else:
+                return copy.deepcopy(self._external_tool_status)
+
+    @disconnect_on_exception
+    def GetRtGripperState(self,
+                          include_timestamp: bool = False,
+                          synchronous_update: bool = False,
+                          timeout: float = None):
+        """Return a copy of the current gripper state
+
+        Parameters
+        ----------
+        include_timestamp : bool
+            If true, return a TimestampedData object, otherwise just return states.
+        synchronous_update: boolean
+            True -> Synchronously get updated gripper state. False -> Get latest known status.
+        timeout: float
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        TimestampedData or GripperState
+            Object containing the current gripper state
+
+        """
+        if synchronous_update:
+            self._send_sync_command('GetRtGripperState', self._robot_events.on_gripper_state_updated, timeout)
+
+        with self._main_lock:
+            if include_timestamp:
+                return copy.deepcopy(self._robot_rt_data.rt_gripper_state)
+            else:
+                return copy.deepcopy(self._gripper_state)
+
+    @disconnect_on_exception
+    def GetRtValveState(self, include_timestamp: bool = False, synchronous_update: bool = False, timeout: float = None):
+        """Return a copy of the current valve state
+
+        Parameters
+        ----------
+        include_timestamp : bool
+            If true, return a TimestampedData object, otherwise just return states.
+        synchronous_update: boolean
+            True -> Synchronously get updated valve states. False -> Get latest known status.
+        timeout: float
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        TimestampedData or ValveState
+            Object containing the current valve state
+
+        """
+        if synchronous_update:
+            self._send_sync_command('GetRtValveState', self._robot_events.on_valve_state_updated, timeout)
+
+        with self._main_lock:
+            if include_timestamp:
+                return copy.deepcopy(self._robot_rt_data.rt_valve_state)
+            else:
+                return copy.deepcopy(self._valve_state)
 
     @disconnect_on_exception
     def GetRtTargetJointPos(self,
@@ -3218,6 +3350,15 @@ class Robot:
         elif response.id == mx_def.MX_ST_GET_STATUS_GRIPPER:
             self._handle_gripper_status_response(response)
 
+        elif response.id == mx_def.MX_ST_RT_EXTTOOL_STATUS:
+            self._handle_external_tool_status_response(response)
+
+        elif response.id == mx_def.MX_ST_RT_GRIPPER_STATE:
+            self._handle_gripper_state_response(response)
+
+        elif response.id == mx_def.MX_ST_RT_VALVE_STATE:
+            self._handle_valve_state_response(response)
+
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
             self._robot_rt_data.rt_target_joint_pos.update_from_csv(response.data)
             if self._is_in_sync():
@@ -3409,6 +3550,68 @@ class Robot:
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
 
+    def _handle_external_tool_status_response(self, response: _Message):
+        """Parse external tool status response and update status fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            External tool status response to parse and handle.
+
+        """
+        assert response.id == mx_def.MX_ST_RT_EXTTOOL_STATUS
+        self._robot_rt_data.rt_external_tool_status.update_from_csv(response.data)
+        status_flags = self._robot_rt_data.rt_external_tool_status.data
+
+        self._external_tool_status.tool_type = status_flags[0]
+        self._external_tool_status.present = status_flags[1]
+        self._external_tool_status.homing_state = status_flags[2]
+        self._external_tool_status.error_status = status_flags[3]
+
+        if self._is_in_sync():
+            self._robot_events.on_external_tool_status_updated.set()
+            self._callback_queue.put('on_external_tool_status_updated')
+
+    def _handle_gripper_state_response(self, response: _Message):
+        """Parse gripper state response and update status fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            Gripper state response to parse and handle.
+
+        """
+        assert response.id == mx_def.MX_ST_RT_GRIPPER_STATE
+        self._robot_rt_data.rt_gripper_state.update_from_csv(response.data)
+        status_flags = self._robot_rt_data.rt_gripper_state.data
+
+        self._gripper_state.holding_part = status_flags[0]
+        self._gripper_state.limit_reached = status_flags[1]
+
+        if self._is_in_sync():
+            self._robot_events.on_gripper_state_updated.set()
+            self._callback_queue.put('on_gripper_state_updated')
+
+    def _handle_valve_state_response(self, response: _Message):
+        """Parse pneumatic valve state response and update status fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            Pneumatic valve state response to parse and handle.
+
+        """
+        assert response.id == mx_def.MX_ST_RT_VALVE_STATE
+        self._robot_rt_data.rt_valve_state.update_from_csv(response.data)
+        status_flags = self._robot_rt_data.rt_valve_state.data
+
+        self._valve_state.valve1_opened = status_flags[0]
+        self._valve_state.valve2_opened = status_flags[1]
+
+        if self._is_in_sync():
+            self._robot_events.on_valve_state_updated.set()
+            self._callback_queue.put('on_valve_state_updated')
+
     def _handle_checkpoint_response(self, response: _Message):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.
 
@@ -3499,6 +3702,12 @@ class Robot:
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
                 for accelerometer in self._robot_rt_data.rt_accelerometer.values():
                     accelerometer.enabled = True
+            if event_id == mx_def.MX_ST_RT_EXTTOOL_STATUS:
+                self._robot_rt_data.rt_external_tool_status.enabled = True
+            if event_id == mx_def.MX_ST_RT_GRIPPER_STATE:
+                self._robot_rt_data.rt_gripper_state.enabled = True
+            if event_id == mx_def.MX_ST_RT_VALVE_STATE:
+                self._robot_rt_data.rt_valve_state.enabled = True
 
         # Make sure to clear values that we should no more received
         self._robot_rt_data._clear_if_disabled()
@@ -3675,6 +3884,13 @@ class RobotRtData:
 
     rt_accelerometer : TimestampedData
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
+
+    rt_external_tool_status : TimestampedData
+        External tool status [exttool_type, activated, homed, error].
+    rt_gripper_state : TimestampedData
+        Gripper state [holding_part, limit_reached].
+    rt_valve_state : TimestampedData
+        Valve state [valve1_opened, valve2_opened].
 """
 
     def __init__(self, num_joints: int):
@@ -3697,6 +3913,11 @@ class RobotRtData:
         # Contains dictionary of accelerometers stored in the robot indexed by joint number.
         # For example, Meca500 currently only reports the accelerometer in joint 5.
         self.rt_accelerometer = dict()  # 16000 = 1g
+
+        self.rt_external_tool_status = TimestampedData.zeros(
+            4)  # microseconds timestamp, tool type, activated, homed, error
+        self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, limit reached
+        self.rt_valve_state = TimestampedData.zeros(2)  # microseconds timestamp, valve1 opened, valve2 opened
 
         self.rt_wrf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
         self.rt_trf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
@@ -3772,13 +3993,13 @@ class GripperStatus:
     present : bool
         True if the gripper is present on the robot.
     homing_state : bool
-        True if the robot is homed.
-    homing_state : bool
         True if the gripper has been homed (ready to be used).
     holding_part : bool
         True if the gripper is currently holding a part.
     limit_reached : bool
         True if the gripper is at a limit (fully opened or closed).
+    error_status : bool
+        True if the gripper is in error state
     overload_error : bool
         True if the gripper is in overload error state.
 """
@@ -3792,6 +4013,69 @@ class GripperStatus:
         self.limit_reached = False
         self.error_status = False
         self.overload_error = False
+
+
+class ExtToolStatus:
+    """Class for storing the Mecademic robot's external tool status.
+
+    Attributes
+    ----------
+    tool_type : int
+        External tool type 0.None, 1.MEGP25, 3.MPM500
+    present : bool
+        True if the gripper is present on the robot.
+    homing_state : bool
+        True if the robot is homed.
+    error_status : bool
+        True if the gripper is in error state
+    overload_error : bool
+        True if the gripper is in overload error state.
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.tool_type = 0
+        self.present = False
+        self.homing_state = False
+        self.error_status = False
+        self.overload_error = False
+
+
+class ValveState:
+    """Class for storing the Mecademic robot's pneumatic module valve states.
+
+    Attributes
+    ----------
+    valve1_opened : bool
+        True if the valve 1 is opened.
+    valve2_opened : bool
+        True if the valve 2 is opened.
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.valve1_opened = False
+        self.valve2_opened = False
+
+
+class GripperState:
+    """Class for storing the Mecademic robot's gripper state.
+
+    Attributes
+    ----------
+    holding_part : bool
+        True if the gripper is currently holding a part.
+    limit_reached : bool
+        True if the gripper is at a limit (fully opened or closed).
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.holding_part = False
+        self.limit_reached = False
 
 
 class RobotInfo:
