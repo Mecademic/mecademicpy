@@ -2332,7 +2332,7 @@ class Robot:
             self._send_command('ResetError')
 
         if self._enable_synchronous_mode:
-            self._robot_events.on_error_reset.wait()
+            self._robot_events.on_error_reset.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def ResetPStop(self):
@@ -2344,7 +2344,7 @@ class Robot:
             self._send_command('ResetPStop')
 
         if self._enable_synchronous_mode:
-            self._robot_events.on_p_stop_reset.wait()
+            self._robot_events.on_p_stop_reset.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def Delay(self, t: float):
@@ -2572,7 +2572,7 @@ class Robot:
             self._check_internal_states()
             self._send_command('ActivateSim')
         if self._enable_synchronous_mode:
-            self._robot_events.on_activate_sim.wait()
+            self._robot_events.on_activate_sim.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def DeactivateSim(self):
@@ -2583,7 +2583,7 @@ class Robot:
             self._check_internal_states()
             self._send_command('DeactivateSim')
         if self._enable_synchronous_mode:
-            self._robot_events.on_deactivate_sim.wait()
+            self._robot_events.on_deactivate_sim.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def SetGripperSim(self, activated: bool = True):
@@ -2596,9 +2596,9 @@ class Robot:
                 self._send_command('SetGripperSim', [0])
         if self._enable_synchronous_mode:
             if activated:
-                self._robot_events.on_activate_gripper_sim.wait()
+                self._robot_events.on_activate_gripper_sim.wait(timeout=self.default_timeout)
             else:
-                self._robot_events.on_deactivate_gripper_sim.wait()
+                self._robot_events.on_deactivate_gripper_sim.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def SetRecoveryMode(self, activated: bool = True):
@@ -2612,9 +2612,9 @@ class Robot:
 
         if self._enable_synchronous_mode:
             if activated:
-                self._robot_events.on_activate_recovery_mode.wait()
+                self._robot_events.on_activate_recovery_mode.wait(timeout=self.default_timeout)
             else:
-                self._robot_events.on_deactivate_recovery_mode.wait()
+                self._robot_events.on_deactivate_recovery_mode.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def ActivateBrakes(self, activated: bool = True):
@@ -2638,9 +2638,9 @@ class Robot:
 
         if self._enable_synchronous_mode:
             if activated:
-                self._robot_events.on_brakes_activated.wait()
+                self._robot_events.on_brakes_activated.wait(timeout=self.default_timeout)
             else:
-                self._robot_events.on_brakes_deactivated.wait()
+                self._robot_events.on_brakes_deactivated.wait(timeout=self.default_timeout)
 
     def GetRobotInfo(self) -> RobotInfo:
         """Return a copy of the known robot information.
