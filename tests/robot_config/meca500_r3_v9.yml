@@ -26,6 +26,9 @@ expected_connect_commands:
   - name: "GetRealTimeMonitoring"
     response_code: 2117
     response: ''
+  - name: "GetMonitoringInterval"
+    response_code: 2116
+    response: '0.017'
   - name: "SetCtrlPortMonitoring(1)"
     response_code: 2096
     response: 'Monitoring on control port enabled/disabled'
