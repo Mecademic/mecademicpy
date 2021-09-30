@@ -24,6 +24,9 @@ from ._robot_trajectory_logger import _RobotTrajectoryLogger
 GRIPPER_OPEN = True
 GRIPPER_CLOSE = False
 
+# Available levels for SetTorqueLimitsCfg
+TORQUE_LIMIT_SEVERITIES = {'disabled': 0, 'warning': 1, 'pause-motion': 2, 'clear-motion': 3, 'error': 4}
+
 _CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
 _TERMINATE = '--terminate--'
@@ -2615,6 +2618,46 @@ class Robot:
                 self._robot_events.on_activate_recovery_mode.wait(timeout=self.default_timeout)
             else:
                 self._robot_events.on_deactivate_recovery_mode.wait(timeout=self.default_timeout)
+
+    @disconnect_on_exception
+    def SetTorqueLimitsCfg(self, severity: str = 'error', skip_acceleration=True):
+        """Change the torque limits configuration (enable/disable, choose severity, etc.).
+        Note that the per-joint torque limit is configured by calling SetTorqueLimits.
+
+        Parameters
+        ----------
+        severity : str
+            Severity-level of exceeding torque limits.
+            Available severity levels (see TORQUE_LIMIT_SEVERITIES):
+                - 0 or 'disabled':     Torque limits disabled (this by default when robot is activated)
+                - 1 or 'warning':      Send a warning event (MX_ST_EXCESSIVE_TRQ) when torque exceeds the limit
+                - 2 or 'pause-motion': Pause motion when torque exceeds the limit
+                - 3 or 'clear-motion': Pause motion when torque exceeds the limit
+                - 4 or 'error':        Set robot in error state when torque exceeds the limit
+        skip_acceleration : bool
+            When True, torque limits are ignored during acceleration periods (allowing fast accelerations without
+            triggering torque limits exceeded condition)
+        """
+        severity_int = severity if type(severity) == int else TORQUE_LIMIT_SEVERITIES[severity]
+        skip_acceleration_int = 1 if skip_acceleration else 0
+        self._send_motion_command('SetTorqueLimitsCfg', [severity_int, skip_acceleration_int])
+
+    @disconnect_on_exception
+    def SetTorqueLimits(self, *args: list[float]):
+        """Set the torque limit (in percent) for each joint.
+        Note that torque limits will be applied only if severity mode is set to other than 'disabled' by
+        calling SetTorqueLimitsCfg.
+
+        Parameters
+        ----------
+        joint_1...joint_n : float
+            Desired torque limit in percent.
+
+        """
+        if len(args) != self._robot_info.num_joints:
+            raise ValueError('Incorrect number of joints sent to command.')
+
+        self._send_motion_command('SetTorqueLimits', args)
 
     @disconnect_on_exception
     def ActivateBrakes(self, activated: bool = True):
