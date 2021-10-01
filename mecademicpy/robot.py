@@ -893,7 +893,7 @@ class RobotRtData:
     rt_gripper_state : TimestampedData
         Gripper state [holding_part, limit_reached].
     rt_valve_state : TimestampedData
-        Valve state [valve1_opened, valve2_opened].
+        Valve state [valve_opened[0], valve_opened[1]].
 """
 
     def __init__(self, num_joints: int):
@@ -920,7 +920,8 @@ class RobotRtData:
         self.rt_external_tool_status = TimestampedData.zeros(
             4)  # microseconds timestamp, tool type, activated, homed, error
         self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, limit reached
-        self.rt_valve_state = TimestampedData.zeros(2)  # microseconds timestamp, valve1 opened, valve2 opened
+        self.rt_valve_state = TimestampedData.zeros(
+            mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
 
         self.rt_wrf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
         self.rt_trf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
@@ -1024,7 +1025,7 @@ class ExtToolStatus:
     Attributes
     ----------
     tool_type : int
-        External tool type 0.None, 1.MEGP25, 3.MPM500
+        External tool type "None", "MEGP25", "MPM500"
     present : bool
         True if the gripper is present on the robot.
     homing_state : bool
@@ -1050,17 +1051,14 @@ class ValveState:
 
     Attributes
     ----------
-    valve1_opened : bool
-        True if the valve 1 is opened.
-    valve2_opened : bool
-        True if the valve 2 is opened.
+    valve_opened
+        List of valve state. True if valve is opened, false otherwise.
 """
 
     def __init__(self):
 
         # The following are status fields.
-        self.valve1_opened = False
-        self.valve2_opened = False
+        self.valve_opened = [int] * mx_def.MX_EXT_TOOL_VBOX_MAX_VALVES
 
 
 class GripperState:
@@ -2062,14 +2060,22 @@ class Robot:
         """Open the gripper.
 
         """
+        self._robot_events.on_gripper_state_updated.clear()
         self._send_motion_command('GripperOpen')
+
+        if self._enable_synchronous_mode:
+            self._robot_events.on_gripper_state_updated.wait()
 
     @disconnect_on_exception
     def GripperClose(self):
         """Close the gripper.
 
         """
+        self._robot_events.on_gripper_state_updated.clear()
         self._send_motion_command('GripperClose')
+
+        if self._enable_synchronous_mode:
+            self._robot_events.on_gripper_state_updated.wait()
 
     @disconnect_on_exception
     def MoveGripper(self, state: bool = GRIPPER_OPEN):
@@ -2123,7 +2129,11 @@ class Robot:
             MPM500 pneumatic module has 2 valves.
 
         """
+        self._robot_events.on_valve_state_updated.clear()
         self._send_motion_command('SetValveState', args)
+
+        if self._enable_synchronous_mode:
+            self._robot_events.on_valve_state_updated.wait()
 
     @disconnect_on_exception
     def SetJointAcc(self, p: float):
@@ -2408,6 +2418,39 @@ class Robot:
             remaining_timeout = None
 
         self._robot_events.on_end_of_block.wait(timeout=remaining_timeout)
+
+    @disconnect_on_exception
+    def WaitExternalToolStatusUpdated(self, timeout: float = None):
+        """Pause program execution until robot valve state changed.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        self._robot_events.on_external_tool_status_updated.wait(timeout)
+
+    @disconnect_on_exception
+    def WaitGripperStateUpdated(self, timeout: float = None):
+        """Pause program execution until robot gripper state changed.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        self._robot_events.on_gripper_state_updated.wait(timeout)
+
+    @disconnect_on_exception
+    def WaitValveStateUpdated(self, timeout: float = None):
+        """Pause program execution until robot valve state changed.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        self._robot_events.on_valve_state_updated.wait(timeout)
 
     @disconnect_on_exception
     def ResetError(self):
@@ -4065,8 +4108,8 @@ class Robot:
         self._robot_rt_data.rt_valve_state.update_from_csv(response.data)
         status_flags = self._robot_rt_data.rt_valve_state.data
 
-        self._valve_state.valve1_opened = status_flags[0]
-        self._valve_state.valve2_opened = status_flags[1]
+        for i in range(len(status_flags)):
+            self._valve_state.valve_opened[i] = status_flags[i]
 
         if self._is_in_sync():
             self._robot_events.on_valve_state_updated.set()
