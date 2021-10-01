@@ -2157,9 +2157,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_connected.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2168,9 +2171,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_disconnected.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2179,9 +2185,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 15
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = 15.0
         self._robot_events.on_activated.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2190,9 +2199,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_deactivated.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2201,9 +2213,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 40
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = 40.0
         self._robot_events.on_homed.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2212,11 +2227,47 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_activate_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitSimDeactivated(self, timeout: float = None):
+        """Pause program execution until the robot simulation mode is deactivated.
+
+        Parameters
+        ----------
+        timeout : float, by default 10
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_deactivate_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitRecoveryMode(self, activated: bool, timeout: float = None):
+        """Pause program execution until the robot recovery mode is in the requested state.
+
+        Parameters
+        ----------
+        activated : bool
+            Recovery mode to wait for (activated or deactivated
+        timeout : float, by default 10
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if activated:
+            self._robot_events.on_activate_recovery_mode.wait(timeout=timeout)
+        else:
+            self._robot_events.on_deactivate_recovery_mode.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitForError(self, timeout: float = None):
@@ -2235,21 +2286,13 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_error_reset.wait(timeout=timeout)
-
-    @disconnect_on_exception
-    def WaitSimDeactivated(self, timeout: float = None):
-        """Pause program execution until the robot simulation mode is deactivated.
-
-        Parameters
-        ----------
-        timeout : float
-            Maximum time to spend waiting for the event (in seconds).
-        """
-        self._robot_events.on_deactivate_sim.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitMotionResumed(self, timeout: float = None):
@@ -2257,9 +2300,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_motion_resumed.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2268,9 +2314,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_motion_paused.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2279,10 +2328,13 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
 
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_motion_cleared.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2291,12 +2343,15 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
         if self._robot_events.on_end_of_cycle.is_set():
             self._robot_events.on_end_of_cycle.clear()
 
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = 2
         self._robot_events.on_end_of_cycle.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2431,7 +2486,7 @@ class Robot:
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated joints positions and waits for response, else uses last known positions.
-        timeout : float
+        timeout : float, by default 10
             Maximum time in second to wait for forced update.
 
         Return
@@ -2440,6 +2495,9 @@ class Robot:
             Returns joint positions in degrees.
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             if self._robot_info.rt_message_capable:
                 self._send_sync_command('GetRtTargetJointPos', self._robot_events.on_joints_updated, timeout)
@@ -2461,6 +2519,9 @@ class Robot:
 
     def GetJoints(self, synchronous_update: bool = False, timeout: float = None):
         """Legacy command. Please use GetRtTargetJointPos instead"""
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         return self.GetRtTargetJointPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
@@ -2476,7 +2537,7 @@ class Robot:
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated pose and waits for response, else uses last know pose.
-        timeout : float
+        timeout : float, by default 10
             Maximum time in second to wait for forced update.
 
         Return
@@ -2486,6 +2547,9 @@ class Robot:
 
         """
 
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             if self._robot_info.rt_message_capable:
                 self._send_sync_command('GetRtTargetCartPos', self._robot_events.on_pose_updated, timeout)
@@ -2504,6 +2568,9 @@ class Robot:
 
     def GetPose(self, synchronous_update: bool = False, timeout: float = None) -> TimestampedData:
         """Legacy command. Please use GetRtTargetCartPos instead"""
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         return self.GetRtTargetCartPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     def _set_monitoring_internval_internal(self, t: float):
@@ -2717,7 +2784,7 @@ class Robot:
         ----------
         synchronous_update: boolean
             True -> Synchronously get updated robot status. False -> Get latest known status.
-        timeout: float
+        timeout: float, by default 10
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -2726,6 +2793,9 @@ class Robot:
             Object containing the current robot status
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             self._send_sync_command('GetStatusRobot', self._robot_events.on_status_updated, timeout)
 
@@ -2742,7 +2812,7 @@ class Robot:
             True -> Synchronously get updated gripper status. False -> Get latest known status.
             *** Note: Synchronous mode by default because robot does not report gripper status change events by default
                       (unless SetStatusEvents command is used to enable gripper status updates)
-        timeout: float
+        timeout: float, by default 10
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -2751,6 +2821,9 @@ class Robot:
             Object containing the current gripper status
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             self._send_sync_command('GetStatusGripper', self._robot_events.on_status_gripper_updated, timeout)
 

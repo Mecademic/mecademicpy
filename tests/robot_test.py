@@ -116,7 +116,7 @@ def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expec
 # Server to listen for a connection. Send initial data in data_list on connect, send rest in response to any msg.
 def fake_server(address, port, data_list, server_up):
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_sock.settimeout(1)  # Allow up to 1 second to create the connection.
+    server_sock.settimeout(10)  # Allow up to 10 seconds to create the connection.
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.bind((address, port))
     server_sock.listen()
