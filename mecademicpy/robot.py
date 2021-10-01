@@ -2802,14 +2802,17 @@ class Robot:
             self._send_command('DeactivateSim')
 
     @disconnect_on_exception
-    def SetGripperSim(self, activated: bool = True):
-        """Enable/disable gripper simulation mode, allowing GripperOpen/Close commands on a robot without a gripper."""
+    def SetExtToolSim(self, activated: bool = True):
+        """Enable/disable external tool simulation mode, allowing GripperOpen/Close and SetValveState commands
+            on a robot without an external tool present.
+
+        """
         with self._main_lock:
             self._check_internal_states()
             if activated:
-                self._send_command('SetGripperSim', [1])
+                self._send_command('SetExtToolSim', [1])
             else:
-                self._send_command('SetGripperSim', [0])
+                self._send_command('SetExtToolSim', [0])
 
     @disconnect_on_exception
     def ActivateBrakes(self, activated: bool = True):
