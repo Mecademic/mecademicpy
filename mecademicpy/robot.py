@@ -2421,13 +2421,17 @@ class Robot:
 
     @disconnect_on_exception
     def WaitExternalToolStatusUpdated(self, timeout: float = None):
-        """Pause program execution until robot valve state changed.
+        """Pause program execution until robot external tool status changed.
 
         Parameters
         ----------
         timeout : float
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+
         self._robot_events.on_external_tool_status_updated.wait(timeout)
 
     @disconnect_on_exception
@@ -2439,6 +2443,10 @@ class Robot:
         timeout : float
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+
         self._robot_events.on_gripper_state_updated.wait(timeout)
 
     @disconnect_on_exception
@@ -2450,6 +2458,10 @@ class Robot:
         timeout : float
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+
         self._robot_events.on_valve_state_updated.wait(timeout)
 
     @disconnect_on_exception
@@ -4109,10 +4121,8 @@ class Robot:
         """
         assert response.id == mx_def.MX_ST_RT_VALVE_STATE
         self._robot_rt_data.rt_valve_state.update_from_csv(response.data)
-        status_flags = self._robot_rt_data.rt_valve_state.data
 
-        for i in range(len(status_flags)):
-            self._valve_state.valve_opened[i] = status_flags[i]
+        self._valve_state.valve_opened = self._robot_rt_data.rt_valve_state.data
 
         if self._is_in_sync():
             self._robot_events.on_valve_state_updated.set()
