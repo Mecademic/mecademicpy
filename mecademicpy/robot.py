@@ -696,6 +696,8 @@ class RobotInfo:
         True if robot is capable of sending real-time monitoring messages on control port (SetCtrlPortMonitoring)
     num_joints : int
         Number of joints on the robot.
+    requires_homing : bool
+        Tells if this robot requires homing
 """
 
     def __init__(self,
@@ -714,10 +716,13 @@ class RobotInfo:
 
         if self.model == 'Meca500':
             self.num_joints = 6
+            self.requires_homing = True
         elif self.model == 'Scara':
             self.num_joints = 4
+            self.requires_homing = False
         elif self.model is None:
             self.num_joints = 1
+            self.requires_homing = False
         else:
             raise ValueError(f'Invalid robot model: {self.model}')
 
