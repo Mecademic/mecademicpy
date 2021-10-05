@@ -1149,6 +1149,10 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
             robot._command_rx_queue.put(
                 mdr._Message(mx_def.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(seed=16000, length=3)))
 
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, fake_string(seed=20, length=5)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, fake_string(seed=21, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, fake_string(seed=22, length=3)))
+
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_WRF, fake_string(seed=17, length=7)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TRF, fake_string(seed=18, length=7)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CHECKPOINT, fake_string(seed=19, length=2)))
