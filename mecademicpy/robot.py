@@ -24,6 +24,9 @@ from ._robot_trajectory_logger import _RobotTrajectoryLogger
 GRIPPER_OPEN = True
 GRIPPER_CLOSE = False
 
+# Available levels for SetTorqueLimitsCfg
+TORQUE_LIMIT_SEVERITIES = {'disabled': 0, 'warning': 1, 'pause-motion': 2, 'clear-motion': 3, 'error': 4}
+
 _CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
 
 _TERMINATE = '--terminate--'
@@ -145,6 +148,14 @@ class RobotCallbacks:
             Function to be called once sim mode is activated.
         on_deactivate_sim : function object
             Function to be called once sim mode is deactivated.
+        on_activate_ext_tool_sim : function object
+            Function to be called once gripper sim mode is activated.
+        on_deactivate_ext_tool_sim : function object
+            Function to be called once gripper sim mode is deactivated.
+        on_activate_recovery_mode : function object
+            Function to be called once recovery mode is activated.
+        on_deactivate_recovery_mode : function object
+            Function to be called once recovery mode is deactivated.
         on_command_message : function object
             Function to be called each time a command response is received.
         on_monitor_message : function object
@@ -179,6 +190,12 @@ class RobotCallbacks:
 
         self.on_activate_sim = None
         self.on_deactivate_sim = None
+
+        self.on_activate_ext_tool_sim = None
+        self.on_deactivate_ext_tool_sim = None
+
+        self.on_activate_recovery_mode = None
+        self.on_deactivate_recovery_mode = None
 
         self.on_command_message = None
         self.on_monitor_message = None
@@ -387,6 +404,14 @@ class _RobotEvents:
         Set if robot is in sim mode.
     on_deactivate_sim : event
         Set if robot is not in sim mode.
+    on_activate_ext_tool_sim : event
+        Set if robot is in gripper sim mode.
+    on_deactivate_ext_tool_sim : event
+        Set if robot is not in gripper sim mode.
+    on_activate_recovery_mode : event
+        Set if robot is in recovery mode.
+    on_deactivate_recovery_mode : event
+        Set if robot is not in recovery mode.
     on_joints_updated : event
         Set if joint angles has been updated.
     on_pose_updated : event
@@ -431,6 +456,12 @@ class _RobotEvents:
 
         self.on_activate_sim = InterruptableEvent()
         self.on_deactivate_sim = InterruptableEvent()
+
+        self.on_activate_ext_tool_sim = InterruptableEvent()
+        self.on_deactivate_ext_tool_sim = InterruptableEvent()
+
+        self.on_activate_recovery_mode = InterruptableEvent()
+        self.on_deactivate_recovery_mode = InterruptableEvent()
 
         self.on_joints_updated = InterruptableEvent()
         self.on_pose_updated = InterruptableEvent()
@@ -681,6 +712,8 @@ class RobotInfo:
         True if robot is capable of sending real-time monitoring messages on control port (SetCtrlPortMonitoring)
     num_joints : int
         Number of joints on the robot.
+    requires_homing : bool
+        Tells if this robot requires homing
 """
 
     def __init__(self,
@@ -699,10 +732,13 @@ class RobotInfo:
 
         if self.model == 'Meca500':
             self.num_joints = 6
+            self.requires_homing = True
         elif self.model == 'Scara':
             self.num_joints = 4
+            self.requires_homing = False
         elif self.model is None:
             self.num_joints = 1
+            self.requires_homing = False
         else:
             raise ValueError(f'Invalid robot model: {self.model}')
 
@@ -1694,16 +1730,18 @@ class Robot:
         self._stop_callback_thread()
 
     def IsConnected(self) -> bool:
-        """Tells if we're actually connected to the robot
-
-        Returns
-        -------
-        boolean
-            true if connected to the robot
-        """
+        """Tells if we're actually connected to the robot"""
         return self._robot_events.on_connected.is_set()
 
-    def set_synchronous_mode(self, sync_mode: bool = True):
+    def IsAllowedToMove(self) -> bool:
+        """Tells if the robot is currently allowed to be moved (i.e. homed, or activated in recovery mode)"""
+        can_move = False
+        with self._main_lock:
+            can_move = self._robot_status.homing_state or (self._robot_status.activation_state
+                                                           and self._robot_events.on_activate_recovery_mode.is_set())
+        return can_move
+
+    def SetSynchronousMode(self, sync_mode: bool = True):
         """Enables synchronous mode. In this mode, all commands are blocking until robot's response is received.
            Note that this will apply to next API calls.
            So disabling synchronous mode will not not awake thread already awaiting on synchronous operations.
@@ -2251,9 +2289,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_connected.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2262,9 +2303,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_disconnected.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2273,9 +2317,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 15
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = 15.0
         self._robot_events.on_activated.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2284,9 +2331,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_deactivated.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2295,9 +2345,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 40
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = 40.0
         self._robot_events.on_homed.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2306,11 +2359,47 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_activate_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitSimDeactivated(self, timeout: float = None):
+        """Pause program execution until the robot simulation mode is deactivated.
+
+        Parameters
+        ----------
+        timeout : float, by default 10
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_deactivate_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitRecoveryMode(self, activated: bool, timeout: float = None):
+        """Pause program execution until the robot recovery mode is in the requested state.
+
+        Parameters
+        ----------
+        activated : bool
+            Recovery mode to wait for (activated or deactivated
+        timeout : float, by default 10
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if activated:
+            self._robot_events.on_activate_recovery_mode.wait(timeout=timeout)
+        else:
+            self._robot_events.on_deactivate_recovery_mode.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitForError(self, timeout: float = None):
@@ -2329,21 +2418,13 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_error_reset.wait(timeout=timeout)
-
-    @disconnect_on_exception
-    def WaitSimDeactivated(self, timeout: float = None):
-        """Pause program execution until the robot simulation mode is deactivated.
-
-        Parameters
-        ----------
-        timeout : float
-            Maximum time to spend waiting for the event (in seconds).
-        """
-        self._robot_events.on_deactivate_sim.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitMotionResumed(self, timeout: float = None):
@@ -2351,9 +2432,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_motion_resumed.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2362,9 +2446,12 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_motion_paused.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2373,10 +2460,13 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
 
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         self._robot_events.on_motion_cleared.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2385,12 +2475,15 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float
+        timeout : float, by default 10
             Maximum time to spend waiting for the event (in seconds).
         """
         if self._robot_events.on_end_of_cycle.is_set():
             self._robot_events.on_end_of_cycle.clear()
 
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = 2
         self._robot_events.on_end_of_cycle.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -2474,7 +2567,7 @@ class Robot:
             self._send_command('ResetError')
 
         if self._enable_synchronous_mode:
-            self._robot_events.on_error_reset.wait()
+            self._robot_events.on_error_reset.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def ResetPStop(self):
@@ -2486,7 +2579,7 @@ class Robot:
             self._send_command('ResetPStop')
 
         if self._enable_synchronous_mode:
-            self._robot_events.on_p_stop_reset.wait()
+            self._robot_events.on_p_stop_reset.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def Delay(self, t: float):
@@ -2660,7 +2753,7 @@ class Robot:
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated joints positions and waits for response, else uses last known positions.
-        timeout : float
+        timeout : float, by default 10
             Maximum time in second to wait for forced update.
 
         Return
@@ -2669,6 +2762,9 @@ class Robot:
             Returns joint positions in degrees.
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             if self._robot_info.rt_message_capable:
                 self._send_sync_command('GetRtTargetJointPos', self._robot_events.on_joints_updated, timeout)
@@ -2690,6 +2786,9 @@ class Robot:
 
     def GetJoints(self, synchronous_update: bool = False, timeout: float = None):
         """Legacy command. Please use GetRtTargetJointPos instead"""
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         return self.GetRtTargetJointPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     @disconnect_on_exception
@@ -2705,7 +2804,7 @@ class Robot:
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated pose and waits for response, else uses last know pose.
-        timeout : float
+        timeout : float, by default 10
             Maximum time in second to wait for forced update.
 
         Return
@@ -2715,6 +2814,9 @@ class Robot:
 
         """
 
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             if self._robot_info.rt_message_capable:
                 self._send_sync_command('GetRtTargetCartPos', self._robot_events.on_pose_updated, timeout)
@@ -2733,6 +2835,9 @@ class Robot:
 
     def GetPose(self, synchronous_update: bool = False, timeout: float = None) -> TimestampedData:
         """Legacy command. Please use GetRtTargetCartPos instead"""
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         return self.GetRtTargetCartPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
 
     def _set_monitoring_internval_internal(self, t: float):
@@ -2803,6 +2908,8 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             self._send_command('ActivateSim')
+        if self._enable_synchronous_mode:
+            self._robot_events.on_activate_sim.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def DeactivateSim(self):
@@ -2812,6 +2919,8 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             self._send_command('DeactivateSim')
+        if self._enable_synchronous_mode:
+            self._robot_events.on_deactivate_sim.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def SetExtToolSim(self, activated: bool = True):
@@ -2825,6 +2934,67 @@ class Robot:
                 self._send_command('SetExtToolSim', [1])
             else:
                 self._send_command('SetExtToolSim', [0])
+        if self._enable_synchronous_mode:
+            if activated:
+                self._robot_events.on_activate_ext_tool_sim.wait(timeout=self.default_timeout)
+            else:
+                self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=self.default_timeout)
+
+    @disconnect_on_exception
+    def SetRecoveryMode(self, activated: bool = True):
+        """Enable/disable recovery mode, allowing robot to move (slowly) without homing and without joint limits."""
+        with self._main_lock:
+            self._check_internal_states()
+            if activated:
+                self._send_command('SetRecoveryMode', [1])
+            else:
+                self._send_command('SetRecoveryMode', [0])
+
+        if self._enable_synchronous_mode:
+            if activated:
+                self._robot_events.on_activate_recovery_mode.wait(timeout=self.default_timeout)
+            else:
+                self._robot_events.on_deactivate_recovery_mode.wait(timeout=self.default_timeout)
+
+    @disconnect_on_exception
+    def SetTorqueLimitsCfg(self, severity: str = 'error', skip_acceleration=True):
+        """Change the torque limits configuration (enable/disable, choose severity, etc.).
+        Note that the per-joint torque limit is configured by calling SetTorqueLimits.
+
+        Parameters
+        ----------
+        severity : str
+            Severity-level of exceeding torque limits.
+            Available severity levels (see TORQUE_LIMIT_SEVERITIES):
+                - 0 or 'disabled':     Torque limits disabled (this by default when robot is activated)
+                - 1 or 'warning':      Send a warning event (MX_ST_EXCESSIVE_TRQ) when torque exceeds the limit
+                - 2 or 'pause-motion': Pause motion when torque exceeds the limit
+                - 3 or 'clear-motion': Pause motion when torque exceeds the limit
+                - 4 or 'error':        Set robot in error state when torque exceeds the limit
+        skip_acceleration : bool
+            When True, torque limits are ignored during acceleration periods (allowing fast accelerations without
+            triggering torque limits exceeded condition)
+        """
+        severity_int = severity if type(severity) == int else TORQUE_LIMIT_SEVERITIES[severity]
+        skip_acceleration_int = 1 if skip_acceleration else 0
+        self._send_motion_command('SetTorqueLimitsCfg', [severity_int, skip_acceleration_int])
+
+    @disconnect_on_exception
+    def SetTorqueLimits(self, *args: list[float]):
+        """Set the torque limit (in percent) for each joint.
+        Note that torque limits will be applied only if severity mode is set to other than 'disabled' by
+        calling SetTorqueLimitsCfg.
+
+        Parameters
+        ----------
+        joint_1...joint_n : float
+            Desired torque limit in percent.
+
+        """
+        if len(args) != self._robot_info.num_joints:
+            raise ValueError('Incorrect number of joints sent to command.')
+
+        self._send_motion_command('SetTorqueLimits', args)
 
     @disconnect_on_exception
     def ActivateBrakes(self, activated: bool = True):
@@ -2848,9 +3018,9 @@ class Robot:
 
         if self._enable_synchronous_mode:
             if activated:
-                self._robot_events.on_brakes_activated.wait()
+                self._robot_events.on_brakes_activated.wait(timeout=self.default_timeout)
             else:
-                self._robot_events.on_brakes_deactivated.wait()
+                self._robot_events.on_brakes_deactivated.wait(timeout=self.default_timeout)
 
     def GetRobotInfo(self) -> RobotInfo:
         """Return a copy of the known robot information.
@@ -2884,7 +3054,7 @@ class Robot:
         ----------
         synchronous_update: boolean
             True -> Synchronously get updated robot status. False -> Get latest known status.
-        timeout: float
+        timeout: float, by default 10
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -2893,6 +3063,9 @@ class Robot:
             Object containing the current robot status
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             self._send_sync_command('GetStatusRobot', self._robot_events.on_status_updated, timeout)
 
@@ -2909,7 +3082,7 @@ class Robot:
             True -> Synchronously get updated gripper status. False -> Get latest known status.
             *** Note: Synchronous mode by default because robot does not report gripper status change events by default
                       (unless SetStatusEvents command is used to enable gripper status updates)
-        timeout: float
+        timeout: float, by default 10
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -2918,6 +3091,9 @@ class Robot:
             Object containing the current gripper status
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             self._send_sync_command('GetStatusGripper', self._robot_events.on_status_gripper_updated, timeout)
 
@@ -3069,7 +3245,7 @@ class Robot:
         finally:
             self.EndLogging()
 
-    def update_robot(self, firmware: str, address: str = None):
+    def UpdateRobot(self, firmware: str, address: str = None):
         """
         Install a new firmware and verifies robot version afterward.
 
@@ -3877,6 +4053,18 @@ class Robot:
         elif response.id == mx_def.MX_ST_RT_VALVE_STATE:
             self._handle_valve_state_response(response)
 
+        elif response.id == mx_def.MX_ST_EXTTOOL_SIM_ON:
+            self._handle_ext_tool_sim_status(True)
+
+        elif response.id == mx_def.MX_ST_EXTTOOL_SIM_OFF:
+            self._handle_ext_tool_sim_status(False)
+
+        elif response.id == mx_def.MX_ST_RECOVERY_MODE_ON:
+            self._handle_recovery_mode_status(True)
+
+        elif response.id == mx_def.MX_ST_RECOVERY_MODE_OFF:
+            self._handle_recovery_mode_status(False)
+
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
             self._robot_rt_data.rt_target_joint_pos.update_from_csv(response.data)
             if self._is_in_sync():
@@ -4067,6 +4255,42 @@ class Robot:
         if self._is_in_sync():
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
+
+    def _handle_ext_tool_sim_status(self, enabled: bool):
+        """Handle gripper sim mode status change event.
+
+        Parameters
+        ----------
+        enabled : bool
+            Gripper simulation mode enabled or not.
+
+        """
+        if enabled:
+            self._robot_events.on_deactivate_ext_tool_sim.clear()
+            self._robot_events.on_activate_ext_tool_sim.set()
+            self._callback_queue.put('on_activate_ext_tool_sim')
+        else:
+            self._robot_events.on_activate_ext_tool_sim.clear()
+            self._robot_events.on_deactivate_ext_tool_sim.set()
+            self._callback_queue.put('on_deactivate_ext_tool_sim')
+
+    def _handle_recovery_mode_status(self, enabled: bool):
+        """Handle recovery mode status change event.
+
+        Parameters
+        ----------
+        enabled : bool
+            Recovery mode enabled or not.
+
+        """
+        if enabled:
+            self._robot_events.on_deactivate_recovery_mode.clear()
+            self._robot_events.on_activate_recovery_mode.set()
+            self._callback_queue.put('on_activate_recovery_mode')
+        else:
+            self._robot_events.on_activate_recovery_mode.clear()
+            self._robot_events.on_deactivate_recovery_mode.set()
+            self._callback_queue.put('on_deactivate_recovery_mode')
 
     def _handle_external_tool_status_response(self, response: _Message):
         """Parse external tool status response and update status fields and events.

@@ -116,7 +116,7 @@ def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expec
 # Server to listen for a connection. Send initial data in data_list on connect, send rest in response to any msg.
 def fake_server(address, port, data_list, server_up):
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_sock.settimeout(1)  # Allow up to 1 second to create the connection.
+    server_sock.settimeout(10)  # Allow up to 10 seconds to create the connection.
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.bind((address, port))
     server_sock.listen()
@@ -795,6 +795,16 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
         robot.DeactivateSim()
 
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM_ON, ''))
+        robot.SetExtToolSim(True)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM_OFF, ''))
+        robot.SetExtToolSim(False)
+
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_ON, ''))
+        robot.SetRecoveryMode(True)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_OFF, ''))
+        robot.SetRecoveryMode(False)
+
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_OFFLINE_START, ''))
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '0,0,0,0,0,0,0'))
@@ -840,7 +850,10 @@ def test_event_with_exception():
 def test_motion_commands(robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel']
+    skip_list = [
+        'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
+        'SetTorqueLimitsCfg'
+    ]
 
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
