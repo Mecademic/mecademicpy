@@ -2654,7 +2654,7 @@ class Robot:
     def GetRtExtToolStatus(self,
                            include_timestamp: bool = False,
                            synchronous_update: bool = False,
-                           timeout: float = None):
+                           timeout: float = None) -> ExtToolStatus:
         """Return a copy of the current external tool status
 
         Parameters
@@ -2685,7 +2685,7 @@ class Robot:
     def GetRtGripperState(self,
                           include_timestamp: bool = False,
                           synchronous_update: bool = False,
-                          timeout: float = None):
+                          timeout: float = None) -> GripperState:
         """Return a copy of the current gripper state
 
         Parameters
@@ -2713,7 +2713,10 @@ class Robot:
                 return copy.deepcopy(self._gripper_state)
 
     @disconnect_on_exception
-    def GetRtValveState(self, include_timestamp: bool = False, synchronous_update: bool = False, timeout: float = None):
+    def GetRtValveState(self,
+                        include_timestamp: bool = False,
+                        synchronous_update: bool = False,
+                        timeout: float = None) -> ValveState:
         """Return a copy of the current valve state
 
         Parameters
