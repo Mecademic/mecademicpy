@@ -3394,7 +3394,7 @@ class Robot:
         else:
             expected_version = firmware_file_version.full_version
 
-        if str(current_version) == expected_version:
+        if str(current_version) in expected_version:
             self.logger.info(f"robot is now running version {current_version}")
         else:
             error_msg = f"Fail to install robot properly. current version {current_version}, " \
