@@ -2102,7 +2102,11 @@ class Robot:
         self._send_motion_command('GripperOpen')
 
         if self._enable_synchronous_mode:
-            self._robot_events.on_gripper_state_updated.wait()
+            # GripperOpen can be used on both gripper and pneumatic module
+            if self.GetRtExtToolStatus().tool_type in [mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG]:
+                self._robot_events.on_gripper_state_updated.wait()
+            elif self.GetRtExtToolStatus().tool_type in [mx_def.MX_EXT_TOOL_MPM500_NB_VALVES]:
+                self._robot_events.on_valve_state_updated.wait()
 
     @disconnect_on_exception
     def GripperClose(self):
@@ -2113,7 +2117,11 @@ class Robot:
         self._send_motion_command('GripperClose')
 
         if self._enable_synchronous_mode:
-            self._robot_events.on_gripper_state_updated.wait()
+            # GripperOpen can be used on both gripper and pneumatic module
+            if self.GetRtExtToolStatus().tool_type in [mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG]:
+                self._robot_events.on_gripper_state_updated.wait()
+            elif self.GetRtExtToolStatus().tool_type in [mx_def.MX_EXT_TOOL_MPM500_NB_VALVES]:
+                self._robot_events.on_valve_state_updated.wait()
 
     @disconnect_on_exception
     def MoveGripper(self, state: bool = GRIPPER_OPEN):
@@ -2381,6 +2389,35 @@ class Robot:
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_deactivate_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitExtToolSimActivated(self, timeout: float = None):
+        """Pause program execution until the robot external tool simulation mode is activated.
+
+        Parameters
+        ----------
+        timeout : float, by default 10
+            Maximum time to spend waiting for the event (in seconds).
+
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_activate_ext_tool_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitExtToolSimDeactivated(self, timeout: float = None):
+        """Pause program execution until the robot external tool simulation mode is deactivated.
+
+        Parameters
+        ----------
+        timeout : float, by default 10
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitRecoveryMode(self, activated: bool, timeout: float = None):
@@ -2923,22 +2960,27 @@ class Robot:
             self._robot_events.on_deactivate_sim.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
-    def SetExtToolSim(self, activated: bool = True):
-        """Enable/disable external tool simulation mode, allowing GripperOpen/Close and SetValveState commands
+    def SetExtToolSim(self, ext_tool_type: int = mx_def.MX_EXT_TOOL_MEGP25_SHORT):
+        """Simulate an external tool, allowing GripperOpen/Close and SetValveState commands
             on a robot without an external tool present.
 
+        Parameters
+        ----------
+        ext_tool_type : int or mx_def constants
+            MX_EXT_TOOL_NONE = 0
+            MX_EXT_TOOL_MEGP25_SHORT = 1
+            MX_EXT_TOOL_MEGP25_LONG = 2
+            MX_EXT_TOOL_VBOX_2VALVES = 3
         """
         with self._main_lock:
             self._check_internal_states()
-            if activated:
-                self._send_command('SetExtToolSim', [1])
-            else:
-                self._send_command('SetExtToolSim', [0])
+            self._send_command('SetExtToolSim', [ext_tool_type])
+
         if self._enable_synchronous_mode:
-            if activated:
-                self._robot_events.on_activate_ext_tool_sim.wait(timeout=self.default_timeout)
-            else:
+            if ext_tool_type == mx_def.MX_EXT_TOOL_NONE:
                 self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=self.default_timeout)
+            else:
+                self._robot_events.on_activate_ext_tool_sim.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
     def SetRecoveryMode(self, activated: bool = True):
