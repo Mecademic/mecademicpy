@@ -1061,9 +1061,11 @@ class ExtToolStatus:
     Attributes
     ----------
     tool_type : int
-        External tool type "None", "MEGP25", "MPM500"
-    present : bool
-        True if the gripper is present on the robot.
+        External tool type. Available types:
+        0: mx_def.MX_EXT_TOOL_NONE
+        1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+        2: mx_def.MX_EXT_TOOL_MEGP25_LONG
+        3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
     homing_state : bool
         True if the robot is homed.
     error_status : bool
@@ -1076,7 +1078,6 @@ class ExtToolStatus:
 
         # The following are status fields.
         self.tool_type = 0
-        self.present = False
         self.homing_state = False
         self.error_status = False
         self.overload_error = False
@@ -4309,9 +4310,9 @@ class Robot:
         status_flags = self._robot_rt_data.rt_external_tool_status.data
 
         self._external_tool_status.tool_type = status_flags[0]
-        self._external_tool_status.present = status_flags[1]
-        self._external_tool_status.homing_state = status_flags[2]
-        self._external_tool_status.error_status = status_flags[3]
+        self._external_tool_status.homing_state = status_flags[1]
+        self._external_tool_status.error_status = status_flags[2]
+        self._external_tool_status.overload_error = status_flags[3]
 
         if self._is_in_sync():
             self._robot_events.on_external_tool_status_updated.set()
