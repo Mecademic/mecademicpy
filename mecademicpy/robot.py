@@ -121,7 +121,7 @@ class RobotCallbacks:
         on_status_updated : function object
             Function to be called once robot status is updated.
         on_status_gripper_updated : function object
-            Function to be called once gripper status is updated.
+            Function to be called once gripper status is updated (legacy, use following external tools callbacks).
         on_external_tool_status_updated: function object
             Function to be called once external tool status is updated.
         on_gripper_state_updated: function object
