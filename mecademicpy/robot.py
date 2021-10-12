@@ -122,6 +122,12 @@ class RobotCallbacks:
             Function to be called once robot status is updated.
         on_status_gripper_updated : function object
             Function to be called once gripper status is updated.
+        on_external_tool_status_updated: function object
+            Function to be called once external tool status is updated.
+        on_gripper_state_updated: function object
+            Function to be called once gripper state is updated.
+        on_valve_state_updated: function object
+            Function to be called once valve state is updated.
         on_activated : function object
             Function to be called once activated.
         on_deactivated : function object
@@ -171,6 +177,10 @@ class RobotCallbacks:
 
         self.on_status_updated = None
         self.on_status_gripper_updated = None
+
+        self.on_external_tool_status_updated = None
+        self.on_gripper_state_updated = None
+        self.on_valve_state_updated = None
 
         self.on_activated = None
         self.on_deactivated = None
@@ -483,7 +493,6 @@ class _RobotEvents:
 
         self.on_status_updated.set()
         self.on_status_gripper_updated.set()
-
         self.on_external_tool_status_updated.set()
         self.on_gripper_state_updated.set()
         self.on_valve_state_updated.set()
@@ -2098,30 +2107,22 @@ class Robot:
         """Open the gripper.
 
         """
-        self._robot_events.on_gripper_state_updated.clear()
-        self._send_motion_command('GripperOpen')
 
+        self._send_motion_command('GripperOpen')
         if self._enable_synchronous_mode:
-            # GripperOpen can be used on both gripper and pneumatic module
-            if self.GetRtExtToolStatus().tool_type in [mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG]:
-                self._robot_events.on_gripper_state_updated.wait()
-            elif self.GetRtExtToolStatus().tool_type in [mx_def.MX_EXT_TOOL_MPM500_NB_VALVES]:
-                self._robot_events.on_valve_state_updated.wait()
+            checkpoint = self._set_checkpoint_internal()
+            checkpoint.wait()
 
     @disconnect_on_exception
     def GripperClose(self):
         """Close the gripper.
 
         """
-        self._robot_events.on_gripper_state_updated.clear()
-        self._send_motion_command('GripperClose')
 
+        self._send_motion_command('GripperClose')
         if self._enable_synchronous_mode:
-            # GripperOpen can be used on both gripper and pneumatic module
-            if self.GetRtExtToolStatus().tool_type in [mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG]:
-                self._robot_events.on_gripper_state_updated.wait()
-            elif self.GetRtExtToolStatus().tool_type in [mx_def.MX_EXT_TOOL_MPM500_NB_VALVES]:
-                self._robot_events.on_valve_state_updated.wait()
+            checkpoint = self._set_checkpoint_internal()
+            checkpoint.wait()
 
     @disconnect_on_exception
     def MoveGripper(self, state: bool = GRIPPER_OPEN):
@@ -2175,11 +2176,11 @@ class Robot:
             MPM500 pneumatic module has 2 valves.
 
         """
-        self._robot_events.on_valve_state_updated.clear()
-        self._send_motion_command('SetValveState', args)
 
+        self._send_motion_command('SetValveState', args)
         if self._enable_synchronous_mode:
-            self._robot_events.on_valve_state_updated.wait()
+            checkpoint = self._set_checkpoint_internal()
+            checkpoint.wait()
 
     @disconnect_on_exception
     def SetJointAcc(self, p: float):
@@ -2550,51 +2551,6 @@ class Robot:
         self._robot_events.on_end_of_block.wait(timeout=remaining_timeout)
 
     @disconnect_on_exception
-    def WaitExternalToolStatusUpdated(self, timeout: float = None):
-        """Pause program execution until robot external tool status changed.
-
-        Parameters
-        ----------
-        timeout : float
-            Maximum time to spend waiting for the event (in seconds).
-        """
-        # Use appropriate default timeout of not specified
-        if timeout is None:
-            timeout = self.default_timeout
-
-        self._robot_events.on_external_tool_status_updated.wait(timeout)
-
-    @disconnect_on_exception
-    def WaitGripperStateUpdated(self, timeout: float = None):
-        """Pause program execution until robot gripper state changed.
-
-        Parameters
-        ----------
-        timeout : float
-            Maximum time to spend waiting for the event (in seconds).
-        """
-        # Use appropriate default timeout of not specified
-        if timeout is None:
-            timeout = self.default_timeout
-
-        self._robot_events.on_gripper_state_updated.wait(timeout)
-
-    @disconnect_on_exception
-    def WaitValveStateUpdated(self, timeout: float = None):
-        """Pause program execution until robot valve state changed.
-
-        Parameters
-        ----------
-        timeout : float
-            Maximum time to spend waiting for the event (in seconds).
-        """
-        # Use appropriate default timeout of not specified
-        if timeout is None:
-            timeout = self.default_timeout
-
-        self._robot_events.on_valve_state_updated.wait(timeout)
-
-    @disconnect_on_exception
     def ResetError(self):
         """Attempt to reset robot error.
 
@@ -2960,24 +2916,24 @@ class Robot:
             self._robot_events.on_deactivate_sim.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
-    def SetExtToolSim(self, ext_tool_type: int = mx_def.MX_EXT_TOOL_MEGP25_SHORT):
+    def SetExtToolSim(self, sim_ext_tool_type: int = mx_def.MX_EXT_TOOL_MEGP25_SHORT):
         """Simulate an external tool, allowing GripperOpen/Close and SetValveState commands
             on a robot without an external tool present.
 
         Parameters
         ----------
-        ext_tool_type : int or mx_def constants
-            MX_EXT_TOOL_NONE = 0
-            MX_EXT_TOOL_MEGP25_SHORT = 1
-            MX_EXT_TOOL_MEGP25_LONG = 2
-            MX_EXT_TOOL_VBOX_2VALVES = 3
+        sim_ext_tool_type : int or mx_def constants
+            0: mx_def.MX_EXT_TOOL_NONE
+            1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+            2: mx_def.MX_EXT_TOOL_MEGP25_LONG
+            3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
         """
         with self._main_lock:
             self._check_internal_states()
-            self._send_command('SetExtToolSim', [ext_tool_type])
+            self._send_command('SetExtToolSim', [sim_ext_tool_type])
 
         if self._enable_synchronous_mode:
-            if ext_tool_type == mx_def.MX_EXT_TOOL_NONE:
+            if sim_ext_tool_type == mx_def.MX_EXT_TOOL_NONE:
                 self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=self.default_timeout)
             else:
                 self._robot_events.on_activate_ext_tool_sim.wait(timeout=self.default_timeout)
