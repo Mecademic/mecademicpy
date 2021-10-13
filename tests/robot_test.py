@@ -800,6 +800,10 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM_OFF, ''))
         robot.SetExtToolSim(False)
 
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,0'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, '34,1,1'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, '35,1,1'))
+
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_ON, ''))
         robot.SetRecoveryMode(True)
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_OFF, ''))
