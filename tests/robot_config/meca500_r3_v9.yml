@@ -32,3 +32,5 @@ expected_connect_commands:
   - name: "SetCtrlPortMonitoring(1)"
     response_code: 2096
     response: 'Monitoring on control port enabled/disabled'
+    extra_event: 2007
+    extra_event_data: '0,0,0,0,1,1,1'
