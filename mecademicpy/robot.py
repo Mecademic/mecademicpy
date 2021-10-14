@@ -1295,6 +1295,7 @@ class Robot:
         self._robot_rt_data = None
         self._robot_rt_data_stable = None
         self._robot_status = RobotStatus()
+        self._first_robot_status_received = False
         self._gripper_status = GripperStatus()
         self._external_tool_status = ExtToolStatus()
         self._gripper_state = GripperState()
@@ -1622,6 +1623,8 @@ class Robot:
 
             self._offline_mode = offline_mode
             self._monitor_mode = monitor_mode
+
+            self._first_robot_status_received = False
 
             if not self._monitor_mode:
                 self._initialize_command_socket(timeout)
@@ -4164,14 +4167,16 @@ class Robot:
         assert response.id == mx_def.MX_ST_GET_STATUS_ROBOT
         status_flags = self._parse_response_bool(response)
 
-        if self._robot_status.activation_state != status_flags[0]:
+        if not self._first_robot_status_received or self._robot_status.activation_state != status_flags[0]:
             if status_flags[0]:
+                self.logger.info(f'Robot is activated.')
                 self._robot_events.on_deactivated.clear()
                 self._robot_events.on_activated.set()
                 self._robot_events.on_brakes_activated.clear()
                 self._robot_events.on_brakes_deactivated.set()
                 self._callback_queue.put('on_activated')
             else:
+                self.logger.info(f'Robot is deactivated.')
                 self._robot_events.on_activated.clear()
                 self._robot_events.on_deactivated.set()
                 self._robot_events.on_brakes_deactivated.clear()
@@ -4179,7 +4184,7 @@ class Robot:
                 self._callback_queue.put('on_deactivated')
             self._robot_status.activation_state = status_flags[0]
 
-        if self._robot_status.homing_state != status_flags[1]:
+        if not self._first_robot_status_received or self._robot_status.homing_state != status_flags[1]:
             if status_flags[1]:
                 self._robot_events.on_homed.set()
                 self._callback_queue.put('on_homed')
@@ -4187,7 +4192,7 @@ class Robot:
                 self._robot_events.on_homed.clear()
             self._robot_status.homing_state = status_flags[1]
 
-        if self._robot_status.simulation_mode != status_flags[2]:
+        if not self._first_robot_status_received or self._robot_status.simulation_mode != status_flags[2]:
             if status_flags[2]:
                 self._robot_events.on_deactivate_sim.clear()
                 self._robot_events.on_activate_sim.set()
@@ -4198,7 +4203,7 @@ class Robot:
                 self._callback_queue.put('on_deactivate_sim')
             self._robot_status.simulation_mode = status_flags[2]
 
-        if self._robot_status.error_status != status_flags[3]:
+        if not self._first_robot_status_received or self._robot_status.error_status != status_flags[3]:
             if status_flags[3]:
                 message = "robot is in error"
                 self._invalidate_checkpoints(message)
@@ -4213,7 +4218,7 @@ class Robot:
                 self._callback_queue.put('on_error_reset')
             self._robot_status.error_status = status_flags[3]
 
-        if self._robot_status.pause_motion_status != status_flags[4]:
+        if not self._first_robot_status_received or self._robot_status.pause_motion_status != status_flags[4]:
             if status_flags[4]:
                 self._robot_events.on_motion_resumed.clear()
                 self._robot_events.on_motion_paused.set()
@@ -4224,16 +4229,21 @@ class Robot:
                 self._callback_queue.put('on_motion_resumed')
             self._robot_status.pause_motion_status = status_flags[4]
 
-        if self._robot_status.end_of_block_status != status_flags[5]:
+        if not self._first_robot_status_received or self._robot_status.end_of_block_status != status_flags[5]:
             if status_flags[5]:
                 self._robot_events.on_end_of_block.set()
             else:
                 self._robot_events.on_end_of_block.clear()
             self._robot_status.end_of_block_status = status_flags[5]
 
+        self._first_robot_status_received = True
+
         if self._is_in_sync():
             self._robot_events.on_status_updated.set()
         self._callback_queue.put('on_status_updated')
+
+        self.logger.warning(
+            f'END of _handle_robot_status_response. on_deactivated set: {self._robot_events.on_deactivated.is_set()}')
 
     def _handle_gripper_status_response(self, response: _Message):
         """Parse gripper status response and update status fields and events.

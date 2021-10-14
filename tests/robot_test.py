@@ -7,6 +7,7 @@ import pathlib
 import re
 import socket
 import threading
+from typing import Union
 import queue
 from functools import partial
 import yaml
@@ -62,23 +63,27 @@ def connect_robot_helper(robot: mdr.Robot,
                          disconnect_on_exception=False,
                          enable_synchronous_mode=False):
 
-    file_path = pathlib.Path.cwd().joinpath("tests", "robot_config")
+    file_path = pathlib.Path.cwd().joinpath('tests', 'robot_config')
     yaml_file_full_path = pathlib.Path.joinpath(file_path, yaml_filename)
 
-    with open(yaml_file_full_path, "r") as file_stream:
+    with open(yaml_file_full_path, 'r') as file_stream:
         robot_config = yaml.safe_load(file_stream)
 
         # Set connection message
         rx_queue = robot._monitor_rx_queue if monitor_mode else robot._command_rx_queue
-        rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, robot_config["expected_connection_message"]))
+        rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, robot_config['expected_connection_message']))
 
         expected_commands = []
         robot_responses = []
-        if not monitor_mode and robot_config["expected_connect_commands"]:
+        if not monitor_mode and robot_config['expected_connect_commands']:
             # Set robot command responses
-            for transaction in robot_config["expected_connect_commands"]:
-                expected_commands.append(transaction["name"])
-                robot_responses.append(mdr._Message(transaction["response_code"], transaction["response"]))
+            for transaction in robot_config['expected_connect_commands']:
+                expected_commands.append(transaction['name'])
+                cmd_responses = []
+                cmd_responses.append(mdr._Message(transaction['response_code'], transaction['response']))
+                if 'extra_event' in transaction:
+                    cmd_responses.append(mdr._Message(transaction['extra_event'], transaction['extra_event_data']))
+                robot_responses.append(cmd_responses)
 
         # Start the fake robot thread (that will simulate response to expected requests)
         fake_robot = threading.Thread(target=simple_response_handler,
@@ -100,12 +105,16 @@ def connect_robot_helper(robot: mdr.Robot,
 
 # Function for exchanging one message with queue.
 def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expected_in: list[str],
-                            desired_out: list[mdr._Message]):
+                            desired_out: Union[list[list[mdr._Message]], list[mdr._Message]]):
     if isinstance(expected_in, list):
         for i in range(len(expected_in)):
             event = queue_in.get(block=True, timeout=1)
             assert event == expected_in[i]
-            queue_out.put(desired_out[i])
+            if isinstance(desired_out[i], list):
+                for response in desired_out[i]:
+                    queue_out.put(response)
+            else:
+                queue_out.put(desired_out[i])
 
     else:
         event = queue_in.get(block=True, timeout=1)
