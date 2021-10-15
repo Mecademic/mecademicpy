@@ -4242,9 +4242,6 @@ class Robot:
             self._robot_events.on_status_updated.set()
         self._callback_queue.put('on_status_updated')
 
-        self.logger.warning(
-            f'END of _handle_robot_status_response. on_deactivated set: {self._robot_events.on_deactivated.is_set()}')
-
     def _handle_gripper_status_response(self, response: _Message):
         """Parse gripper status response and update status fields and events.
 
