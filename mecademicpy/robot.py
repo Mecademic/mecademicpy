@@ -1691,11 +1691,15 @@ class Robot:
             # conditions between the two sockets causing potential problems with this API)
             # Also make sure we have received a robot status event before continuing
             if self._robot_info.rt_on_ctrl_port_capable:
+                    connect_to_monitoring_port = False  # We won't need to connect to monitoring port
                 robot_status_event = self._send_custom_command('SetCtrlPortMonitoring(1)',
                                                                expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
                                                                skip_internal_check=True)
+                else:
+                    robot_status_event = self._send_custom_command('GetStatusRobot',
+                                                                   expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
+                                                                   skip_internal_check=True)
                 robot_status_event.wait(timeout=self.default_timeout)
-                connect_to_monitoring_port = False  # We won't need to connect to monitoring port
 
         if connect_to_monitoring_port:
             with self._main_lock:
