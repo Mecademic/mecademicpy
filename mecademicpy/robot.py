@@ -1135,6 +1135,8 @@ class Robot:
         Socket connecting to the command port of the physical Mecademic robot.
     _monitor_socket : socket object
         Socket connecting to the monitor port of the physical Mecademic robot.
+    _connected: boolean
+        Indicates if we are currently connected to the robot
 
     _command_rx_thread : thread handle
         Thread used to receive messages from the command port.
@@ -1277,6 +1279,7 @@ class Robot:
 
         self._command_socket = None
         self._monitor_socket = None
+        self._connected = False
 
         self._command_rx_thread = None
         self._command_tx_thread = None
@@ -1626,6 +1629,8 @@ class Robot:
 
             self._first_robot_status_received = False
 
+            self._connected = True
+
             if not self._monitor_mode:
                 self._initialize_command_socket(timeout)
                 self._initialize_command_connection()
@@ -1707,6 +1712,9 @@ class Robot:
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
 
         """
+        if not self._connected:
+            return
+
         self.logger.info('Disconnecting from the robot.')
 
         # Don't acquire _main_lock while shutting down queues to avoid deadlock.
@@ -1744,6 +1752,7 @@ class Robot:
 
         # Now that we're disconnected and posted 'on_disconnected' callback we can stop the callback thread
         self._stop_callback_thread()
+        self._connected = False
 
     def IsConnected(self) -> bool:
         """Tells if we're actually connected to the robot"""
