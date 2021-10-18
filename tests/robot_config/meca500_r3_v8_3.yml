@@ -23,3 +23,6 @@ expected_connect_commands:
   - name: "GetFwVersionFull"
     response_code: 2082
     response: '8.3.0.4142-tests'
+  - name: "GetStatusRobot"
+    response_code: 2007
+    response: '0,0,0,0,1,1,1'

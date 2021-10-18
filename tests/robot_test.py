@@ -196,7 +196,7 @@ def test_successful_connection_full_socket_legacy(robot: mdr.Robot):
 
     command_server_thread = run_fake_server(TEST_IP, mx_def.MX_ROBOT_TCP_PORT_CONTROL, [
         '[3000][Connected to Meca500 R3-virtual v8.3.10]\0', '[2083][m500-99999]\0',
-        '[2082][v8.3.10.9876-unit-test-fake]\0'
+        '[2082][v8.3.10.9876-unit-test-fake]\0', '[2007][0,0,0,0,1,1,1]\0'
     ])
     monitor_server_thread = run_fake_server(TEST_IP, mx_def.MX_ROBOT_TCP_PORT_FEED, [])
 

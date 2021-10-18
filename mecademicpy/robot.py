@@ -64,7 +64,7 @@ def disconnect_on_exception(func):
             return func(self, *args, **kwargs)
         except BaseException as e:
             if self._disconnect_on_exception:
-                self.Disconnect()
+                self._disconnect()
                 raise DisconnectError('Automatically disconnected as a result of exception, '
                                       'set \'disconnect_on_exception\' to False to disable.') from e
             else:
@@ -1268,8 +1268,8 @@ class Robot:
         (this code is common to constructor, destructor and __exit__ implicit functions)
         Only thing that is not reset are registered callbacks.
         """
-        if self._is_initialized:
-            self.Disconnect()
+        if self._is_initialized and self.IsConnected():
+            self._disconnect()
             # Note: Don't unregister callbacks, we allow them to remain valid after a "with" block
             # self.UnregisterCallbacks()
 
@@ -1608,107 +1608,125 @@ class Robot:
             If true, socket connections are not created, only used for testing.
 
         """
-        with self._main_lock:
-
-            # Check that the ip address is valid and set address.
-            if not isinstance(address, str):
-                raise TypeError(f'Invalid IP address ({address}).')
-
-            self.logger.info("Connecting to robot: " + address)
-            ipaddress.ip_address(address)
-            self._address = address
-
-            self._enable_synchronous_mode = enable_synchronous_mode
-            self._disconnect_on_exception = disconnect_on_exception
-
-            self._offline_mode = offline_mode
-            self._monitor_mode = monitor_mode
-
-            self._first_robot_status_received = False
-
-            if not self._monitor_mode:
-                self._initialize_command_socket(timeout)
-                self._initialize_command_connection()
-
-            self._robot_events.clear_all()
-
-            self._robot_events.on_deactivated.set()
-            self._robot_events.on_error_reset.set()
-            self._robot_events.on_p_stop_reset.set()
-            self._robot_events.on_motion_resumed.set()
-            self._robot_events.on_brakes_activated.set()
-
-            self._robot_events.on_status_updated.set()
-            self._robot_events.on_status_gripper_updated.set()
-            self._robot_events.on_external_tool_status_updated.set()
-            self._robot_events.on_gripper_state_updated.set()
-            self._robot_events.on_valve_state_updated.set()
-
-            self._robot_events.on_joints_updated.set()
-            self._robot_events.on_pose_updated.set()
-
-            # Start callback thread if necessary
-            self._start_callback_thread()
-
-        connect_to_monitoring_port = True
-        if not self._monitor_mode and self._robot_info.version.major >= 8:
-            # Fetch the robot serial number
-            serial_response = self._send_custom_command('GetRobotSerial',
-                                                        expected_responses=[mx_def.MX_ST_GET_ROBOT_SERIAL],
-                                                        skip_internal_check=True)
-            serial_response_message = serial_response.wait(timeout=self.default_timeout)
-            self._robot_info.serial = serial_response_message.data
-
-            # Fetch full version
-            full_version_response = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
-            full_version_response.wait(timeout=self.default_timeout)
-            full_version = full_version_response.data.data
-            self._robot_info.version.update_version(full_version)
-
-            # Fetch the current real-time monitoring settings
-            if self._robot_info.rt_message_capable:
-                real_time_monitoring_response = self._send_custom_command(
-                    'GetRealTimeMonitoring',
-                    expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
-                    skip_internal_check=True)
-                real_time_monitoring_response.wait(timeout=self.default_timeout)
-
-                # Get initial monitoring interval
-                monitoring_interval_response = self._send_custom_command(
-                    'GetMonitoringInterval',
-                    expected_responses=[mx_def.MX_ST_GET_MONITORING_INTERVAL],
-                    skip_internal_check=True)
-                result = monitoring_interval_response.wait(timeout=self.default_timeout)
-                self._monitoring_interval = float(result.data)
-                self._monitoring_interval_to_restore = self._monitoring_interval
-
-            # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid race
-            # conditions between the two sockets causing potential problems with this API)
-            # Also make sure we have received a robot status event before continuing
-            if self._robot_info.rt_on_ctrl_port_capable:
-                robot_status_event = self._send_custom_command('SetCtrlPortMonitoring(1)',
-                                                               expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
-                                                               skip_internal_check=True)
-                robot_status_event.wait(timeout=self.default_timeout)
-                connect_to_monitoring_port = False  # We won't need to connect to monitoring port
-
-        if connect_to_monitoring_port:
+        try:
             with self._main_lock:
-                self._initialize_monitoring_socket(timeout)
-                self._initialize_monitoring_connection()
 
-        if self._robot_info.version.major < 8:
-            self.logger.warning('Python API not supported for firmware under version 8')
+                # Check that the ip address is valid and set address.
+                if not isinstance(address, str):
+                    raise TypeError(f'Invalid IP address ({address}).')
 
-        self._robot_events.on_connected.set()
-        self._callback_queue.put('on_connected')
+                self.logger.info("Connecting to robot: " + address)
+                ipaddress.ip_address(address)
+                self._address = address
+
+                self._enable_synchronous_mode = enable_synchronous_mode
+                self._disconnect_on_exception = disconnect_on_exception
+
+                self._offline_mode = offline_mode
+                self._monitor_mode = monitor_mode
+
+                self._first_robot_status_received = False
+
+                if not self._monitor_mode:
+                    self._initialize_command_socket(timeout)
+                    self._initialize_command_connection()
+
+                self._robot_events.clear_all()
+
+                self._robot_events.on_deactivated.set()
+                self._robot_events.on_error_reset.set()
+                self._robot_events.on_p_stop_reset.set()
+                self._robot_events.on_motion_resumed.set()
+                self._robot_events.on_brakes_activated.set()
+
+                self._robot_events.on_status_updated.set()
+                self._robot_events.on_status_gripper_updated.set()
+                self._robot_events.on_external_tool_status_updated.set()
+                self._robot_events.on_gripper_state_updated.set()
+                self._robot_events.on_valve_state_updated.set()
+
+                self._robot_events.on_joints_updated.set()
+                self._robot_events.on_pose_updated.set()
+
+                # Start callback thread if necessary
+                self._start_callback_thread()
+
+            connect_to_monitoring_port = True
+            if not self._monitor_mode and self._robot_info.version.major >= 8:
+                # Fetch the robot serial number
+                serial_response = self._send_custom_command('GetRobotSerial',
+                                                            expected_responses=[mx_def.MX_ST_GET_ROBOT_SERIAL],
+                                                            skip_internal_check=True)
+                serial_response_message = serial_response.wait(timeout=self.default_timeout)
+                self._robot_info.serial = serial_response_message.data
+
+                # Fetch full version
+                full_version_response = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
+                full_version_response.wait(timeout=self.default_timeout)
+                full_version = full_version_response.data.data
+                self._robot_info.version.update_version(full_version)
+
+                # Fetch the current real-time monitoring settings
+                if self._robot_info.rt_message_capable:
+                    real_time_monitoring_response = self._send_custom_command(
+                        'GetRealTimeMonitoring',
+                        expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
+                        skip_internal_check=True)
+                    real_time_monitoring_response.wait(timeout=self.default_timeout)
+
+                    # Get initial monitoring interval
+                    monitoring_interval_response = self._send_custom_command(
+                        'GetMonitoringInterval',
+                        expected_responses=[mx_def.MX_ST_GET_MONITORING_INTERVAL],
+                        skip_internal_check=True)
+                    result = monitoring_interval_response.wait(timeout=self.default_timeout)
+                    self._monitoring_interval = float(result.data)
+                    self._monitoring_interval_to_restore = self._monitoring_interval
+
+                # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid race
+                # conditions between the two sockets causing potential problems with this API)
+                # Also make sure we have received a robot status event before continuing
+                if self._robot_info.rt_on_ctrl_port_capable:
+                    connect_to_monitoring_port = False  # We won't need to connect to monitoring port
+                    robot_status_event = self._send_custom_command('SetCtrlPortMonitoring(1)',
+                                                                   expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
+                                                                   skip_internal_check=True)
+                else:
+                    robot_status_event = self._send_custom_command('GetStatusRobot',
+                                                                   expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
+                                                                   skip_internal_check=True)
+                robot_status_event.wait(timeout=self.default_timeout)
+
+            if connect_to_monitoring_port:
+                with self._main_lock:
+                    self._initialize_monitoring_socket(timeout)
+                    self._initialize_monitoring_connection()
+
+            if self._robot_info.version.major < 8:
+                self.logger.warning('Python API not supported for firmware under version 8')
+
+            self._robot_events.on_connected.set()
+            self._callback_queue.put('on_connected')
+        except Exception:
+            self._disconnect()
+            raise
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
 
         """
-        self.logger.info('Disconnecting from the robot.')
+        if self.IsConnected():
+            self.logger.info('Disconnecting from the robot.')
+            self._disconnect()
+        else:
+            self.logger.debug('Ignoring Disconnect() called on a non-connected robot.')
 
+    def _disconnect(self):
+        """
+        Internal function to disconnect Mecademic Robot object from the physical
+        Mecademic robot and cleanup internal states.
+
+        """
         # Don't acquire _main_lock while shutting down queues to avoid deadlock.
         self._shut_down_queue_threads()
 
@@ -3430,14 +3448,12 @@ class Robot:
             return
 
         if not (self._monitor_handler_thread and self._monitor_handler_thread.is_alive()):
-            self.Disconnect()
             raise InvalidStateError('Monitor response handler thread has unexpectedly terminated.')
 
         if self._offline_mode:  # Do not check rx threads in offline mode.
             return
 
         if not (self._monitor_rx_thread and self._monitor_rx_thread.is_alive()):
-            self.Disconnect()
             raise InvalidStateError('Monitor rx thread has unexpectedly terminated.')
 
     def _check_command_threads(self):
@@ -3448,20 +3464,17 @@ class Robot:
         """
 
         if not (self._command_response_handler_thread and self._command_response_handler_thread.is_alive()):
-            self.Disconnect()
             raise InvalidStateError('No command response handler thread, are you in monitor mode?')
 
         if self._offline_mode:  # Do not check rx threads in offline mode.
             return
 
         if not (self._command_rx_thread and self._command_rx_thread.is_alive()):
-            self.Disconnect()
             raise InvalidStateError('No command rx thread, are you in monitor mode?')
 
         # If tx thread is down, attempt to directly send deactivate command to the robot.
         if not (self._command_tx_thread and self._command_tx_thread.is_alive()):
             self._command_socket.sendall(b'DeactivateRobot\0')
-            self.Disconnect()
             raise InvalidStateError('No command tx thread, are you in monitor mode?')
 
     def _check_internal_states(self):
@@ -3470,12 +3483,17 @@ class Robot:
         Attempt to disconnect from the robot if not.
 
         """
-        if self._monitor_mode:
-            raise InvalidStateError('Cannot send command while in monitoring mode.')
-        else:
-            self._check_command_threads()
+        try:
+            if self._monitor_mode:
+                raise InvalidStateError('Cannot send command while in monitoring mode.')
+            else:
+                self._check_command_threads()
 
-        self._check_monitor_threads()
+            self._check_monitor_threads()
+        except Exception:
+            # An error was detected while validating internal states. Disconnect from robot.
+            self._disconnect()
+            raise
 
     def _send_command(self, command: str, arg_list: list = None):
         """Assembles and sends the command string to the Mecademic robot.
@@ -3590,33 +3608,27 @@ class Robot:
         if self._command_socket is not None:
             raise InvalidStateError('Cannot connect since existing command socket exists.')
 
-        try:
-            self._command_socket = self._connect_socket(self.logger, self._address, mx_def.MX_ROBOT_TCP_PORT_CONTROL,
-                                                        timeout)
+        self._command_socket = self._connect_socket(self.logger, self._address, mx_def.MX_ROBOT_TCP_PORT_CONTROL,
+                                                    timeout)
 
-            if self._command_socket is None:
-                raise CommunicationError('Command socket could not be created. Is the IP address correct?')
+        if self._command_socket is None:
+            raise CommunicationError('Command socket could not be created. Is the IP address correct?')
 
-            # Create rx thread for command socket communication.
-            self._command_rx_thread = self._launch_thread(target=self._handle_socket_rx,
-                                                          args=(
-                                                              self._command_socket,
-                                                              self._command_rx_queue,
-                                                              self.logger,
-                                                          ))
+        # Create rx thread for command socket communication.
+        self._command_rx_thread = self._launch_thread(target=self._handle_socket_rx,
+                                                      args=(
+                                                          self._command_socket,
+                                                          self._command_rx_queue,
+                                                          self.logger,
+                                                      ))
 
-            # Create tx thread for command socket communication.
-            self._command_tx_thread = self._launch_thread(target=self._handle_socket_tx,
-                                                          args=(
-                                                              self._command_socket,
-                                                              self._command_tx_queue,
-                                                              self.logger,
-                                                          ))
-
-        except Exception as exception:
-            # Clean up threads and connections on error.
-            self.Disconnect()
-            raise
+        # Create tx thread for command socket communication.
+        self._command_tx_thread = self._launch_thread(target=self._handle_socket_tx,
+                                                      args=(
+                                                          self._command_socket,
+                                                          self._command_tx_queue,
+                                                          self.logger,
+                                                      ))
 
     def _initialize_monitoring_socket(self, timeout):
         """Establish the monitoring socket and the associated thread.
@@ -3628,25 +3640,18 @@ class Robot:
         if self._monitor_socket is not None:
             raise InvalidStateError('Cannot connect since existing monitor socket exists.')
 
-        try:
-            self._monitor_socket = self._connect_socket(self.logger, self._address, mx_def.MX_ROBOT_TCP_PORT_FEED,
-                                                        timeout)
+        self._monitor_socket = self._connect_socket(self.logger, self._address, mx_def.MX_ROBOT_TCP_PORT_FEED, timeout)
 
-            if self._monitor_socket is None:
-                raise CommunicationError('Monitor socket could not be created. Is the IP address correct?')
+        if self._monitor_socket is None:
+            raise CommunicationError('Monitor socket could not be created. Is the IP address correct?')
 
-            # Create rx thread for monitor socket communication.
-            self._monitor_rx_thread = self._launch_thread(target=self._handle_socket_rx,
-                                                          args=(
-                                                              self._monitor_socket,
-                                                              self._monitor_rx_queue,
-                                                              self.logger,
-                                                          ))
-
-        except Exception as exception:
-            # Clean up threads and connections on error.
-            self.Disconnect()
-            raise
+        # Create rx thread for monitor socket communication.
+        self._monitor_rx_thread = self._launch_thread(target=self._handle_socket_rx,
+                                                      args=(
+                                                          self._monitor_socket,
+                                                          self._monitor_rx_queue,
+                                                          self.logger,
+                                                      ))
 
     def _receive_welcome_message(self, message_queue: queue.Queue, from_command_port: bool):
         """Receive and parse a welcome message in order to set _robot_info and _robot_rt_data.
@@ -3664,10 +3669,8 @@ class Robot:
                 response = message_queue.get(block=True, timeout=self.default_timeout)
             except queue.Empty:
                 self.logger.error('No response received within timeout interval.')
-                self.Disconnect()
                 raise CommunicationError('No response received within timeout interval.')
             except BaseException:
-                self.Disconnect()
                 raise
 
             if from_command_port:
@@ -3679,7 +3682,6 @@ class Robot:
 
         if response.id != mx_def.MX_ST_CONNECTED:
             self.logger.error('Connection error: {}'.format(response))
-            self.Disconnect()
             raise CommunicationError('Connection error: {}'.format(response))
 
         # Attempt to parse robot return data.
@@ -4241,9 +4243,6 @@ class Robot:
         if self._is_in_sync():
             self._robot_events.on_status_updated.set()
         self._callback_queue.put('on_status_updated')
-
-        self.logger.warning(
-            f'END of _handle_robot_status_response. on_deactivated set: {self._robot_events.on_deactivated.is_set()}')
 
     def _handle_gripper_status_response(self, response: _Message):
         """Parse gripper status response and update status fields and events.
