@@ -723,6 +723,8 @@ class RobotInfo:
         Number of joints on the robot.
     requires_homing : bool
         Tells if this robot requires homing
+    support_ext_tool : bool
+        Tells if this robot supports external tool
 """
 
     def __init__(self,
@@ -742,12 +744,15 @@ class RobotInfo:
         if self.model == 'Meca500':
             self.num_joints = 6
             self.requires_homing = True
+            self.support_ext_tool = True
         elif self.model == 'Scara':
             self.num_joints = 4
             self.requires_homing = False
+            self.support_ext_tool = False
         elif self.model is None:
             self.num_joints = 1
             self.requires_homing = False
+            self.support_ext_tool = False
         else:
             raise ValueError(f'Invalid robot model: {self.model}')
 
