@@ -29,13 +29,15 @@ robot_rt_data_to_real_time_monit = {
     'rt_conf': (mx_def.MX_ST_RT_CONF, 'Conf'),
     'rt_conf_turn': (mx_def.MX_ST_RT_CONF_TURN, 'ConfTurn'),
     'rt_accelerometer': (mx_def.MX_ST_RT_ACCELEROMETER, 'Accel'),
-    'rt_gripper_torq': (mx_def.MX_ST_RT_GRIPPER_TORQ, 'GripperTorq'),  # Unused in RobotState right now
     'rt_wrf': (mx_def.MX_ST_RT_WRF, 'Wrf'),
     'rt_trf': (mx_def.MX_ST_RT_TRF, 'Trf'),
     'rt_checkpoint': (mx_def.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
     'rt_external_tool_status': (mx_def.MX_ST_RT_EXTTOOL_STATUS, 'ExtToolStatus'),
     'rt_valve_state': (mx_def.MX_ST_RT_VALVE_STATE, 'ValveState'),
     'rt_gripper_state': (mx_def.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
+    'rt_gripper_torq': (mx_def.MX_ST_RT_GRIPPER_TORQ, 'GripperTorq'),
+    'rt_gripper_pos': (mx_def.MX_ST_RT_GRIPPER_POS, 'GripperPos'),
+    'rt_gripper_vel': (mx_def.MX_ST_RT_GRIPPER_VEL, 'GripperVel'),
     '': (mx_def.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
 }
 
@@ -212,9 +214,15 @@ class _RobotTrajectoryLogger:
             elif key.endswith('rt_external_tool_status'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['model', 'present', 'homed', 'error']))
             elif key.endswith('rt_valve_state'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'limits']))
-            elif key.endswith('rt_gripper_state'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['valve1', 'valve2']))
+            elif key.endswith('rt_gripper_state'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'limits']))
+            elif key.endswith('rt_gripper_torq'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
+            elif key.endswith('rt_gripper_pos'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
+            elif key.endswith('rt_gripper_vel'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
