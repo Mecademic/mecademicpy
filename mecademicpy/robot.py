@@ -829,7 +829,7 @@ class TimestampedData:
         if (len(numbs) - 1) != len(self.data):
             raise ValueError('Cannot update TimestampedData with incompatible data.')
 
-        if numbs[0] > self.timestamp:
+        if numbs[0] >= self.timestamp:
             self.timestamp = numbs[0]
             self.data = numbs[1:]
 
@@ -844,7 +844,7 @@ class TimestampedData:
             Data to be stored if timestamp is newer.
 
         """
-        if timestamp > self.timestamp:
+        if timestamp >= self.timestamp:
             self.timestamp = timestamp
             self.data = data
 
@@ -4213,6 +4213,9 @@ class Robot:
                 self._robot_events.on_deactivate_sim.set()
                 self._callback_queue.put('on_deactivate_sim')
             self._robot_status.simulation_mode = status_flags[2]
+            if self._robot_events.on_activate_ext_tool_sim.is_set() != self._robot_status.simulation_mode:
+                # Sim mode was just disabled -> Also means external tool sim has been disabled
+                self._handle_ext_tool_sim_status(self._robot_status.simulation_mode)
 
         if not self._first_robot_status_received or self._robot_status.error_status != status_flags[3]:
             if status_flags[3]:
@@ -4289,6 +4292,7 @@ class Robot:
             self._robot_events.on_deactivate_ext_tool_sim.clear()
             self._robot_events.on_activate_ext_tool_sim.set()
             self._callback_queue.put('on_activate_ext_tool_sim')
+
         else:
             self._robot_events.on_activate_ext_tool_sim.clear()
             self._robot_events.on_deactivate_ext_tool_sim.set()
