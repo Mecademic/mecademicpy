@@ -2627,7 +2627,7 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def SendCustomCommand(self, command: str, expected_responses: bool = None) -> InterruptableEvent:
+    def SendCustomCommand(self, command: str, expected_responses: list[int] = None) -> InterruptableEvent:
         """Send custom command to robot.
 
         Parameters
