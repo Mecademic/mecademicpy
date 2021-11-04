@@ -834,7 +834,7 @@ class TimestampedData:
             self.data = numbs[1:]
 
     def update_from_data(self, timestamp: int, data: list[float]):
-        """Update with data if timestamp is newer.
+        """Update with data unless timestamp is older
 
         Parameters
         ----------
