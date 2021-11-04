@@ -1221,9 +1221,9 @@ class Robot:
         Values from legacy MX_ST_GET_POSE event received in current cycle
 
     _tx_sync : integer
-        Value sent in the most recent "Sync" request sent to robot
+        Value sent in the most recent "SyncCmdQueue" request sent to robot
     _rx_sync : integer
-        Most recent response to "Sync" (MX_ST_SYNC) received from the robot
+        Most recent response to "SyncCmdQueue" (MX_ST_SYNC_CMD_QUEUE) received from the robot
 """
     _UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
 
@@ -3550,9 +3550,9 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             if self._robot_info.rt_on_ctrl_port_capable:
-                # Send a "sync" request so we know when we get the response to this get (and not an earlier one)
+                # Send a "SyncCmdQueue" request so we know when we get the response to this get (and not an earlier one)
                 self._tx_sync += 1
-                self._send_command(f'Sync({self._tx_sync})')
+                self._send_command(f'SyncCmdQueue({self._tx_sync})')
             if event.is_set():
                 event.clear()
                 self._send_command(command)
@@ -4147,7 +4147,7 @@ class Robot:
         elif response.id == mx_def.MX_ST_GET_REAL_TIME_MONITORING:
             self._handle_get_realtime_monitoring_response(response)
 
-        elif response.id == mx_def.MX_ST_SYNC:
+        elif response.id == mx_def.MX_ST_SYNC_CMD_QUEUE:
             self._handle_sync_response(response)
 
     def _parse_response_bool(self, response: _Message) -> list[bool]:
@@ -4477,8 +4477,8 @@ class Robot:
         self._robot_rt_data._clear_if_disabled()
 
     def _handle_sync_response(self, response: _Message):
-        """Parse robot response to "Sync" request
-           This class uses the "Sync" request/response to ensure synchronous "Get" operations have received the
+        """Parse robot response to "SyncCmdQueue" request
+           This class uses the "SyncCmdQueue" request/response to ensure synchronous "Get" operations have received the
            expected response from the robot (and not a response/event sent by the robot prior to our "Get" request).
 
         Parameters
@@ -4487,13 +4487,13 @@ class Robot:
             Sync response to parse and handle.
 
         """
-        assert response.id == mx_def.MX_ST_SYNC
+        assert response.id == mx_def.MX_ST_SYNC_CMD_QUEUE
 
         self._rx_sync = _string_to_numbers(response.data)[0]
 
     def _is_in_sync(self) -> bool:
         """Tells if we're in sync with the latest "get" operation (i.e. we've received the response to the most recent
-           "Sync" request to the robot, meaning that the "get" response we just got is up-to-date)
+           "SyncCmdQueue" request to the robot, meaning that the "get" response we just got is up-to-date)
 
         Returns
         -------
