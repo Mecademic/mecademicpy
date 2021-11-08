@@ -724,7 +724,7 @@ class RobotInfo:
     requires_homing : bool
         Tells if this robot requires homing
     supports_ext_tool : bool
-        Tells if this robot supports external tool
+        Tells if this robot supports connecting external tools (gripper, valve box...)
 """
 
     def __init__(self,
@@ -829,12 +829,12 @@ class TimestampedData:
         if (len(numbs) - 1) != len(self.data):
             raise ValueError('Cannot update TimestampedData with incompatible data.')
 
-        if numbs[0] > self.timestamp:
+        if numbs[0] >= self.timestamp:
             self.timestamp = numbs[0]
             self.data = numbs[1:]
 
     def update_from_data(self, timestamp: int, data: list[float]):
-        """Update with data if timestamp is newer.
+        """Update with data unless timestamp is older
 
         Parameters
         ----------
@@ -844,7 +844,7 @@ class TimestampedData:
             Data to be stored if timestamp is newer.
 
         """
-        if timestamp > self.timestamp:
+        if timestamp >= self.timestamp:
             self.timestamp = timestamp
             self.data = data
 
@@ -1075,9 +1075,11 @@ class ExtToolStatus:
     Attributes
     ----------
     tool_type : int
-        External tool type "None", "MEGP25", "MPM500"
-    present : bool
-        True if the gripper is present on the robot.
+        External tool type. Available types:
+        0: mx_def.MX_EXT_TOOL_NONE
+        1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+        2: mx_def.MX_EXT_TOOL_MEGP25_LONG
+        3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
     homing_state : bool
         True if the robot is homed.
     error_status : bool
@@ -1090,7 +1092,6 @@ class ExtToolStatus:
 
         # The following are status fields.
         self.tool_type = 0
-        self.present = False
         self.homing_state = False
         self.error_status = False
         self.overload_error = False
@@ -1220,9 +1221,9 @@ class Robot:
         Values from legacy MX_ST_GET_POSE event received in current cycle
 
     _tx_sync : integer
-        Value sent in the most recent "Sync" request sent to robot
+        Value sent in the most recent "SyncCmdQueue" request sent to robot
     _rx_sync : integer
-        Most recent response to "Sync" (MX_ST_SYNC) received from the robot
+        Most recent response to "SyncCmdQueue" (MX_ST_SYNC_CMD_QUEUE) received from the robot
 """
     _UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
 
@@ -2626,7 +2627,7 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def SendCustomCommand(self, command: str, expected_responses: bool = None) -> InterruptableEvent:
+    def SendCustomCommand(self, command: str, expected_responses: list[int] = None) -> InterruptableEvent:
         """Send custom command to robot.
 
         Parameters
@@ -2677,7 +2678,7 @@ class Robot:
     def GetRtExtToolStatus(self,
                            include_timestamp: bool = False,
                            synchronous_update: bool = False,
-                           timeout: float = None):
+                           timeout: float = None) -> ExtToolStatus:
         """Return a copy of the current external tool status
 
         Parameters
@@ -2708,7 +2709,7 @@ class Robot:
     def GetRtGripperState(self,
                           include_timestamp: bool = False,
                           synchronous_update: bool = False,
-                          timeout: float = None):
+                          timeout: float = None) -> GripperState:
         """Return a copy of the current gripper state
 
         Parameters
@@ -2736,7 +2737,10 @@ class Robot:
                 return copy.deepcopy(self._gripper_state)
 
     @disconnect_on_exception
-    def GetRtValveState(self, include_timestamp: bool = False, synchronous_update: bool = False, timeout: float = None):
+    def GetRtValveState(self,
+                        include_timestamp: bool = False,
+                        synchronous_update: bool = False,
+                        timeout: float = None) -> ValveState:
         """Return a copy of the current valve state
 
         Parameters
@@ -3546,9 +3550,9 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             if self._robot_info.rt_on_ctrl_port_capable:
-                # Send a "sync" request so we know when we get the response to this get (and not an earlier one)
+                # Send a "SyncCmdQueue" request so we know when we get the response to this get (and not an earlier one)
                 self._tx_sync += 1
-                self._send_command(f'Sync({self._tx_sync})')
+                self._send_command(f'SyncCmdQueue({self._tx_sync})')
             if event.is_set():
                 event.clear()
                 self._send_command(command)
@@ -4143,7 +4147,7 @@ class Robot:
         elif response.id == mx_def.MX_ST_GET_REAL_TIME_MONITORING:
             self._handle_get_realtime_monitoring_response(response)
 
-        elif response.id == mx_def.MX_ST_SYNC:
+        elif response.id == mx_def.MX_ST_SYNC_CMD_QUEUE:
             self._handle_sync_response(response)
 
     def _parse_response_bool(self, response: _Message) -> list[bool]:
@@ -4209,6 +4213,9 @@ class Robot:
                 self._robot_events.on_deactivate_sim.set()
                 self._callback_queue.put('on_deactivate_sim')
             self._robot_status.simulation_mode = status_flags[2]
+            if self._robot_events.on_activate_ext_tool_sim.is_set() != self._robot_status.simulation_mode:
+                # Sim mode was just disabled -> Also means external tool sim has been disabled
+                self._handle_ext_tool_sim_status(self._robot_status.simulation_mode)
 
         if not self._first_robot_status_received or self._robot_status.error_status != status_flags[3]:
             if status_flags[3]:
@@ -4285,6 +4292,7 @@ class Robot:
             self._robot_events.on_deactivate_ext_tool_sim.clear()
             self._robot_events.on_activate_ext_tool_sim.set()
             self._callback_queue.put('on_activate_ext_tool_sim')
+
         else:
             self._robot_events.on_activate_ext_tool_sim.clear()
             self._robot_events.on_deactivate_ext_tool_sim.set()
@@ -4322,9 +4330,9 @@ class Robot:
         status_flags = self._robot_rt_data.rt_external_tool_status.data
 
         self._external_tool_status.tool_type = status_flags[0]
-        self._external_tool_status.present = status_flags[1]
-        self._external_tool_status.homing_state = status_flags[2]
-        self._external_tool_status.error_status = status_flags[3]
+        self._external_tool_status.homing_state = status_flags[1]
+        self._external_tool_status.error_status = status_flags[2]
+        self._external_tool_status.overload_error = status_flags[3]
 
         if self._is_in_sync():
             self._robot_events.on_external_tool_status_updated.set()
@@ -4469,8 +4477,8 @@ class Robot:
         self._robot_rt_data._clear_if_disabled()
 
     def _handle_sync_response(self, response: _Message):
-        """Parse robot response to "Sync" request
-           This class uses the "Sync" request/response to ensure synchronous "Get" operations have received the
+        """Parse robot response to "SyncCmdQueue" request
+           This class uses the "SyncCmdQueue" request/response to ensure synchronous "Get" operations have received the
            expected response from the robot (and not a response/event sent by the robot prior to our "Get" request).
 
         Parameters
@@ -4479,13 +4487,13 @@ class Robot:
             Sync response to parse and handle.
 
         """
-        assert response.id == mx_def.MX_ST_SYNC
+        assert response.id == mx_def.MX_ST_SYNC_CMD_QUEUE
 
         self._rx_sync = _string_to_numbers(response.data)[0]
 
     def _is_in_sync(self) -> bool:
         """Tells if we're in sync with the latest "get" operation (i.e. we've received the response to the most recent
-           "Sync" request to the robot, meaning that the "get" response we just got is up-to-date)
+           "SyncCmdQueue" request to the robot, meaning that the "get" response we just got is up-to-date)
 
         Returns
         -------

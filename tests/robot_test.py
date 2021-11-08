@@ -929,9 +929,9 @@ def test_synchronous_gets(robot: mdr.Robot):
     connect_robot_helper(robot)
 
     # Test GetRtTargetJointPos.
-    expected_commands = ['Sync(1)', 'GetRtTargetJointPos']
+    expected_commands = ['SyncCmdQueue(1)', 'GetRtTargetJointPos']
     robot_responses = []
-    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC, '1'))
+    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC_CMD_QUEUE, '1'))
     robot_responses.append(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, '1234, 1, 2, 3, 4, 5, 6'))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
@@ -949,9 +949,9 @@ def test_synchronous_gets(robot: mdr.Robot):
     fake_robot.join()
 
     # Test GetRtTargetCartPos.
-    expected_commands = ['Sync(2)', 'GetRtTargetCartPos']
+    expected_commands = ['SyncCmdQueue(2)', 'GetRtTargetCartPos']
     robot_responses = []
-    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC, '2'))
+    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC_CMD_QUEUE, '2'))
     robot_responses.append(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, '2345, 2, 3, 4, 5, 6, 7'))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
