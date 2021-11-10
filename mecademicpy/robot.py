@@ -1619,7 +1619,7 @@ class Robot:
 
                 if self.IsConnected():
                     try:
-                        self._check_internal_states(force_check_command=True)
+                        self._check_internal_states(refresh_monitoring_mode=True)
                     except Exception:
                         self.logger.info('Connection to robot was lost, attempting re-connection.')
                 # Check that the ip address is valid and set address.
@@ -3491,15 +3491,20 @@ class Robot:
             self._command_socket.sendall(b'DeactivateRobot\0')
             raise InvalidStateError('No command tx thread, are you in monitor mode?')
 
-    def _check_internal_states(self, force_check_command=False):
+    def _check_internal_states(self, refresh_monitoring_mode=False):
         """Check that the threads which handle robot messages are alive.
 
         Attempt to disconnect from the robot if not.
 
+        Parameters
+        ----------
+        refresh_monitoring_mode : boolean
+            Refresh internal states even in monitoring mode when True, raise an exception otherwise.
         """
         try:
-            if self._monitor_mode and not force_check_command:
-                raise InvalidStateError('Cannot send command while in monitoring mode.')
+            if self._monitor_mode:
+                if not refresh_monitoring_mode:
+                    raise InvalidStateError('Cannot send command while in monitoring mode.')
             else:
                 self._check_command_threads()
 
