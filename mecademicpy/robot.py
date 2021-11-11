@@ -4069,11 +4069,8 @@ class Robot:
         elif response.id == mx_def.MX_ST_RT_VALVE_STATE:
             self._handle_valve_state_response(response)
 
-        elif response.id == mx_def.MX_ST_EXTTOOL_SIM_ON:
-            self._handle_ext_tool_sim_status(True)
-
-        elif response.id == mx_def.MX_ST_EXTTOOL_SIM_OFF:
-            self._handle_ext_tool_sim_status(False)
+        elif response.id == mx_def.MX_ST_EXTTOOL_SIM:
+            self._handle_ext_tool_sim_status(int(response.data))
 
         elif response.id == mx_def.MX_ST_RECOVERY_MODE_ON:
             self._handle_recovery_mode_status(True)
@@ -4215,7 +4212,7 @@ class Robot:
             self._robot_status.simulation_mode = status_flags[2]
             if self._robot_events.on_activate_ext_tool_sim.is_set() != self._robot_status.simulation_mode:
                 # Sim mode was just disabled -> Also means external tool sim has been disabled
-                self._handle_ext_tool_sim_status(self._robot_status.simulation_mode)
+                self._handle_ext_tool_sim_status(self._external_tool_status.tool_type)
 
         if not self._first_robot_status_received or self._robot_status.error_status != status_flags[3]:
             if status_flags[3]:
@@ -4279,16 +4276,16 @@ class Robot:
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
 
-    def _handle_ext_tool_sim_status(self, enabled: bool):
+    def _handle_ext_tool_sim_status(self, tool_type: int):
         """Handle gripper sim mode status change event.
 
         Parameters
         ----------
-        enabled : bool
-            Gripper simulation mode enabled or not.
+        tool_type : int
+            New simulated external tool type. `mx_def.MX_EXT_TOOL_NONE` when simulation is off.
 
         """
-        if enabled:
+        if tool_type != mx_def.MX_EXT_TOOL_NONE:
             self._robot_events.on_deactivate_ext_tool_sim.clear()
             self._robot_events.on_activate_ext_tool_sim.set()
             self._callback_queue.put('on_activate_ext_tool_sim')

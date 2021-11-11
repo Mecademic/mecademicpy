@@ -804,10 +804,10 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
         robot.DeactivateSim()
 
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM_ON, ''))
-        robot.SetExtToolSim(True)
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM_OFF, ''))
-        robot.SetExtToolSim(False)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM, '1'))
+        robot.SetExtToolSim(mx_def.MX_EXT_TOOL_MEGP25_SHORT)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM, '0'))
+        robot.SetExtToolSim(mx_def.MX_EXT_TOOL_NONE)
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,0'))
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, '34,1,1'))
