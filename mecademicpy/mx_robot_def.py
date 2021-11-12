@@ -191,7 +191,7 @@ MX_ST_RESUME_MOTION = 2043
 MX_ST_CLEAR_MOTION = 2044
 MX_ST_SIM_ON = 2045
 MX_ST_SIM_OFF = 2046
-MX_ST_EXTTOOL_SIM_ON = 2047
+MX_ST_EXTTOOL_SIM = 2047
 MX_ST_EXTTOOL_SIM_OFF = 2048
 MX_ST_RECOVERY_MODE_ON = 2049
 MX_ST_RECOVERY_MODE_OFF = 2050
@@ -435,10 +435,8 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MX_ST_SIM_ON, "MX_ST_SIM_ON", is_error=False),
     MX_ST_SIM_OFF:
     RobotStatusCodeInfo(MX_ST_SIM_OFF, "MX_ST_SIM_OFF", is_error=False),
-    MX_ST_EXTTOOL_SIM_ON:
-    RobotStatusCodeInfo(MX_ST_EXTTOOL_SIM_ON, "MX_ST_EXTTOOL_SIM_ON", is_error=False),
-    MX_ST_EXTTOOL_SIM_OFF:
-    RobotStatusCodeInfo(MX_ST_EXTTOOL_SIM_OFF, "MX_ST_EXTTOOL_SIM_OFF", is_error=False),
+    MX_ST_EXTTOOL_SIM:
+    RobotStatusCodeInfo(MX_ST_EXTTOOL_SIM, "MX_ST_EXTTOOL_SIM", is_error=False),
     MX_ST_EOM_ON:
     RobotStatusCodeInfo(MX_ST_EOM_ON, "MX_ST_EOM_ON", is_error=False),
     MX_ST_EOM_OFF:
