@@ -23,7 +23,7 @@ Copyright &copy; 2021 by Mecademic Inc.
 - Prevent Disconnect() errors when already disconnected
 - Make sure initial status is received before completing connection
 - Add missing 'requests' module requirement
-- Fix issue when using Connect command on an already connected robot.
+- Fix issue when using Connect() command on an already connected robot
 
 ## Version 1.0.0 (September 2021)
 
