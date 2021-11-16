@@ -4080,7 +4080,13 @@ class Robot:
             self._handle_valve_state_response(response)
 
         elif response.id == mx_def.MX_ST_EXTTOOL_SIM:
-            self._handle_ext_tool_sim_status(int(response.data))
+            if not str(response.data).isdigit():
+                self._handle_ext_tool_sim_status(True)  # Legacy response without the tool type argument
+            else:
+                self._handle_ext_tool_sim_status(int(response.data))
+
+        elif response.id == mx_def.MX_ST_EXTTOOL_SIM_OFF:
+            self._handle_ext_tool_sim_status(False)  # Legacy response (used by 8.4.4 and older)
 
         elif response.id == mx_def.MX_ST_RECOVERY_MODE_ON:
             self._handle_recovery_mode_status(True)
