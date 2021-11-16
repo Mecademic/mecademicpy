@@ -2273,6 +2273,8 @@ class Robot:
     @disconnect_on_exception
     def SetCheckpoint(self, n: int) -> InterruptableEvent:
         """Set checkpoint with desired id.
+           This method is non-blocking whether robot connection is in asynchronous or synchronous mode.
+           Therefore, it is required to use the wait() method of the return object to catch the checkpoint event.
 
         Parameters
         ----------
