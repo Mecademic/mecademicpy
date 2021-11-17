@@ -1626,6 +1626,10 @@ class Robot:
                 if not isinstance(address, str):
                     raise TypeError(f'Invalid IP address ({address}).')
 
+                # Reset attributes which should not persist after disconnect.
+                if not offline_mode:
+                    self._reset_disconnect_attributes()
+
                 self.logger.info("Connecting to robot: " + address)
                 ipaddress.ip_address(address)
                 self._address = address
