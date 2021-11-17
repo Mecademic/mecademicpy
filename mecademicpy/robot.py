@@ -4441,23 +4441,32 @@ class Robot:
         # Clear all "enabled" bits in real-time data
         self._robot_rt_data._reset_enabled()
 
+        # Following RT data are always sent by the robot
+        self._robot_rt_data.rt_target_joint_pos.enabled = True
+        self._robot_rt_data.rt_target_cart_pos.enabled = True
+        if self._robot_info.version.is_at_least(9, 0):
+            self._robot_rt_data.rt_target_conf.enabled = True
+            self._robot_rt_data.rt_target_conf_turn.enabled = True
+            self._robot_rt_data.rt_wrf.enabled = True
+            self._robot_rt_data.rt_trf.enabled = True
+
         # Parse the response to identify which are "enabled"
         enabled_event_ids = self._parse_response_int(response)
         for event_id in enabled_event_ids:
-            #if event_id == mx_def.MX_ST_RT_TARGET_JOINT_POS: -> Always sent by robot
-            self._robot_rt_data.rt_target_joint_pos.enabled = True
-            #if event_id == mx_def.MX_ST_RT_TARGET_CART_POS: -> Always sent by robot
-            self._robot_rt_data.rt_target_cart_pos.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_JOINT_POS:
+                self._robot_rt_data.rt_target_joint_pos.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_CART_POS:
+                self._robot_rt_data.rt_target_cart_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
                 self._robot_rt_data.rt_target_joint_vel.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
                 self._robot_rt_data.rt_target_joint_torq.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CART_VEL:
                 self._robot_rt_data.rt_target_cart_vel.enabled = True
-            #if event_id == mx_def.MX_ST_RT_TARGET_CONF: -> Always sent by robot
-            self._robot_rt_data.rt_target_conf.enabled = True
-            #if event_id == mx_def.MX_ST_RT_TARGET_CONF_TURN: -> Always sent by robot
-            self._robot_rt_data.rt_target_conf_turn.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_CONF:
+                self._robot_rt_data.rt_target_conf.enabled = True
+            if event_id == mx_def.MX_ST_RT_TARGET_CONF_TURN:
+                self._robot_rt_data.rt_target_conf_turn.enabled = True
             if event_id == mx_def.MX_ST_RT_JOINT_POS:
                 self._robot_rt_data.rt_joint_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_CART_POS:
@@ -4472,10 +4481,10 @@ class Robot:
                 self._robot_rt_data.rt_conf.enabled = True
             if event_id == mx_def.MX_ST_RT_CONF_TURN:
                 self._robot_rt_data.rt_conf_turn.enabled = True
-            #if event_id == mx_def.MX_ST_RT_WRF: -> Always sent by robot
-            self._robot_rt_data.rt_wrf.enabled = True
-            #if event_id == mx_def.MX_ST_RT_TRF: -> Always sent by robot
-            self._robot_rt_data.rt_trf.enabled = True
+            if event_id == mx_def.MX_ST_RT_WRF:
+                self._robot_rt_data.rt_wrf.enabled = True
+            if event_id == mx_def.MX_ST_RT_TRF:
+                self._robot_rt_data.rt_trf.enabled = True
             if event_id == mx_def.MX_ST_RT_CHECKPOINT:
                 self._robot_rt_data.rt_checkpoint.enabled = True
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
