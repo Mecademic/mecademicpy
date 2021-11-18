@@ -4083,7 +4083,8 @@ class Robot:
 
         elif response.id == mx_def.MX_ST_EXTTOOL_SIM:
             if not str(response.data).isdigit():
-                self._handle_ext_tool_sim_status(True)  # Legacy response without the tool type argument
+                # Legacy response without the tool type argument
+                self._handle_ext_tool_sim_status(mx_def.MX_EXT_TOOL_MEGP25_SHORT)
             else:
                 self._handle_ext_tool_sim_status(int(response.data))
 
