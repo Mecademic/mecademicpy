@@ -1620,8 +1620,10 @@ class Robot:
                 if self.IsConnected():
                     try:
                         self._check_internal_states(refresh_monitoring_mode=True)
+                        return  # Still connected -> Do nothing
                     except Exception:
                         self.logger.info('Connection to robot was lost, attempting re-connection.')
+
                 # Check that the ip address is valid and set address.
                 if not isinstance(address, str):
                     raise TypeError(f'Invalid IP address ({address}).')
@@ -4029,11 +4031,9 @@ class Robot:
                 # Update joint and pose with legacy messages from current cycle plus the timestamps we just received
                 if self._tmp_rt_joint_pos:
                     self._robot_rt_data.rt_target_joint_pos.update_from_data(timestamp, self._tmp_rt_joint_pos)
-                    self._robot_rt_data.rt_target_joint_pos.enabled = True
                     self._tmp_rt_joint_pos = None
                 if self._tmp_rt_cart_pos:
                     self._robot_rt_data.rt_target_cart_pos.update_from_data(timestamp, self._tmp_rt_cart_pos)
-                    self._robot_rt_data.rt_target_cart_pos.enabled = True
                     self._tmp_rt_cart_pos = None
 
                 # If logging is active, log the current state.
@@ -4080,7 +4080,14 @@ class Robot:
             self._handle_valve_state_response(response)
 
         elif response.id == mx_def.MX_ST_EXTTOOL_SIM:
-            self._handle_ext_tool_sim_status(int(response.data))
+            if not str(response.data).isdigit():
+                # Legacy response without the tool type argument
+                self._handle_ext_tool_sim_status(mx_def.MX_EXT_TOOL_MEGP25_SHORT)
+            else:
+                self._handle_ext_tool_sim_status(int(response.data))
+
+        elif response.id == mx_def.MX_ST_EXTTOOL_SIM_OFF:
+            self._handle_ext_tool_sim_status(mx_def.MX_EXT_TOOL_NONE)  # Legacy response (used by 8.4.4 and older)
 
         elif response.id == mx_def.MX_ST_RECOVERY_MODE_ON:
             self._handle_recovery_mode_status(True)
@@ -4432,6 +4439,15 @@ class Robot:
 
         # Clear all "enabled" bits in real-time data
         self._robot_rt_data._reset_enabled()
+
+        # Following RT data are always sent by the robot
+        self._robot_rt_data.rt_target_joint_pos.enabled = True
+        self._robot_rt_data.rt_target_cart_pos.enabled = True
+        if self._robot_info.version.is_at_least(9, 0):
+            self._robot_rt_data.rt_target_conf.enabled = True
+            self._robot_rt_data.rt_target_conf_turn.enabled = True
+            self._robot_rt_data.rt_wrf.enabled = True
+            self._robot_rt_data.rt_trf.enabled = True
 
         # Parse the response to identify which are "enabled"
         enabled_event_ids = self._parse_response_int(response)
