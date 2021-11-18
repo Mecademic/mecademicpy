@@ -1620,15 +1620,13 @@ class Robot:
                 if self.IsConnected():
                     try:
                         self._check_internal_states(refresh_monitoring_mode=True)
+                        return  # Still connected -> Do nothing
                     except Exception:
                         self.logger.info('Connection to robot was lost, attempting re-connection.')
+
                 # Check that the ip address is valid and set address.
                 if not isinstance(address, str):
                     raise TypeError(f'Invalid IP address ({address}).')
-
-                # Reset attributes which should not persist after disconnect.
-                if not offline_mode:
-                    self._reset_disconnect_attributes()
 
                 self.logger.info("Connecting to robot: " + address)
                 ipaddress.ip_address(address)

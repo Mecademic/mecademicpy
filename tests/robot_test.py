@@ -308,6 +308,16 @@ def test_9_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().serial == 'm500-99999999'
 
 
+# Test that we can connect to a M500 robot running older version 8.4
+def test_already_connected(robot: mdr.Robot):
+    cur_dir = os.getcwd()
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
+
+    # Try connecting again, should do nothing
+    robot.Connect()
+    assert robot.IsConnected()
+
+
 # Ensure user can reconnect to robot after disconnection or failure to connect.
 def test_sequential_connections(robot: mdr.Robot):
 
