@@ -4087,7 +4087,7 @@ class Robot:
                 self._handle_ext_tool_sim_status(int(response.data))
 
         elif response.id == mx_def.MX_ST_EXTTOOL_SIM_OFF:
-            self._handle_ext_tool_sim_status(False)  # Legacy response (used by 8.4.4 and older)
+            self._handle_ext_tool_sim_status(mx_def.MX_EXT_TOOL_NONE)  # Legacy response (used by 8.4.4 and older)
 
         elif response.id == mx_def.MX_ST_RECOVERY_MODE_ON:
             self._handle_recovery_mode_status(True)
