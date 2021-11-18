@@ -142,7 +142,7 @@ robot.Connect(address='192.168.0.100', disconnect_on_exception=False)
 
 ### Checkpoints
 
-The checkpoint system allows for creating event objects which will be triggered once the robot reaches a specified point in its execution. The `SetCheckpoint(n)` call registers a checkpoint with the robot (with `n` as the ID), and returns an event-type object that can be used to wait for the checkpoint. For example, the following code will wait until both `MoveJoints()` motions have completed, and then print "`The MoveJoints() motions are complete.`":
+The checkpoint system allows for creating event objects which will be triggered once the robot reaches a specified point in its execution. The `SetCheckpoint(n)` call registers a checkpoint with the robot (with `n` as the ID), and returns an event-type object that can be used to wait for the checkpoint. This is true for both robot connection type (asynchronous and synchronous mode). For example, the following code will wait until both `MoveJoints()` motions have completed, and then print "`The MoveJoints() motions are complete.`":
 
 ```python
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
