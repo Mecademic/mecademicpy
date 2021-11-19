@@ -26,3 +26,9 @@ expected_connect_commands:
   - name: "GetRealTimeMonitoring"
     response_code: 2117
     response: ''
+  - name: "GetMonitoringInterval"
+    response_code: 2116
+    response: '0.017'
+  - name: "GetStatusRobot"
+    response_code: 2007
+    response: '0,0,0,0,1,1,1'

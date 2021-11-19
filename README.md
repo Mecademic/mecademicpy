@@ -41,7 +41,7 @@ robot = mdr.Robot()
 robot.Connect(address='192.168.0.100')
 ```
 
-The `Connect` function returns `True` if connection is successful.
+The `Connect` function will raise if connection with robot fails.
 This function is synchronous (awaits for success or timeout) even when using the `Robot` class in [asynchronous mode](#synchronous-vs.-asynchronous-mode). 
 
 Before using the robot, it must be activated and homed. To do so, run the following functions:
@@ -77,6 +77,8 @@ If the robot encounters an error during operation, the robot will go into an err
 ```python
 robot.ResetError()
 ```
+
+It is recommended to use `GetStatusRobot()` to learn about the current robot status before resuming operation.
 
 For complete and working examples, please refer to the `examples` folder.
 
@@ -140,7 +142,7 @@ robot.Connect(address='192.168.0.100', disconnect_on_exception=False)
 
 ### Checkpoints
 
-The checkpoint system allows for creating event objects which will be triggered once the robot reaches a specified point in its execution. The `SetCheckpoint(n)` call registers a checkpoint with the robot (with `n` as the ID), and returns an event-type object that can be used to wait for the checkpoint. For example, the following code will wait until both `MoveJoints()` motions have completed, and then print "`The MoveJoints() motions are complete.`":
+The checkpoint system allows for creating event objects which will be triggered once the robot reaches a specified point in its execution. The `SetCheckpoint(n)` call registers a checkpoint with the robot (with `n` as the ID), and returns an event-type object that can be used to wait for the checkpoint. This is true for both robot connection type (asynchronous and synchronous mode). For example, the following code will wait until both `MoveJoints()` motions have completed, and then print "`The MoveJoints() motions are complete.`":
 
 ```python
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
@@ -222,7 +224,7 @@ If the robot encounters an error during use, the robot will go into error mode. 
 robot.ResetError()
 ```
 
-It may also be necessary to call `ResumeMotion()`.
+It is recommended to use `GetStatusRobot()` to learn about the current robot status and reset the relevant flags to an appropriate state before resuming operation. For example, an error may require to call `ResumeMotion()`. In this case, verify that `GetStatusRobot().pause_motion_status` is set to `True` before calling `ResumeMotion()`.
 
 The `on_error` callback can also be used to manage robot errors.
 
@@ -234,7 +236,7 @@ The user should use python's built-in `try...except` blocks to handle appropriat
 
 ### Preserved State on Disconnection
 
-Once the robot is disconnected, not all state is immediately cleared. Therefore, it is possible to still get the last-known state of the robot. 
+Once the robot is disconnected, not all states are immediately cleared. Therefore, it is possible to still get the last-known state of the robot. 
 
 ### Logging Data to File
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 import queue
 import time
 
@@ -28,10 +29,13 @@ robot_rt_data_to_real_time_monit = {
     'rt_conf': (mx_def.MX_ST_RT_CONF, 'Conf'),
     'rt_conf_turn': (mx_def.MX_ST_RT_CONF_TURN, 'ConfTurn'),
     'rt_accelerometer': (mx_def.MX_ST_RT_ACCELEROMETER, 'Accel'),
-    'rt_gripper_torq': (mx_def.MX_ST_RT_GRIPPER_TORQ, 'GripperTorq'),  # Unused in RobotState right now
+    'rt_gripper_force': (mx_def.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),  # Unused in RobotState right now
     'rt_wrf': (mx_def.MX_ST_RT_WRF, 'Wrf'),
     'rt_trf': (mx_def.MX_ST_RT_TRF, 'Trf'),
     'rt_checkpoint': (mx_def.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
+    'rt_external_tool_status': (mx_def.MX_ST_RT_EXTTOOL_STATUS, 'ExtToolStatus'),
+    'rt_valve_state': (mx_def.MX_ST_RT_VALVE_STATE, 'ValveState'),
+    'rt_gripper_state': (mx_def.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
     '': (mx_def.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
 }
 
@@ -54,6 +58,8 @@ class _RobotTrajectoryLogger:
         Each timestamp will have this width
     done_logging: bool
         'write_fields' wont log more robot states when this is True. Set to True by 'end_log'
+    logging_commands: bool
+        Indicate if sent commands are being logged
     expanded_fields:
         Elements of 'fields', but expanded to have a name for each sub-element of corresponding robot states
     data_dict:
@@ -131,6 +137,7 @@ class _RobotTrajectoryLogger:
         self.element_width = 10
         self.timestamp_element_width = 15
         self.done_logging = False
+        self.logging_commands = True
         self.expanded_fields = []
         self.data_dict = dict()  # Key: timestamp, Value: List of all corresponding robot_rt_data values
         self.robot_trajectories = RobotTrajectories()
@@ -202,6 +209,12 @@ class _RobotTrajectoryLogger:
                 self.expanded_fields.extend(assemble_with_prefix(value, ['Shoulder', 'Elbow', 'Wrist']))
             elif key.endswith('checkpoint'):
                 self.expanded_fields.append(value)
+            elif key.endswith('rt_external_tool_status'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['model', 'present', 'homed', 'error']))
+            elif key.endswith('rt_valve_state'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'limits']))
+            elif key.endswith('rt_gripper_state'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['valve1', 'valve2']))
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
@@ -228,6 +241,10 @@ class _RobotTrajectoryLogger:
             if ts_data is None:
                 continue
             self.data_dict[formatted_tim].extend([f'{x:{self.element_width}}' for x in ts_data.data])
+
+    def stop_logging_commands(self):
+        """Stops saving sent commands to log"""
+        self.logging_commands = False
 
     def end_log(self, ignore_checkpoints=True):
         """ Write all accumulated sent commands and close file.
