@@ -7,6 +7,7 @@ import pathlib
 import re
 import socket
 import threading
+from typing import Union
 import queue
 from functools import partial
 import yaml
@@ -62,23 +63,27 @@ def connect_robot_helper(robot: mdr.Robot,
                          disconnect_on_exception=False,
                          enable_synchronous_mode=False):
 
-    file_path = pathlib.Path.cwd().joinpath("tests", "robot_config")
+    file_path = pathlib.Path.cwd().joinpath('tests', 'robot_config')
     yaml_file_full_path = pathlib.Path.joinpath(file_path, yaml_filename)
 
-    with open(yaml_file_full_path, "r") as file_stream:
+    with open(yaml_file_full_path, 'r') as file_stream:
         robot_config = yaml.safe_load(file_stream)
 
         # Set connection message
         rx_queue = robot._monitor_rx_queue if monitor_mode else robot._command_rx_queue
-        rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, robot_config["expected_connection_message"]))
+        rx_queue.put(mdr._Message(mx_def.MX_ST_CONNECTED, robot_config['expected_connection_message']))
 
         expected_commands = []
         robot_responses = []
-        if not monitor_mode and robot_config["expected_connect_commands"]:
+        if not monitor_mode and robot_config['expected_connect_commands']:
             # Set robot command responses
-            for transaction in robot_config["expected_connect_commands"]:
-                expected_commands.append(transaction["name"])
-                robot_responses.append(mdr._Message(transaction["response_code"], transaction["response"]))
+            for transaction in robot_config['expected_connect_commands']:
+                expected_commands.append(transaction['name'])
+                cmd_responses = []
+                cmd_responses.append(mdr._Message(transaction['response_code'], transaction['response']))
+                if 'extra_event' in transaction:
+                    cmd_responses.append(mdr._Message(transaction['extra_event'], transaction['extra_event_data']))
+                robot_responses.append(cmd_responses)
 
         # Start the fake robot thread (that will simulate response to expected requests)
         fake_robot = threading.Thread(target=simple_response_handler,
@@ -100,14 +105,16 @@ def connect_robot_helper(robot: mdr.Robot,
 
 # Function for exchanging one message with queue.
 def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expected_in: list[str],
-                            desired_out: list[mdr._Message]):
+                            desired_out: Union[list[list[mdr._Message]], list[mdr._Message]]):
     if isinstance(expected_in, list):
         for i in range(len(expected_in)):
-            if queue_in.empty():
-                queue_in = queue_in  # debugAlain
             event = queue_in.get(block=True, timeout=1)
             assert event == expected_in[i]
-            queue_out.put(desired_out[i])
+            if isinstance(desired_out[i], list):
+                for response in desired_out[i]:
+                    queue_out.put(response)
+            else:
+                queue_out.put(desired_out[i])
 
     else:
         event = queue_in.get(block=True, timeout=1)
@@ -118,7 +125,7 @@ def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expec
 # Server to listen for a connection. Send initial data in data_list on connect, send rest in response to any msg.
 def fake_server(address, port, data_list, server_up):
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_sock.settimeout(1)  # Allow up to 1 second to create the connection.
+    server_sock.settimeout(10)  # Allow up to 10 seconds to create the connection.
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_sock.bind((address, port))
     server_sock.listen()
@@ -189,7 +196,7 @@ def test_successful_connection_full_socket_legacy(robot: mdr.Robot):
 
     command_server_thread = run_fake_server(TEST_IP, mx_def.MX_ROBOT_TCP_PORT_CONTROL, [
         '[3000][Connected to Meca500 R3-virtual v8.3.10]\0', '[2083][m500-99999]\0',
-        '[2082][v8.3.10.9876-unit-test-fake]\0'
+        '[2082][v8.3.10.9876-unit-test-fake]\0', '[2007][0,0,0,0,1,1,1]\0'
     ])
     monitor_server_thread = run_fake_server(TEST_IP, mx_def.MX_ROBOT_TCP_PORT_FEED, [])
 
@@ -254,7 +261,7 @@ def test_7_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.patch == 6
     assert not robot.GetRobotInfo().rt_message_capable
     assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
-    assert robot.GetRobotInfo().serial == None
+    assert robot.GetRobotInfo().serial is None
 
 
 # Test that we can connect to a M500 robot running older version 8.3
@@ -299,6 +306,16 @@ def test_9_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().rt_message_capable
     assert robot.GetRobotInfo().rt_on_ctrl_port_capable
     assert robot.GetRobotInfo().serial == 'm500-99999999'
+
+
+# Test that we can connect to a M500 robot running older version 8.4
+def test_already_connected(robot: mdr.Robot):
+    cur_dir = os.getcwd()
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
+
+    # Try connecting again, should do nothing
+    robot.Connect()
+    assert robot.IsConnected()
 
 
 # Ensure user can reconnect to robot after disconnection or failure to connect.
@@ -797,6 +814,20 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
         robot.DeactivateSim()
 
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM, '1'))
+        robot.SetExtToolSim(mx_def.MX_EXT_TOOL_MEGP25_SHORT)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM, '0'))
+        robot.SetExtToolSim(mx_def.MX_EXT_TOOL_NONE)
+
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,0'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, '34,1,1'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, '35,1,1'))
+
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_ON, ''))
+        robot.SetRecoveryMode(True)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_OFF, ''))
+        robot.SetRecoveryMode(False)
+
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_OFFLINE_START, ''))
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '0,0,0,0,0,0,0'))
@@ -842,7 +873,10 @@ def test_event_with_exception():
 def test_motion_commands(robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    skip_list = ['MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel']
+    skip_list = [
+        'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
+        'SetTorqueLimitsCfg'
+    ]
 
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
@@ -905,9 +939,9 @@ def test_synchronous_gets(robot: mdr.Robot):
     connect_robot_helper(robot)
 
     # Test GetRtTargetJointPos.
-    expected_commands = ['Sync(1)', 'GetRtTargetJointPos']
+    expected_commands = ['SyncCmdQueue(1)', 'GetRtTargetJointPos']
     robot_responses = []
-    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC, '1'))
+    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC_CMD_QUEUE, '1'))
     robot_responses.append(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, '1234, 1, 2, 3, 4, 5, 6'))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
@@ -925,9 +959,9 @@ def test_synchronous_gets(robot: mdr.Robot):
     fake_robot.join()
 
     # Test GetRtTargetCartPos.
-    expected_commands = ['Sync(2)', 'GetRtTargetCartPos']
+    expected_commands = ['SyncCmdQueue(2)', 'GetRtTargetCartPos']
     robot_responses = []
-    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC, '2'))
+    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC_CMD_QUEUE, '2'))
     robot_responses.append(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, '2345, 2, 3, 4, 5, 6, 7'))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
@@ -1151,17 +1185,26 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
             robot._command_rx_queue.put(
                 mdr._Message(mx_def.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(seed=16000, length=3)))
 
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, fake_string(seed=20, length=5)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, fake_string(seed=21, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, fake_string(seed=22, length=3)))
+
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_WRF, fake_string(seed=17, length=7)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TRF, fake_string(seed=18, length=7)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CHECKPOINT, fake_string(seed=19, length=2)))
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CYCLE_END, str(i * 100)))
 
+        # Simulate response to last "SetRealTimeMonitoring" performed automatically at end of logging
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
+
         # Terminate queue and wait for thread to exit to ensure messages are processed.
         robot._command_rx_queue.put(mdr._TERMINATE)
-        robot._command_response_handler_thread.join(timeout=5)
-        # Restart the monitoring connection to ensure the API is in a good state.
-        robot._initialize_monitoring_connection()
+
+    robot._command_response_handler_thread.join(timeout=5)
+
+    # Restart the monitoring connection to ensure the API is in a good state.
+    robot._initialize_monitoring_connection()
 
     # Ensure one log file is created.
     directory = os.listdir(tmp_path)
