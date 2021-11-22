@@ -1,0 +1,44 @@
+{
+    "python.linting.enabled": true,
+    "cSpell.words": [
+        "ARDY",
+        "DEACT",
+        "INET",
+        "MONIT",
+        "MOVELINRELTRF",
+        "MOVELINRELWRF",
+        "MOVELINVELTRF",
+        "MOVELINVELWRF",
+        "PSTOP",
+        "RDWR",
+        "REUSEADDR",
+        "SCARA",
+        "SETDBG",
+        "SETTORQUELIMITSCFG",
+        "SETTRF",
+        "SETWRF",
+        "TORQ",
+        "Unregister",
+        "atexit",
+        "deque",
+        "f'Logging",
+        "filecmp",
+        "heapq",
+        "integ",
+        "ipaddress",
+        "ipython",
+        "mutex",
+        "pytest",
+        "qsize",
+        "traj"
+    ],
+    "python.linting.pycodestyleArgs": [
+        "--max-line-length=120"
+    ],
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.nosetestsEnabled": false,
+    "python.testing.pytestEnabled": true
+}
