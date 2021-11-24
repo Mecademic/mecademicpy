@@ -10,7 +10,22 @@ Copyright &copy; 2021 by Mecademic Inc.
 
 ---
 
-## Version 1.0.0
+## Version 1.1.0 (November 2021)
+
+**Features**
+- Update API to support new features from 8.4.4 robot firmware
+- Update API to support new features from 9.0 robot firmware
+
+**Fixes**
+- Rename udpate_robot to UpdateRobot for API name uniformity
+- Fix UpdateRobot to support 8.4.4 and up
+- Fix annotation issues for Python 3.7. Added annotations for return values
+- Prevent Disconnect() errors when already disconnected
+- Make sure initial status is received before completing connection
+- Add missing 'requests' module requirement
+- Fix issue when using Connect() command on an already connected robot
+
+## Version 1.0.0 (September 2021)
 
 **Features**
 - Compatible with robot firmware version 8.3 and up

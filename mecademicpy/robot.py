@@ -723,6 +723,8 @@ class RobotInfo:
         Number of joints on the robot.
     requires_homing : bool
         Tells if this robot requires homing
+    supports_ext_tool : bool
+        Tells if this robot supports connecting external tools (gripper, valve box...)
 """
 
     def __init__(self,
@@ -742,12 +744,15 @@ class RobotInfo:
         if self.model == 'Meca500':
             self.num_joints = 6
             self.requires_homing = True
+            self.supports_ext_tool = True
         elif self.model == 'Scara':
             self.num_joints = 4
             self.requires_homing = False
+            self.supports_ext_tool = False
         elif self.model is None:
             self.num_joints = 1
             self.requires_homing = False
+            self.supports_ext_tool = False
         else:
             raise ValueError(f'Invalid robot model: {self.model}')
 
@@ -824,12 +829,12 @@ class TimestampedData:
         if (len(numbs) - 1) != len(self.data):
             raise ValueError('Cannot update TimestampedData with incompatible data.')
 
-        if numbs[0] > self.timestamp:
+        if numbs[0] >= self.timestamp:
             self.timestamp = numbs[0]
             self.data = numbs[1:]
 
     def update_from_data(self, timestamp: int, data: list[float]):
-        """Update with data if timestamp is newer.
+        """Update with data unless timestamp is older
 
         Parameters
         ----------
@@ -839,7 +844,7 @@ class TimestampedData:
             Data to be stored if timestamp is newer.
 
         """
-        if timestamp > self.timestamp:
+        if timestamp >= self.timestamp:
             self.timestamp = timestamp
             self.data = data
 
@@ -1081,9 +1086,11 @@ class ExtToolStatus:
     Attributes
     ----------
     tool_type : int
-        External tool type "None", "MEGP25", "MPM500"
-    present : bool
-        True if the gripper is present on the robot.
+        External tool type. Available types:
+        0: mx_def.MX_EXT_TOOL_NONE
+        1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+        2: mx_def.MX_EXT_TOOL_MEGP25_LONG
+        3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
     homing_state : bool
         True if the robot is homed.
     error_status : bool
@@ -1096,7 +1103,6 @@ class ExtToolStatus:
 
         # The following are status fields.
         self.tool_type = 0
-        self.present = False
         self.homing_state = False
         self.error_status = False
         self.overload_error = False
@@ -1226,9 +1232,9 @@ class Robot:
         Values from legacy MX_ST_GET_POSE event received in current cycle
 
     _tx_sync : integer
-        Value sent in the most recent "Sync" request sent to robot
+        Value sent in the most recent "SyncCmdQueue" request sent to robot
     _rx_sync : integer
-        Most recent response to "Sync" (MX_ST_SYNC) received from the robot
+        Most recent response to "SyncCmdQueue" (MX_ST_SYNC_CMD_QUEUE) received from the robot
 """
     _UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
 
@@ -1621,6 +1627,13 @@ class Robot:
         """
         try:
             with self._main_lock:
+
+                if self.IsConnected():
+                    try:
+                        self._check_internal_states(refresh_monitoring_mode=True)
+                        return  # Still connected -> Do nothing
+                    except Exception:
+                        self.logger.info('Connection to robot was lost, attempting re-connection.')
 
                 # Check that the ip address is valid and set address.
                 if not isinstance(address, str):
@@ -2273,6 +2286,8 @@ class Robot:
     @disconnect_on_exception
     def SetCheckpoint(self, n: int) -> InterruptableEvent:
         """Set checkpoint with desired id.
+           This method is non-blocking whether robot connection is in asynchronous or synchronous mode.
+           Therefore, it is required to use the wait() method of the return object to catch the checkpoint event.
 
         Parameters
         ----------
@@ -2632,7 +2647,7 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def SendCustomCommand(self, command: str, expected_responses: bool = None) -> InterruptableEvent:
+    def SendCustomCommand(self, command: str, expected_responses: list[int] = None) -> InterruptableEvent:
         """Send custom command to robot.
 
         Parameters
@@ -2683,7 +2698,7 @@ class Robot:
     def GetRtExtToolStatus(self,
                            include_timestamp: bool = False,
                            synchronous_update: bool = False,
-                           timeout: float = None):
+                           timeout: float = None) -> ExtToolStatus:
         """Return a copy of the current external tool status
 
         Parameters
@@ -2714,7 +2729,7 @@ class Robot:
     def GetRtGripperState(self,
                           include_timestamp: bool = False,
                           synchronous_update: bool = False,
-                          timeout: float = None):
+                          timeout: float = None) -> GripperState:
         """Return a copy of the current gripper state
 
         Parameters
@@ -2742,7 +2757,10 @@ class Robot:
                 return copy.deepcopy(self._gripper_state)
 
     @disconnect_on_exception
-    def GetRtValveState(self, include_timestamp: bool = False, synchronous_update: bool = False, timeout: float = None):
+    def GetRtValveState(self,
+                        include_timestamp: bool = False,
+                        synchronous_update: bool = False,
+                        timeout: float = None) -> ValveState:
         """Return a copy of the current valve state
 
         Parameters
@@ -3488,15 +3506,20 @@ class Robot:
             self._command_socket.sendall(b'DeactivateRobot\0')
             raise InvalidStateError('No command tx thread, are you in monitor mode?')
 
-    def _check_internal_states(self):
+    def _check_internal_states(self, refresh_monitoring_mode=False):
         """Check that the threads which handle robot messages are alive.
 
         Attempt to disconnect from the robot if not.
 
+        Parameters
+        ----------
+        refresh_monitoring_mode : boolean
+            Refresh internal states even in monitoring mode when True, raise an exception otherwise.
         """
         try:
             if self._monitor_mode:
-                raise InvalidStateError('Cannot send command while in monitoring mode.')
+                if not refresh_monitoring_mode:
+                    raise InvalidStateError('Cannot send command while in monitoring mode.')
             else:
                 self._check_command_threads()
 
@@ -3552,9 +3575,9 @@ class Robot:
         with self._main_lock:
             self._check_internal_states()
             if self._robot_info.rt_on_ctrl_port_capable:
-                # Send a "sync" request so we know when we get the response to this get (and not an earlier one)
+                # Send a "SyncCmdQueue" request so we know when we get the response to this get (and not an earlier one)
                 self._tx_sync += 1
-                self._send_command(f'Sync({self._tx_sync})')
+                self._send_command(f'SyncCmdQueue({self._tx_sync})')
             if event.is_set():
                 event.clear()
                 self._send_command(command)
@@ -4021,11 +4044,9 @@ class Robot:
                 # Update joint and pose with legacy messages from current cycle plus the timestamps we just received
                 if self._tmp_rt_joint_pos:
                     self._robot_rt_data.rt_target_joint_pos.update_from_data(timestamp, self._tmp_rt_joint_pos)
-                    self._robot_rt_data.rt_target_joint_pos.enabled = True
                     self._tmp_rt_joint_pos = None
                 if self._tmp_rt_cart_pos:
                     self._robot_rt_data.rt_target_cart_pos.update_from_data(timestamp, self._tmp_rt_cart_pos)
-                    self._robot_rt_data.rt_target_cart_pos.enabled = True
                     self._tmp_rt_cart_pos = None
 
                 # If logging is active, log the current state.
@@ -4080,11 +4101,15 @@ class Robot:
         elif response.id == mx_def.MX_ST_RT_GRIPPER_VEL:
             self._robot_rt_data.rt_gripper_vel.update_from_csv(response.data)
 
-        elif response.id == mx_def.MX_ST_EXTTOOL_SIM_ON:
-            self._handle_ext_tool_sim_status(True)
+        elif response.id == mx_def.MX_ST_EXTTOOL_SIM:
+            if not str(response.data).isdigit():
+                # Legacy response without the tool type argument
+                self._handle_ext_tool_sim_status(mx_def.MX_EXT_TOOL_MEGP25_SHORT)
+            else:
+                self._handle_ext_tool_sim_status(int(response.data))
 
         elif response.id == mx_def.MX_ST_EXTTOOL_SIM_OFF:
-            self._handle_ext_tool_sim_status(False)
+            self._handle_ext_tool_sim_status(mx_def.MX_EXT_TOOL_NONE)  # Legacy response (used by 8.4.4 and older)
 
         elif response.id == mx_def.MX_ST_RECOVERY_MODE_ON:
             self._handle_recovery_mode_status(True)
@@ -4158,7 +4183,7 @@ class Robot:
         elif response.id == mx_def.MX_ST_GET_REAL_TIME_MONITORING:
             self._handle_get_realtime_monitoring_response(response)
 
-        elif response.id == mx_def.MX_ST_SYNC:
+        elif response.id == mx_def.MX_ST_SYNC_CMD_QUEUE:
             self._handle_sync_response(response)
 
     def _parse_response_bool(self, response: _Message) -> list[bool]:
@@ -4224,6 +4249,9 @@ class Robot:
                 self._robot_events.on_deactivate_sim.set()
                 self._callback_queue.put('on_deactivate_sim')
             self._robot_status.simulation_mode = status_flags[2]
+            if self._robot_events.on_activate_ext_tool_sim.is_set() != self._robot_status.simulation_mode:
+                # Sim mode was just disabled -> Also means external tool sim has been disabled
+                self._handle_ext_tool_sim_status(self._external_tool_status.tool_type)
 
         if not self._first_robot_status_received or self._robot_status.error_status != status_flags[3]:
             if status_flags[3]:
@@ -4287,19 +4315,20 @@ class Robot:
             self._robot_events.on_status_gripper_updated.set()
             self._callback_queue.put('on_status_gripper_updated')
 
-    def _handle_ext_tool_sim_status(self, enabled: bool):
+    def _handle_ext_tool_sim_status(self, tool_type: int):
         """Handle gripper sim mode status change event.
 
         Parameters
         ----------
-        enabled : bool
-            Gripper simulation mode enabled or not.
+        tool_type : int
+            New simulated external tool type. `mx_def.MX_EXT_TOOL_NONE` when simulation is off.
 
         """
-        if enabled:
+        if tool_type != mx_def.MX_EXT_TOOL_NONE:
             self._robot_events.on_deactivate_ext_tool_sim.clear()
             self._robot_events.on_activate_ext_tool_sim.set()
             self._callback_queue.put('on_activate_ext_tool_sim')
+
         else:
             self._robot_events.on_activate_ext_tool_sim.clear()
             self._robot_events.on_deactivate_ext_tool_sim.set()
@@ -4337,9 +4366,9 @@ class Robot:
         status_flags = self._robot_rt_data.rt_external_tool_status.data
 
         self._external_tool_status.tool_type = status_flags[0]
-        self._external_tool_status.present = status_flags[1]
-        self._external_tool_status.homing_state = status_flags[2]
-        self._external_tool_status.error_status = status_flags[3]
+        self._external_tool_status.homing_state = status_flags[1]
+        self._external_tool_status.error_status = status_flags[2]
+        self._external_tool_status.overload_error = status_flags[3]
 
         if self._is_in_sync():
             self._robot_events.on_external_tool_status_updated.set()
@@ -4433,6 +4462,15 @@ class Robot:
         # Clear all "enabled" bits in real-time data
         self._robot_rt_data._reset_enabled()
 
+        # Following RT data are always sent by the robot
+        self._robot_rt_data.rt_target_joint_pos.enabled = True
+        self._robot_rt_data.rt_target_cart_pos.enabled = True
+        if self._robot_info.version.is_at_least(9, 0):
+            self._robot_rt_data.rt_target_conf.enabled = True
+            self._robot_rt_data.rt_target_conf_turn.enabled = True
+            self._robot_rt_data.rt_wrf.enabled = True
+            self._robot_rt_data.rt_trf.enabled = True
+
         # Parse the response to identify which are "enabled"
         enabled_event_ids = self._parse_response_int(response)
         for event_id in enabled_event_ids:
@@ -4488,8 +4526,8 @@ class Robot:
         self._robot_rt_data._clear_if_disabled()
 
     def _handle_sync_response(self, response: _Message):
-        """Parse robot response to "Sync" request
-           This class uses the "Sync" request/response to ensure synchronous "Get" operations have received the
+        """Parse robot response to "SyncCmdQueue" request
+           This class uses the "SyncCmdQueue" request/response to ensure synchronous "Get" operations have received the
            expected response from the robot (and not a response/event sent by the robot prior to our "Get" request).
 
         Parameters
@@ -4498,13 +4536,13 @@ class Robot:
             Sync response to parse and handle.
 
         """
-        assert response.id == mx_def.MX_ST_SYNC
+        assert response.id == mx_def.MX_ST_SYNC_CMD_QUEUE
 
         self._rx_sync = _string_to_numbers(response.data)[0]
 
     def _is_in_sync(self) -> bool:
         """Tells if we're in sync with the latest "get" operation (i.e. we've received the response to the most recent
-           "Sync" request to the robot, meaning that the "get" response we just got is up-to-date)
+           "SyncCmdQueue" request to the robot, meaning that the "get" response we just got is up-to-date)
 
         Returns
         -------

@@ -308,6 +308,16 @@ def test_9_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().serial == 'm500-99999999'
 
 
+# Test that we can connect to a M500 robot running older version 8.4
+def test_already_connected(robot: mdr.Robot):
+    cur_dir = os.getcwd()
+    connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
+
+    # Try connecting again, should do nothing
+    robot.Connect()
+    assert robot.IsConnected()
+
+
 # Ensure user can reconnect to robot after disconnection or failure to connect.
 def test_sequential_connections(robot: mdr.Robot):
 
@@ -804,10 +814,10 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,0,0'))
         robot.DeactivateSim()
 
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM_ON, ''))
-        robot.SetExtToolSim(True)
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM_OFF, ''))
-        robot.SetExtToolSim(False)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM, '1'))
+        robot.SetExtToolSim(mx_def.MX_EXT_TOOL_MEGP25_SHORT)
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM, '0'))
+        robot.SetExtToolSim(mx_def.MX_EXT_TOOL_NONE)
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,0'))
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, '34,1,1'))
@@ -929,9 +939,9 @@ def test_synchronous_gets(robot: mdr.Robot):
     connect_robot_helper(robot)
 
     # Test GetRtTargetJointPos.
-    expected_commands = ['Sync(1)', 'GetRtTargetJointPos']
+    expected_commands = ['SyncCmdQueue(1)', 'GetRtTargetJointPos']
     robot_responses = []
-    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC, '1'))
+    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC_CMD_QUEUE, '1'))
     robot_responses.append(mdr._Message(mx_def.MX_ST_RT_TARGET_JOINT_POS, '1234, 1, 2, 3, 4, 5, 6'))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
@@ -949,9 +959,9 @@ def test_synchronous_gets(robot: mdr.Robot):
     fake_robot.join()
 
     # Test GetRtTargetCartPos.
-    expected_commands = ['Sync(2)', 'GetRtTargetCartPos']
+    expected_commands = ['SyncCmdQueue(2)', 'GetRtTargetCartPos']
     robot_responses = []
-    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC, '2'))
+    robot_responses.append(mdr._Message(mx_def.MX_ST_SYNC_CMD_QUEUE, '2'))
     robot_responses.append(mdr._Message(mx_def.MX_ST_RT_TARGET_CART_POS, '2345, 2, 3, 4, 5, 6, 7'))
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
