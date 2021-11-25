@@ -282,6 +282,13 @@ class InterruptableEvent:
         self._interrupted = False
         self._interrupted_msg = ""
 
+    def check_interrupted(self):
+        if self._interrupted:
+            if self._interrupted_msg != "":
+                raise InterruptException('Event received exception because ' + self._interrupted_msg)
+            else:
+                raise InterruptException('Event received exception, possibly because event will never be triggered.')
+
     def wait(self, timeout: float = None) -> _Message:
         """Block until event is set or should raise an exception (InterruptException or TimeoutException).
 
@@ -296,13 +303,10 @@ class InterruptableEvent:
             Return the data object (or None for events not returning any data)
 
         """
+        self.check_interrupted()
         wait_result = self._event.wait(timeout=timeout)
-        if self._interrupted:
-            if self._interrupted_msg != "":
-                raise InterruptException('Event received exception because ' + self._interrupted_msg)
-            else:
-                raise InterruptException('Event received exception, possibly because event will never be triggered.')
-        elif not wait_result:
+        self.check_interrupted()
+        if not wait_result:
             raise TimeoutException()
         return self._data
 
@@ -322,7 +326,8 @@ class InterruptableEvent:
             if not self._event.is_set():
                 self._interrupted_msg = message
                 self._interrupted = True
-                self._event.set()
+                self._event.set()  # Awake all threads
+                self._event.clear()  # Restore previous state (important to keep state even if interrupted)
 
     def clear(self):
         """Reset the event to its initial state.
@@ -354,7 +359,6 @@ class InterruptableEvent:
         with self._lock:
             if self._interrupted:
                 self._interrupted = False
-                self._event.clear()
 
     @property
     def id(self) -> int:
@@ -4424,7 +4428,8 @@ class Robot:
             if not self._internal_checkpoints[checkpoint_id]:
                 self._internal_checkpoints.pop(checkpoint_id)
         else:
-            self.logger.warning('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
+            self.logger.warning(
+                'Received un-tracked checkpoint {checkpoint_id}. Please use ExpectExternalCheckpoint() to track.')
 
     def _handle_get_realtime_monitoring_response(self, response: _Message):
         """Parse robot response to "get" or "set" real-time monitoring.
