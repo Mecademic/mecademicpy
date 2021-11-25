@@ -4428,7 +4428,8 @@ class Robot:
             if not self._internal_checkpoints[checkpoint_id]:
                 self._internal_checkpoints.pop(checkpoint_id)
         else:
-            self.logger.warning('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
+            self.logger.warning(
+                'Received un-tracked checkpoint {checkpoint_id}. Please use ExpectExternalCheckpoint() to track.')
 
     def _handle_get_realtime_monitoring_response(self, response: _Message):
         """Parse robot response to "get" or "set" real-time monitoring.
