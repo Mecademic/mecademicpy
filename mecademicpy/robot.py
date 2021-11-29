@@ -984,7 +984,7 @@ class RobotRtData:
         self.rt_valve_state = TimestampedData.zeros(
             mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
         self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, limit reached
-        self.rt_gripper_torq = TimestampedData.zeros(1)  # microseconds timestamp, gripper torque
+        self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position
         self.rt_gripper_vel = TimestampedData.zeros(1)  # microseconds timestamp, gripper velocity
 
@@ -4096,8 +4096,8 @@ class Robot:
         elif response.id == mx_def.MX_ST_RT_GRIPPER_STATE:
             self._handle_gripper_state_response(response)
 
-        elif response.id == mx_def.MX_ST_RT_GRIPPER_TORQ:
-            self._robot_rt_data.rt_gripper_torq.update_from_csv(response.data)
+        elif response.id == mx_def.MX_ST_RT_GRIPPER_FORCE:
+            self._robot_rt_data.rt_gripper_force.update_from_csv(response.data)
 
         elif response.id == mx_def.MX_ST_RT_GRIPPER_POS:
             self._robot_rt_data.rt_gripper_pos.update_from_csv(response.data)
@@ -4520,8 +4520,8 @@ class Robot:
                 self._robot_rt_data.rt_external_tool_status.enabled = True
             if event_id == mx_def.MX_ST_RT_VALVE_STATE:
                 self._robot_rt_data.rt_valve_state.enabled = True
-            if event_id == mx_def.MX_ST_RT_GRIPPER_TORQ:
-                self._robot_rt_data.rt_gripper_torq.enabled = True
+            if event_id == mx_def.MX_ST_RT_GRIPPER_FORCE:
+                self._robot_rt_data.rt_gripper_force.enabled = True
             if event_id == mx_def.MX_ST_RT_GRIPPER_POS:
                 self._robot_rt_data.rt_gripper_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_GRIPPER_VEL:
