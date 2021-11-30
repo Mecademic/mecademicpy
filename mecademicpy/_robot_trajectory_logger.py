@@ -36,7 +36,7 @@ robot_rt_data_to_real_time_monit = {
     'rt_external_tool_status': (mx_def.MX_ST_RT_EXTTOOL_STATUS, 'ExtToolStatus'),
     'rt_valve_state': (mx_def.MX_ST_RT_VALVE_STATE, 'ValveState'),
     'rt_gripper_state': (mx_def.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
-    'rt_gripper_torq': (mx_def.MX_ST_RT_GRIPPER_TORQ, 'GripperTorq'),
+    'rt_gripper_force': (mx_def.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),
     'rt_gripper_pos': (mx_def.MX_ST_RT_GRIPPER_POS, 'GripperPos'),
     'rt_gripper_vel': (mx_def.MX_ST_RT_GRIPPER_VEL, 'GripperVel'),
     '': (mx_def.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
