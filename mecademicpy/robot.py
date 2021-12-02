@@ -1614,6 +1614,7 @@ class Robot:
                 offline_mode: bool = False,
                 timeout=0.1):
         """Attempt to connect to a physical Mecademic Robot.
+           This function is synchronous (awaits for success or timeout) even when connecting in asynchronous mode.
 
         Parameters
         ----------
@@ -1741,6 +1742,7 @@ class Robot:
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
+           This function is synchronous (awaits for disconnection or timeout) even when connected in asynchronous mode.
 
         """
         if self.IsConnected():
@@ -2349,7 +2351,9 @@ class Robot:
 
     @disconnect_on_exception
     def WaitConnected(self, timeout: float = None):
-        """Pause program execution until robot is disconnected.
+        """Pause program execution until robot is connected.
+           Since the Connect() command is always blocking, this command is only useful if a separate thread wants to
+           wait for the connection to be established.
 
         Parameters
         ----------
@@ -2364,7 +2368,8 @@ class Robot:
     @disconnect_on_exception
     def WaitDisconnected(self, timeout: float = None):
         """Pause program execution until the robot is disconnected.
-
+           Since the Disconnect() command is always blocking, this command is only useful if a separate thread wants to
+           wait for the disconnection.
         Parameters
         ----------
         timeout : float, by default 10
