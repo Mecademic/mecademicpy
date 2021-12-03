@@ -15,6 +15,7 @@ import requests
 import socket
 import threading
 import time
+from typing import Union
 
 import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.tools as tools
@@ -2180,21 +2181,32 @@ class Robot:
             checkpoint.wait()
 
     @disconnect_on_exception
-    def MoveGripper(self, state: bool = GRIPPER_OPEN):
-        """Open or close the gripper.
+    def MoveGripper(self, target: Union[bool, float]):
+        """Move the gripper to a target position.
+           If the target specified is a boolean, it indicates if the target position is the opened (True) or
+           closed (False) position.
+           Otherwhise the target position indicates the opening of the gripper, in mm from the most closed position.
 
-        Corresponds to text API calls "_GripperOpen" / "GripperClose".
+        Corresponds to text API calls "GripperOpen" / "GripperClose" / "MoveGripper".
+
 
         Parameters
         ----------
-        state : boolean
-            Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+        target : boolean or float
+            boolean type: Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+            float type: The gripper's target position, in mm from the most closed position.
 
         """
-        if state:
-            self.GripperOpen()
+        if isinstance(target, bool):
+            if target:
+                self.GripperOpen()
+            else:
+                self.GripperClose()
         else:
-            self.GripperClose()
+            self._send_motion_command('MoveGripper', [target])
+            if self._enable_synchronous_mode:
+                checkpoint = self._set_checkpoint_internal()
+                checkpoint.wait()
 
     @disconnect_on_exception
     def SetGripperForce(self, p: float):
@@ -2980,7 +2992,7 @@ class Robot:
 
     @disconnect_on_exception
     def SetExtToolSim(self, sim_ext_tool_type: int = mx_def.MX_EXT_TOOL_MEGP25_SHORT):
-        """Simulate an external tool, allowing GripperOpen/Close and SetValveState commands
+        """Simulate an external tool, allowing GripperOpen/Close, MoveGripper and SetValveState commands
             on a robot without an external tool present.
 
         Parameters
