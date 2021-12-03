@@ -2233,6 +2233,26 @@ class Robot:
         self._send_motion_command('SetGripperVel', [p])
 
     @disconnect_on_exception
+    def SetGripperRange(self, closePos: float, openPos):
+        """Set the gripper's range that will be used when calling GripperClose and GripperOpen.
+           This function is useful for example to set a smaller (and thus quicker) movement range when it is not
+           required to fully open the gripper to release objects. This is especially apparent on long-stroke grippers.
+
+           Setting both values to 0 will reset the range to the maximum range found during homing.
+
+        Parameters
+        ----------
+        closePos : float
+            The position relative to the completely closed position that the gripper will move to when calling
+            GripperClose. In mm.
+        openPos : float
+            The position relative to the completely closed position that the gripper will move to when calling
+            GripperOpen. In mm.
+
+        """
+        self._send_motion_command('SetGripperRange', [closePos, openPos])
+
+    @disconnect_on_exception
     def SetValveState(self, *args: list[int]):
         """Set the pneumatic module valve states.
 
