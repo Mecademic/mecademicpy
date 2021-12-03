@@ -2165,9 +2165,6 @@ class Robot:
         """
 
         self._send_motion_command('GripperOpen')
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
 
     @disconnect_on_exception
     def GripperClose(self):
@@ -2176,9 +2173,6 @@ class Robot:
         """
 
         self._send_motion_command('GripperClose')
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
 
     @disconnect_on_exception
     def MoveGripper(self, target: Union[bool, float]):
@@ -2204,9 +2198,6 @@ class Robot:
                 self.GripperClose()
         else:
             self._send_motion_command('MoveGripper', [target])
-            if self._enable_synchronous_mode:
-                checkpoint = self._set_checkpoint_internal()
-                checkpoint.wait()
 
     @disconnect_on_exception
     def SetGripperForce(self, p: float):
@@ -2265,9 +2256,6 @@ class Robot:
         """
 
         self._send_motion_command('SetValveState', args)
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
 
     @disconnect_on_exception
     def SetJointAcc(self, p: float):
