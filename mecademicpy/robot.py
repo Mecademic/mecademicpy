@@ -2177,8 +2177,8 @@ class Robot:
     @disconnect_on_exception
     def MoveGripper(self, target: Union[bool, float]):
         """Move the gripper to a target position.
-           If the target specified is a boolean, it indicates if the target position is the opened (True) or
-           closed (False) position.
+           If the target specified is a boolean, it indicates if the target position is the opened (True, GRIPPER_OPEN) or
+           closed (False, GRIPPER_CLOSE) position.
            Otherwhise the target position indicates the opening of the gripper, in mm from the most closed position.
 
         Corresponds to text API calls "GripperOpen" / "GripperClose" / "MoveGripper".
