@@ -15,6 +15,7 @@ import requests
 import socket
 import threading
 import time
+from typing import Union
 
 import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.tools as tools
@@ -1611,6 +1612,7 @@ class Robot:
                 offline_mode: bool = False,
                 timeout=0.1):
         """Attempt to connect to a physical Mecademic Robot.
+           This function is synchronous (awaits for success or timeout) even when connecting in asynchronous mode.
 
         Parameters
         ----------
@@ -1738,6 +1740,7 @@ class Robot:
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the physical Mecademic robot.
+           This function is synchronous (awaits for disconnection or timeout) even when connected in asynchronous mode.
 
         """
         if self.IsConnected():
@@ -2159,9 +2162,6 @@ class Robot:
         """
 
         self._send_motion_command('GripperOpen')
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
 
     @disconnect_on_exception
     def GripperClose(self):
@@ -2170,26 +2170,31 @@ class Robot:
         """
 
         self._send_motion_command('GripperClose')
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
 
     @disconnect_on_exception
-    def MoveGripper(self, state: bool = GRIPPER_OPEN):
-        """Open or close the gripper.
+    def MoveGripper(self, target: Union[bool, float]):
+        """Move the gripper to a target position.
+           If the target specified is a boolean, it indicates if the target position is the opened (True, GRIPPER_OPEN) or
+           closed (False, GRIPPER_CLOSE) position.
+           Otherwhise the target position indicates the opening of the gripper, in mm from the most closed position.
 
-        Corresponds to text API calls "_GripperOpen" / "GripperClose".
+        Corresponds to text API calls "GripperOpen" / "GripperClose" / "MoveGripper".
+
 
         Parameters
         ----------
-        state : boolean
-            Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+        target : boolean or float
+            boolean type: Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+            float type: The gripper's target position, in mm from the most closed position.
 
         """
-        if state:
-            self.GripperOpen()
+        if isinstance(target, bool):
+            if target:
+                self.GripperOpen()
+            else:
+                self.GripperClose()
         else:
-            self.GripperClose()
+            self._send_motion_command('MoveGripper', [target])
 
     @disconnect_on_exception
     def SetGripperForce(self, p: float):
@@ -2216,6 +2221,26 @@ class Robot:
         self._send_motion_command('SetGripperVel', [p])
 
     @disconnect_on_exception
+    def SetGripperRange(self, closePos: float, openPos):
+        """Set the gripper's range that will be used when calling GripperClose and GripperOpen.
+           This function is useful for example to set a smaller (and thus quicker) movement range when it is not
+           required to fully open the gripper to release objects. This is especially apparent on long-stroke grippers.
+
+           Setting both values to 0 will reset the range to the maximum range found during homing.
+
+        Parameters
+        ----------
+        closePos : float
+            The position relative to the completely closed position that the gripper will move to when calling
+            GripperClose. In mm.
+        openPos : float
+            The position relative to the completely closed position that the gripper will move to when calling
+            GripperOpen. In mm.
+
+        """
+        self._send_motion_command('SetGripperRange', [closePos, openPos])
+
+    @disconnect_on_exception
     def SetValveState(self, *args: list[int]):
         """Set the pneumatic module valve states.
 
@@ -2228,9 +2253,6 @@ class Robot:
         """
 
         self._send_motion_command('SetValveState', args)
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
 
     @disconnect_on_exception
     def SetJointAcc(self, p: float):
@@ -2346,7 +2368,9 @@ class Robot:
 
     @disconnect_on_exception
     def WaitConnected(self, timeout: float = None):
-        """Pause program execution until robot is disconnected.
+        """Pause program execution until robot is connected.
+           Since the Connect() command is always blocking, this command is only useful if a separate thread wants to
+           wait for the connection to be established.
 
         Parameters
         ----------
@@ -2361,7 +2385,8 @@ class Robot:
     @disconnect_on_exception
     def WaitDisconnected(self, timeout: float = None):
         """Pause program execution until the robot is disconnected.
-
+           Since the Disconnect() command is always blocking, this command is only useful if a separate thread wants to
+           wait for the disconnection.
         Parameters
         ----------
         timeout : float, by default 10
@@ -2972,7 +2997,7 @@ class Robot:
 
     @disconnect_on_exception
     def SetExtToolSim(self, sim_ext_tool_type: int = mx_def.MX_EXT_TOOL_MEGP25_SHORT):
-        """Simulate an external tool, allowing GripperOpen/Close and SetValveState commands
+        """Simulate an external tool, allowing GripperOpen/Close, MoveGripper and SetValveState commands
             on a robot without an external tool present.
 
         Parameters
