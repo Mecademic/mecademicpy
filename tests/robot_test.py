@@ -1157,16 +1157,7 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
     robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_GET_REAL_TIME_MONITORING, ''))
 
     # Start logging with context manager version of logger. record_time is False to for comparison with reference file.
-    # todo lx test with default fields argument (empty list)
-    with robot.FileLogger(0.001,
-                          file_path=tmp_path,
-                          fields=[
-                              'TargetJointPos', 'TargetCartPos', 'TargetJointVel', 'TargetJointTorq', 'TargetCartVel',
-                              'TargetConf', 'TargetConfTurn', 'JointPos', 'CartPos', 'JointVel', 'JointTorq', 'CartVel',
-                              'Conf', 'ConfTurn', 'Accel', 'ExtToolStatus', 'ValveState', 'GripperState',
-                              'GripperForce', 'GripperPos', 'Wrf', 'Trf', 'Checkpoint'
-                          ],
-                          record_time=False):
+    with robot.FileLogger(0.001, file_path=tmp_path, record_time=False):
         robot.MoveJoints(0, -60, 60, 0, 0, 0)
         robot.MoveJoints(0, 0, 0, 0, 0, 0)
         for i in range(1, 4):

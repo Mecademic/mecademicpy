@@ -220,7 +220,7 @@ class _RobotTrajectoryLogger:
             elif key.endswith('rt_gripper_force'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
             elif key.endswith('rt_gripper_pos'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['mm']))
+                self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
