@@ -36,6 +36,8 @@ robot_rt_data_to_real_time_monit = {
     'rt_external_tool_status': (mx_def.MX_ST_RT_EXTTOOL_STATUS, 'ExtToolStatus'),
     'rt_valve_state': (mx_def.MX_ST_RT_VALVE_STATE, 'ValveState'),
     'rt_gripper_state': (mx_def.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
+    'rt_gripper_force': (mx_def.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),
+    'rt_gripper_pos': (mx_def.MX_ST_RT_GRIPPER_POS, 'GripperPos'),
     '': (mx_def.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
 }
 
@@ -212,9 +214,13 @@ class _RobotTrajectoryLogger:
             elif key.endswith('rt_external_tool_status'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['model', 'present', 'homed', 'error']))
             elif key.endswith('rt_valve_state'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'limits']))
-            elif key.endswith('rt_gripper_state'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['valve1', 'valve2']))
+            elif key.endswith('rt_gripper_state'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'limits']))
+            elif key.endswith('rt_gripper_force'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
+            elif key.endswith('rt_gripper_pos'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
