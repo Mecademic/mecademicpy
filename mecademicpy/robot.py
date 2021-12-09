@@ -948,11 +948,11 @@ class RobotRtData:
     rt_valve_state : TimestampedData
         Valve state [valve_opened[0], valve_opened[1]].
     rt_gripper_state : TimestampedData
-        Gripper state [holding_part, limit_reached].
+        Gripper state [holding_part, target_pos_reached].
     rt_gripper_torq : TimestampedData
-        Gripper torque in %.
+        Gripper torque in % of maximum torque.
     rt_gripper_pos : TimestampedData
-        Gripper position in %.
+        Gripper position in mm.
 
 
 """
@@ -982,7 +982,7 @@ class RobotRtData:
             4)  # microseconds timestamp, tool type, activated, homed, error
         self.rt_valve_state = TimestampedData.zeros(
             mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
-        self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, limit reached
+        self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, target pos reached
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
 
@@ -1063,8 +1063,8 @@ class GripperStatus:
         True if the gripper has been homed (ready to be used).
     holding_part : bool
         True if the gripper is currently holding a part.
-    limit_reached : bool
-        True if the gripper is at a limit (fully opened or closed).
+    target_pos_reached : bool
+        True if the gripper is at target position or at a limit (fully opened or closed).
     error_status : bool
         True if the gripper is in error state
     overload_error : bool
@@ -1077,7 +1077,7 @@ class GripperStatus:
         self.present = False
         self.homing_state = False
         self.holding_part = False
-        self.limit_reached = False
+        self.target_pos_reached = False
         self.error_status = False
         self.overload_error = False
 
@@ -1132,15 +1132,15 @@ class GripperState:
     ----------
     holding_part : bool
         True if the gripper is currently holding a part.
-    limit_reached : bool
-        True if the gripper is at a limit (fully opened or closed).
+    target_pos_reached : bool
+        True if the gripper is at target position or is at a limit (fully opened or closed).
 """
 
     def __init__(self):
 
         # The following are status fields.
         self.holding_part = False
-        self.limit_reached = False
+        self.target_pos_reached = False
 
 
 class Robot:
@@ -4330,7 +4330,7 @@ class Robot:
         self._gripper_status.present = status_flags[0]
         self._gripper_status.homing_state = status_flags[1]
         self._gripper_status.holding_part = status_flags[2]
-        self._gripper_status.limit_reached = status_flags[3]
+        self._gripper_status.target_pos_reached = status_flags[3]
         self._gripper_status.error_status = status_flags[4]
         self._gripper_status.overload_error = status_flags[5]
 
@@ -4411,7 +4411,7 @@ class Robot:
         status_flags = self._robot_rt_data.rt_gripper_state.data
 
         self._gripper_state.holding_part = status_flags[0]
-        self._gripper_state.limit_reached = status_flags[1]
+        self._gripper_state.target_pos_reached = status_flags[1]
 
         if self._is_in_sync():
             self._robot_events.on_gripper_state_updated.set()

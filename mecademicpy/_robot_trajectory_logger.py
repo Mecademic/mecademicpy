@@ -29,7 +29,6 @@ robot_rt_data_to_real_time_monit = {
     'rt_conf': (mx_def.MX_ST_RT_CONF, 'Conf'),
     'rt_conf_turn': (mx_def.MX_ST_RT_CONF_TURN, 'ConfTurn'),
     'rt_accelerometer': (mx_def.MX_ST_RT_ACCELEROMETER, 'Accel'),
-    'rt_gripper_force': (mx_def.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),  # Unused in RobotState right now
     'rt_wrf': (mx_def.MX_ST_RT_WRF, 'Wrf'),
     'rt_trf': (mx_def.MX_ST_RT_TRF, 'Trf'),
     'rt_checkpoint': (mx_def.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
@@ -216,11 +215,11 @@ class _RobotTrajectoryLogger:
             elif key.endswith('rt_valve_state'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['valve1', 'valve2']))
             elif key.endswith('rt_gripper_state'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'limits']))
+                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'atpos']))
             elif key.endswith('rt_gripper_force'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
             elif key.endswith('rt_gripper_pos'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
+                self.expanded_fields.extend(assemble_with_prefix(value, ['mm']))
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
