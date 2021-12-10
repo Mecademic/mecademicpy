@@ -949,8 +949,8 @@ class RobotRtData:
         Valve state [valve_opened[0], valve_opened[1]].
     rt_gripper_state : TimestampedData
         Gripper state [holding_part, target_pos_reached].
-    rt_gripper_torq : TimestampedData
-        Gripper torque in % of maximum torque.
+    rt_gripper_force : TimestampedData
+        Gripper force in % of maximum force.
     rt_gripper_pos : TimestampedData
         Gripper position in mm.
 
@@ -1133,7 +1133,7 @@ class GripperState:
     holding_part : bool
         True if the gripper is currently holding a part.
     target_pos_reached : bool
-        True if the gripper is at target position or is at a limit (fully opened or closed).
+        True if the gripper is at target position or at a limit (fully opened or closed).
 """
 
     def __init__(self):
