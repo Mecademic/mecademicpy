@@ -1089,10 +1089,11 @@ class ExtToolStatus:
     ----------
     tool_type : int
         External tool type. Available types:
-        0: mx_def.MX_EXT_TOOL_NONE
-        1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
-        2: mx_def.MX_EXT_TOOL_MEGP25_LONG
-        3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+         0: mx_def.MX_EXT_TOOL_NONE
+         1: mx_def.MX_EXT_TOOL_CURRENT
+        10: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+        11: mx_def.MX_EXT_TOOL_MEGP25_LONG
+        20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
     homing_state : bool
         True if the robot is homed.
     error_status : bool
@@ -3004,9 +3005,10 @@ class Robot:
         ----------
         sim_ext_tool_type : int or mx_def constants
             0: mx_def.MX_EXT_TOOL_NONE
-            1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
-            2: mx_def.MX_EXT_TOOL_MEGP25_LONG
-            3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+            1: mx_def.MX_EXT_TOOL_CURRENT
+           10: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+           11: mx_def.MX_EXT_TOOL_MEGP25_LONG
+           20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
         """
         with self._main_lock:
             self._check_internal_states()
