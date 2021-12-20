@@ -978,10 +978,10 @@ class RobotRtData:
         # For example, Meca500 currently only reports the accelerometer in joint 5.
         self.rt_accelerometer = dict()  # 16000 = 1g
 
-        self.rt_external_tool_status = TimestampedData.zeros(
-            4)  # microseconds timestamp, tool type, activated, homed, error
-        self.rt_valve_state = TimestampedData.zeros(
-            mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
+        # microseconds timestamp, current tool type (physical or simulated), physical tool type, activated, homed, error
+        self.rt_external_tool_status = TimestampedData.zeros(5)
+        # microseconds timestamp, valve1 opened, valve2 opened
+        self.rt_valve_state = TimestampedData.zeros(mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)
         self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, target pos reached
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
@@ -1088,14 +1088,15 @@ class ExtToolStatus:
     Attributes
     ----------
     tool_type : int
-        External tool type. Available types:
+        External tool type currently used (physical or simulated). Available types:
          0: mx_def.MX_EXT_TOOL_NONE
-         1: mx_def.MX_EXT_TOOL_CURRENT
         10: mx_def.MX_EXT_TOOL_MEGP25_SHORT
         11: mx_def.MX_EXT_TOOL_MEGP25_LONG
         20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+    physical_tool_type : int
+        Physical external tool type.
     homing_state : bool
-        True if the robot is homed.
+        True if the gripper is homed.
     error_status : bool
         True if the gripper is in error state
     overload_error : bool
@@ -1105,10 +1106,63 @@ class ExtToolStatus:
     def __init__(self):
 
         # The following are status fields.
-        self.tool_type = 0
+        self.tool_type = mx_def.MX_EXT_TOOL_NONE
+        self.physical_tool_type = mx_def.MX_EXT_TOOL_NONE
         self.homing_state = False
         self.error_status = False
         self.overload_error = False
+
+    def is_physical_tool_present(self) -> bool:
+        """Returns if physical tool is connected
+
+        Returns
+        -------
+        bool
+            True if physical gripper is connected, False otherwise
+        """
+        return self.physical_tool_type != mx_def.MX_EXT_TOOL_NONE
+
+    def is_tool_sim(self) -> bool:
+        """Returns if tool is simulated or not
+
+        Returns
+        -------
+        bool
+            True if tool is simulated, False otherwise
+        """
+        return self.physical_tool_type != self.tool_type
+
+    def is_gripper(self, physical: bool = False) -> bool:
+        """Returns if current external tool (simulated or physical) is a gripper
+
+        Parameters
+        ----------
+        physical : bool
+            True check physical gripper, False use current one (simulated or physical)
+
+        Returns
+        -------
+        bool
+            True if tool is a gripper, False otherwise
+        """
+        return self.physical_tool_type if physical else self.tool_type in [
+            mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG
+        ]
+
+    def is_pneumatic_module(self, physical: bool = False) -> bool:
+        """Returns if current external tool (simulated or physical) is a pneumatic module
+
+        Parameters
+        ----------
+        physical : bool
+            True check physical gripper, False use current one (simulated or physical)
+
+        Returns
+        -------
+        bool
+            True if tool is a pneumatic module, False otherwise
+        """
+        return self.physical_tool_type if physical else self.tool_type in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
 
 
 class ValveState:
@@ -4391,9 +4445,10 @@ class Robot:
         status_flags = self._robot_rt_data.rt_external_tool_status.data
 
         self._external_tool_status.tool_type = status_flags[0]
-        self._external_tool_status.homing_state = status_flags[1]
-        self._external_tool_status.error_status = status_flags[2]
-        self._external_tool_status.overload_error = status_flags[3]
+        self._external_tool_status.physical_tool_type = status_flags[1]
+        self._external_tool_status.homing_state = status_flags[2]
+        self._external_tool_status.error_status = status_flags[3]
+        self._external_tool_status.overload_error = status_flags[4]
 
         if self._is_in_sync():
             self._robot_events.on_external_tool_status_updated.set()
