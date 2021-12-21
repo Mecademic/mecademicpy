@@ -1087,8 +1087,8 @@ class ExtToolStatus:
 
     Attributes
     ----------
-    tool_type : int
-        External tool type currently used (physical or simulated). Available types:
+    sim_tool_type : int
+        Simulated tool type.
          0: mx_def.MX_EXT_TOOL_NONE
         10: mx_def.MX_EXT_TOOL_MEGP25_SHORT
         11: mx_def.MX_EXT_TOOL_MEGP25_LONG
@@ -1106,11 +1106,21 @@ class ExtToolStatus:
     def __init__(self):
 
         # The following are status fields.
-        self.tool_type = mx_def.MX_EXT_TOOL_NONE
+        self.sim_tool_type = mx_def.MX_EXT_TOOL_NONE
         self.physical_tool_type = mx_def.MX_EXT_TOOL_NONE
         self.homing_state = False
         self.error_status = False
         self.overload_error = False
+
+    def current_tool_type(self) -> int:
+        """Returns current external tool type (simulated or physical)
+
+        Returns
+        -------
+        int
+            Current external tool
+        """
+        return self.sim_tool_type if self.sim_tool_type != mx_def.MX_EXT_TOOL_NONE else self.physical_tool_type
 
     def is_physical_tool_present(self) -> bool:
         """Returns if physical tool is connected
@@ -1130,7 +1140,7 @@ class ExtToolStatus:
         bool
             True if tool is simulated, False otherwise
         """
-        return self.physical_tool_type != self.tool_type
+        return self.sim_tool_type != mx_def.MX_EXT_TOOL_NONE
 
     def is_gripper(self, physical: bool = False) -> bool:
         """Returns if current external tool (simulated or physical) is a gripper
@@ -1145,7 +1155,7 @@ class ExtToolStatus:
         bool
             True if tool is a gripper, False otherwise
         """
-        return self.physical_tool_type if physical else self.tool_type in [
+        return self.physical_tool_type if physical else self.current_tool_type() in [
             mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG
         ]
 
@@ -1162,7 +1172,7 @@ class ExtToolStatus:
         bool
             True if tool is a pneumatic module, False otherwise
         """
-        return self.physical_tool_type if physical else self.tool_type in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
+        return self.physical_tool_type if physical else self.current_tool_type() in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
 
 
 class ValveState:
@@ -4330,7 +4340,7 @@ class Robot:
             self._robot_status.simulation_mode = status_flags[2]
             if self._robot_events.on_activate_ext_tool_sim.is_set() != self._robot_status.simulation_mode:
                 # Sim mode was just disabled -> Also means external tool sim has been disabled
-                self._handle_ext_tool_sim_status(self._external_tool_status.tool_type)
+                self._handle_ext_tool_sim_status(self._external_tool_status.sim_tool_type)
 
         if not self._first_robot_status_received or self._robot_status.error_status != status_flags[3]:
             if status_flags[3]:
@@ -4444,7 +4454,7 @@ class Robot:
         self._robot_rt_data.rt_external_tool_status.update_from_csv(response.data)
         status_flags = self._robot_rt_data.rt_external_tool_status.data
 
-        self._external_tool_status.tool_type = status_flags[0]
+        self._external_tool_status.sim_tool_type = status_flags[0]
         self._external_tool_status.physical_tool_type = status_flags[1]
         self._external_tool_status.homing_state = status_flags[2]
         self._external_tool_status.error_status = status_flags[3]
