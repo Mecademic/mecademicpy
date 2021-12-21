@@ -984,7 +984,8 @@ class RobotRtData:
             4)  # microseconds timestamp, tool type, activated, homed, error
         self.rt_valve_state = TimestampedData.zeros(
             mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
-        self.rt_gripper_state = TimestampedData.zeros(4)  # microseconds timestamp, holding part, target pos reached
+        self.rt_gripper_state = TimestampedData.zeros(
+            4)  # microseconds timestamp, holding part, target pos reached, closed, opened
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
 
@@ -2176,7 +2177,7 @@ class Robot:
             Maximum time to spend waiting for the move to complete (in seconds).
         """
         if timeout is not None and timeout <= 0:
-            return
+            raise ValueError("timeout must be None or a positive value")
 
         DEFAULT_START_MOVE_TIMEOUT = 0.2
         DEFAULT_COMPLETE_MOVE_TIMEOUT = 2
@@ -2304,7 +2305,7 @@ class Robot:
             self._send_motion_command('MoveGripper', [target])
             if self._enable_synchronous_mode:
                 rt_data = self.GetRobotRtData(synchronous_update=True)
-                if rt_data.rt_gripper_pos.data[0] == target:
+                if math.isclose(rt_data.rt_gripper_pos.data[0], target, abs_tol=0.1):
                     return
                 self.WaitGripperMoveCompletion()
 
