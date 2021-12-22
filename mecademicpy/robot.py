@@ -1155,9 +1155,8 @@ class ExtToolStatus:
         bool
             True if tool is a gripper, False otherwise
         """
-        return self.physical_tool_type if physical else self.current_tool_type() in [
-            mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG
-        ]
+        tool_type = self.physical_tool_type if physical else self.current_tool_type()
+        return tool_type in [mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG]
 
     def is_pneumatic_module(self, physical: bool = False) -> bool:
         """Returns if current external tool (simulated or physical) is a pneumatic module
@@ -1172,7 +1171,8 @@ class ExtToolStatus:
         bool
             True if tool is a pneumatic module, False otherwise
         """
-        return self.physical_tool_type if physical else self.current_tool_type() in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
+        tool_type = self.physical_tool_type if physical else self.current_tool_type()
+        return tool_type in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
 
 
 class ValveState:
