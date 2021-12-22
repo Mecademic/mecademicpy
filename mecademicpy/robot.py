@@ -978,10 +978,10 @@ class RobotRtData:
         # For example, Meca500 currently only reports the accelerometer in joint 5.
         self.rt_accelerometer = dict()  # 16000 = 1g
 
-        # microseconds timestamp, current tool type (physical or simulated), physical tool type, activated, homed, error
-        self.rt_external_tool_status = TimestampedData.zeros(5)
-        # microseconds timestamp, valve1 opened, valve2 opened
-        self.rt_valve_state = TimestampedData.zeros(mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)
+        self.rt_external_tool_status = TimestampedData.zeros(
+            5)  # microseconds timestamp, sim tool type, physical tool type, activated, homed, error
+        self.rt_valve_state = TimestampedData.zeros(
+            mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
         self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, target pos reached
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
