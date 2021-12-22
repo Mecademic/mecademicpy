@@ -2186,6 +2186,14 @@ class Robot:
         else:
             complete_move_timeout = DEFAULT_COMPLETE_MOVE_TIMEOUT
 
+        # Use a checkpoint to make sure the last gripper command has been processed
+        if not self._enable_synchronous_mode:
+            start_time = time.monotonic()
+            checkpoint = self._set_checkpoint_internal()
+            checkpoint.wait(complete_move_timeout)
+            # Update timeout left
+            complete_move_timeout -= (time.monotonic() - start_time)
+
         start_move_timeout = DEFAULT_START_MOVE_TIMEOUT
         if start_move_timeout > complete_move_timeout:
             start_move_timeout = complete_move_timeout
