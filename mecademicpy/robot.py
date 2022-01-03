@@ -948,11 +948,11 @@ class RobotRtData:
     rt_valve_state : TimestampedData
         Valve state [valve_opened[0], valve_opened[1]].
     rt_gripper_state : TimestampedData
-        Gripper state [holding_part, limit_reached].
-    rt_gripper_torq : TimestampedData
-        Gripper torque in %.
+        Gripper state [holding_part, target_pos_reached].
+    rt_gripper_force : TimestampedData
+        Gripper force in % of maximum force.
     rt_gripper_pos : TimestampedData
-        Gripper position in %.
+        Gripper position in mm.
 
 
 """
@@ -979,10 +979,10 @@ class RobotRtData:
         self.rt_accelerometer = dict()  # 16000 = 1g
 
         self.rt_external_tool_status = TimestampedData.zeros(
-            4)  # microseconds timestamp, tool type, activated, homed, error
+            5)  # microseconds timestamp, sim tool type, physical tool type, activated, homed, error
         self.rt_valve_state = TimestampedData.zeros(
             mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
-        self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, limit reached
+        self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, target pos reached
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
 
@@ -1063,8 +1063,8 @@ class GripperStatus:
         True if the gripper has been homed (ready to be used).
     holding_part : bool
         True if the gripper is currently holding a part.
-    limit_reached : bool
-        True if the gripper is at a limit (fully opened or closed).
+    target_pos_reached : bool
+        True if the gripper is at target position or at a limit (fully opened or closed).
     error_status : bool
         True if the gripper is in error state
     overload_error : bool
@@ -1077,7 +1077,7 @@ class GripperStatus:
         self.present = False
         self.homing_state = False
         self.holding_part = False
-        self.limit_reached = False
+        self.target_pos_reached = False
         self.error_status = False
         self.overload_error = False
 
@@ -1087,14 +1087,16 @@ class ExtToolStatus:
 
     Attributes
     ----------
-    tool_type : int
-        External tool type. Available types:
-        0: mx_def.MX_EXT_TOOL_NONE
-        1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
-        2: mx_def.MX_EXT_TOOL_MEGP25_LONG
-        3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+    sim_tool_type : int
+        Simulated tool type.
+         0: mx_def.MX_EXT_TOOL_NONE
+        10: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+        11: mx_def.MX_EXT_TOOL_MEGP25_LONG
+        20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+    physical_tool_type : int
+        Physical external tool type.
     homing_state : bool
-        True if the robot is homed.
+        True if the gripper is homed.
     error_status : bool
         True if the gripper is in error state
     overload_error : bool
@@ -1104,10 +1106,73 @@ class ExtToolStatus:
     def __init__(self):
 
         # The following are status fields.
-        self.tool_type = 0
+        self.sim_tool_type = mx_def.MX_EXT_TOOL_NONE
+        self.physical_tool_type = mx_def.MX_EXT_TOOL_NONE
         self.homing_state = False
         self.error_status = False
         self.overload_error = False
+
+    def current_tool_type(self) -> int:
+        """Returns current external tool type (simulated or physical)
+
+        Returns
+        -------
+        int
+            Current external tool
+        """
+        return self.sim_tool_type if self.sim_tool_type != mx_def.MX_EXT_TOOL_NONE else self.physical_tool_type
+
+    def is_physical_tool_present(self) -> bool:
+        """Returns if physical tool is connected
+
+        Returns
+        -------
+        bool
+            True if physical gripper is connected, False otherwise
+        """
+        return self.physical_tool_type != mx_def.MX_EXT_TOOL_NONE
+
+    def is_tool_sim(self) -> bool:
+        """Returns if tool is simulated or not
+
+        Returns
+        -------
+        bool
+            True if tool is simulated, False otherwise
+        """
+        return self.sim_tool_type != mx_def.MX_EXT_TOOL_NONE
+
+    def is_gripper(self, physical: bool = False) -> bool:
+        """Returns if current external tool (simulated or physical) is a gripper
+
+        Parameters
+        ----------
+        physical : bool
+            True check physical gripper, False use current one (simulated or physical)
+
+        Returns
+        -------
+        bool
+            True if tool is a gripper, False otherwise
+        """
+        tool_type = self.physical_tool_type if physical else self.current_tool_type()
+        return tool_type in [mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG]
+
+    def is_pneumatic_module(self, physical: bool = False) -> bool:
+        """Returns if current external tool (simulated or physical) is a pneumatic module
+
+        Parameters
+        ----------
+        physical : bool
+            True check physical gripper, False use current one (simulated or physical)
+
+        Returns
+        -------
+        bool
+            True if tool is a pneumatic module, False otherwise
+        """
+        tool_type = self.physical_tool_type if physical else self.current_tool_type()
+        return tool_type in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
 
 
 class ValveState:
@@ -1132,15 +1197,15 @@ class GripperState:
     ----------
     holding_part : bool
         True if the gripper is currently holding a part.
-    limit_reached : bool
-        True if the gripper is at a limit (fully opened or closed).
+    target_pos_reached : bool
+        True if the gripper is at target position or at a limit (fully opened or closed).
 """
 
     def __init__(self):
 
         # The following are status fields.
         self.holding_part = False
-        self.limit_reached = False
+        self.target_pos_reached = False
 
 
 class Robot:
@@ -3004,9 +3069,10 @@ class Robot:
         ----------
         sim_ext_tool_type : int or mx_def constants
             0: mx_def.MX_EXT_TOOL_NONE
-            1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
-            2: mx_def.MX_EXT_TOOL_MEGP25_LONG
-            3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+            1: mx_def.MX_EXT_TOOL_CURRENT
+           10: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+           11: mx_def.MX_EXT_TOOL_MEGP25_LONG
+           20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
         """
         with self._main_lock:
             self._check_internal_states()
@@ -4274,7 +4340,7 @@ class Robot:
             self._robot_status.simulation_mode = status_flags[2]
             if self._robot_events.on_activate_ext_tool_sim.is_set() != self._robot_status.simulation_mode:
                 # Sim mode was just disabled -> Also means external tool sim has been disabled
-                self._handle_ext_tool_sim_status(self._external_tool_status.tool_type)
+                self._handle_ext_tool_sim_status(self._external_tool_status.sim_tool_type)
 
         if not self._first_robot_status_received or self._robot_status.error_status != status_flags[3]:
             if status_flags[3]:
@@ -4330,7 +4396,7 @@ class Robot:
         self._gripper_status.present = status_flags[0]
         self._gripper_status.homing_state = status_flags[1]
         self._gripper_status.holding_part = status_flags[2]
-        self._gripper_status.limit_reached = status_flags[3]
+        self._gripper_status.target_pos_reached = status_flags[3]
         self._gripper_status.error_status = status_flags[4]
         self._gripper_status.overload_error = status_flags[5]
 
@@ -4388,10 +4454,11 @@ class Robot:
         self._robot_rt_data.rt_external_tool_status.update_from_csv(response.data)
         status_flags = self._robot_rt_data.rt_external_tool_status.data
 
-        self._external_tool_status.tool_type = status_flags[0]
-        self._external_tool_status.homing_state = status_flags[1]
-        self._external_tool_status.error_status = status_flags[2]
-        self._external_tool_status.overload_error = status_flags[3]
+        self._external_tool_status.sim_tool_type = status_flags[0]
+        self._external_tool_status.physical_tool_type = status_flags[1]
+        self._external_tool_status.homing_state = status_flags[2]
+        self._external_tool_status.error_status = status_flags[3]
+        self._external_tool_status.overload_error = status_flags[4]
 
         if self._is_in_sync():
             self._robot_events.on_external_tool_status_updated.set()
@@ -4411,7 +4478,7 @@ class Robot:
         status_flags = self._robot_rt_data.rt_gripper_state.data
 
         self._gripper_state.holding_part = status_flags[0]
-        self._gripper_state.limit_reached = status_flags[1]
+        self._gripper_state.target_pos_reached = status_flags[1]
 
         if self._is_in_sync():
             self._robot_events.on_gripper_state_updated.set()
