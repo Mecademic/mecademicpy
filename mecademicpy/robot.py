@@ -3201,9 +3201,9 @@ class Robot:
 
         if self._enable_synchronous_mode:
             if sim_ext_tool_type == mx_def.MX_EXT_TOOL_NONE:
-                self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=self.default_timeout)
+                self.WaitExtToolSimDeactivated()
             else:
-                self._robot_events.on_activate_ext_tool_sim.wait(timeout=self.default_timeout)
+                self.WaitExtToolSimActivated()
 
     @disconnect_on_exception
     def SetRecoveryMode(self, activated: bool = True):

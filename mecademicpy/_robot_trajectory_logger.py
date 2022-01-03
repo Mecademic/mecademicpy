@@ -216,7 +216,7 @@ class _RobotTrajectoryLogger:
             elif key.endswith('rt_valve_state'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['valve1', 'valve2']))
             elif key.endswith('rt_gripper_state'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'atpos']))
+                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'atpos', 'closed', 'opened']))
             elif key.endswith('rt_gripper_force'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
             elif key.endswith('rt_gripper_pos'):
