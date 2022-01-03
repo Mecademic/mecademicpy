@@ -212,7 +212,7 @@ class _RobotTrajectoryLogger:
                 self.expanded_fields.append(value)
             elif key.endswith('rt_external_tool_status'):
                 self.expanded_fields.extend(
-                    assemble_with_prefix(value, ['current_model', 'physical_model', 'present', 'homed', 'error']))
+                    assemble_with_prefix(value, ['sim_model', 'physical_model', 'present', 'homed', 'error']))
             elif key.endswith('rt_valve_state'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['valve1', 'valve2']))
             elif key.endswith('rt_gripper_state'):

@@ -980,12 +980,12 @@ class RobotRtData:
         # For example, Meca500 currently only reports the accelerometer in joint 5.
         self.rt_accelerometer = dict()  # 16000 = 1g
 
-        # microseconds timestamp, current tool type (physical or simulated), physical tool type, activated, homed, error
-        self.rt_external_tool_status = TimestampedData.zeros(5)
-        # microseconds timestamp, valve1 opened, valve2 opened
-        self.rt_valve_state = TimestampedData.zeros(mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)
-        # microseconds timestamp, holding part, target pos reached, closed, opened
-        self.rt_gripper_state = TimestampedData.zeros(4)
+        self.rt_external_tool_status = TimestampedData.zeros(
+            5)  # microseconds timestamp, sim tool type, physical tool type, activated, homed, error
+        self.rt_valve_state = TimestampedData.zeros(
+            mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
+        self.rt_gripper_state = TimestampedData.zeros(
+            4)  # microseconds timestamp, holding part, target pos reached, closed, opened
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
 
@@ -1158,9 +1158,8 @@ class ExtToolStatus:
         bool
             True if tool is a gripper, False otherwise
         """
-        return self.physical_tool_type if physical else self.current_tool_type() in [
-            mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG
-        ]
+        tool_type = self.physical_tool_type if physical else self.current_tool_type()
+        return tool_type in [mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG]
 
     def is_pneumatic_module(self, physical: bool = False) -> bool:
         """Returns if current external tool (simulated or physical) is a pneumatic module
@@ -1175,7 +1174,8 @@ class ExtToolStatus:
         bool
             True if tool is a pneumatic module, False otherwise
         """
-        return self.physical_tool_type if physical else self.current_tool_type() in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
+        tool_type = self.physical_tool_type if physical else self.current_tool_type()
+        return tool_type in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
 
 
 class ValveState:
