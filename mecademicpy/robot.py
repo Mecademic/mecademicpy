@@ -15,7 +15,7 @@ import requests
 import socket
 import threading
 import time
-from typing import Union
+from typing import Tuple, Union
 
 import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.tools as tools
@@ -24,6 +24,8 @@ from ._robot_trajectory_logger import _RobotTrajectoryLogger
 
 GRIPPER_OPEN = True
 GRIPPER_CLOSE = False
+
+DEFAULT_WAIT_TIMEOUT = 10
 
 # Available levels for SetTorqueLimitsCfg
 TORQUE_LIMIT_SEVERITIES = {'disabled': 0, 'warning': 1, 'pause-motion': 2, 'clear-motion': 3, 'error': 4}
@@ -982,7 +984,8 @@ class RobotRtData:
             5)  # microseconds timestamp, sim tool type, physical tool type, activated, homed, error
         self.rt_valve_state = TimestampedData.zeros(
             mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
-        self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, target pos reached
+        self.rt_gripper_state = TimestampedData.zeros(
+            4)  # microseconds timestamp, holding part, target pos reached, closed, opened
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
 
@@ -1199,6 +1202,11 @@ class GripperState:
         True if the gripper is currently holding a part.
     target_pos_reached : bool
         True if the gripper is at target position or at a limit (fully opened or closed).
+    closed : bool
+        True if the gripper is at the configured 'close' position (ref SetGripperRanger) or less.
+    opened : bool
+        True if the gripper is at the configured 'open' position (ref SetGripperRanger) or more.
+
 """
 
     def __init__(self):
@@ -1206,6 +1214,11 @@ class GripperState:
         # The following are status fields.
         self.holding_part = False
         self.target_pos_reached = False
+        self.closed = False
+        self.opened = False
+
+    def __str__(self):
+        return f'holding={self.holding_part} pos_reached={self.target_pos_reached} closed={self.closed} opened={self.opened}'
 
 
 class Robot:
@@ -1399,7 +1412,7 @@ class Robot:
         self._monitor_mode = None
 
         self.logger = logging.getLogger(__name__)
-        self.default_timeout = 10
+        self.default_timeout = DEFAULT_WAIT_TIMEOUT
 
         # Variables to hold joint positions and poses while waiting for timestamp.
         self._tmp_rt_joint_pos = None
@@ -2220,6 +2233,97 @@ class Robot:
         """
         self._send_motion_command('SetCartLinVel', [w])
 
+    def WaitGripperMoveCompletion(self, timeout: float = None):
+        """Wait for the gripper move to complete.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the move to complete (in seconds).
+        """
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be None or a positive value")
+
+        DEFAULT_START_MOVE_TIMEOUT = 0.2
+        DEFAULT_COMPLETE_MOVE_TIMEOUT = 2
+        if timeout is not None:
+            complete_move_timeout = timeout
+        else:
+            complete_move_timeout = DEFAULT_COMPLETE_MOVE_TIMEOUT
+
+        # Use a checkpoint to make sure the last gripper command has been processed
+        if not self._enable_synchronous_mode:
+            start_time = time.monotonic()
+            checkpoint = self._set_checkpoint_internal()
+            checkpoint.wait(complete_move_timeout)
+            # Update timeout left
+            complete_move_timeout -= (time.monotonic() - start_time)
+
+        start_move_timeout = DEFAULT_START_MOVE_TIMEOUT
+        if start_move_timeout > complete_move_timeout:
+            start_move_timeout = complete_move_timeout
+
+        # Detect a rising edge of either `target_pos_reached` or `holding_part` to rapidly confirm the end of move.
+        # This is needed to ensure the gripper has started moving and we're not reporting a previous state.
+        # When we have given the gripper enough time to start moving and `target_pos_reached` or `holding_part`
+        # are still true, it means that the gripper was already at target position or that an object is preventing
+        # the gripper from reaching that position, so the move completes.
+        holding_part_seen_false = False
+        pos_reached_seen_false = False
+
+        current_time = time.monotonic()
+        start_time = current_time
+        timeout_time = start_time + start_move_timeout
+        waiting_move_start = True
+        while current_time < timeout_time:
+            wait_duration = timeout_time - current_time
+            self.logger.debug(f'WaitGripperMoveCompletion: Waiting for {wait_duration}s')
+            try:
+                self._robot_events.on_gripper_state_updated.wait(wait_duration)
+                with self._main_lock:
+                    gripper_state = self._gripper_state
+                    self._robot_events.on_gripper_state_updated.clear()
+                    self.logger.debug(f'WaitGripperMoveCompletion: New state is {str(gripper_state)}')
+
+                if waiting_move_start:
+                    if pos_reached_seen_false and gripper_state.target_pos_reached:
+                        self.logger.debug(f'WaitGripperMoveCompletion: target_pos_reached')
+                        return
+                    if holding_part_seen_false and gripper_state.holding_part:
+                        self.logger.debug(f'WaitGripperMoveCompletion: holding_part')
+                        return
+
+                    if gripper_state.holding_part is False:
+                        self.logger.debug(f'WaitGripperMoveCompletion: holding_part_seen_false')
+                        holding_part_seen_false = True
+
+                    if gripper_state.target_pos_reached is False:
+                        self.logger.debug(f'WaitGripperMoveCompletion: pos_reached_seen_false')
+                        pos_reached_seen_false = True
+                else:
+                    if gripper_state.target_pos_reached or gripper_state.holding_part:
+                        self.logger.debug(f'WaitGripperMoveCompletion: move completed ')
+                        return
+            except TimeoutException:
+                if waiting_move_start:
+                    self.logger.debug(f'WaitGripperMoveCompletion: start_move_timeout reached')
+                    gripper_state = self._gripper_state
+                    if gripper_state.target_pos_reached or gripper_state.holding_part:
+                        # Gripper had time to start moving and the state still report that the gripper is at the target
+                        # position or holding a part. This happens when the gripper was not able to move because it is
+                        # forcing on an object.
+                        self.logger.debug(
+                            f'WaitGripperMoveCompletion: start_move_timeout reached with no change detected')
+                        return
+                    # We now give enough time for the move to complete
+                    waiting_move_start = False
+                    timeout_time = start_time + complete_move_timeout
+            current_time = time.monotonic()
+
+        if not gripper_state.target_pos_reached and not gripper_state.holding_part:
+            self.logger.warning(f'WaitGripperMoveCompletion: Timeout reached')
+            raise TimeoutException('Timeout while waiting for gripper to complete movement.')
+
     @disconnect_on_exception
     def GripperOpen(self):
         """Open the gripper.
@@ -2228,6 +2332,12 @@ class Robot:
 
         self._send_motion_command('GripperOpen')
 
+        if self._enable_synchronous_mode:
+            gripper_state = self.GetRtGripperState(synchronous_update=True)
+            if gripper_state.opened:
+                return
+            self.WaitGripperMoveCompletion()
+
     @disconnect_on_exception
     def GripperClose(self):
         """Close the gripper.
@@ -2235,6 +2345,12 @@ class Robot:
         """
 
         self._send_motion_command('GripperClose')
+
+        if self._enable_synchronous_mode:
+            gripper_state = self.GetRtGripperState(synchronous_update=True)
+            if gripper_state.closed:
+                return
+            self.WaitGripperMoveCompletion()
 
     @disconnect_on_exception
     def MoveGripper(self, target: Union[bool, float]):
@@ -2260,6 +2376,11 @@ class Robot:
                 self.GripperClose()
         else:
             self._send_motion_command('MoveGripper', [target])
+            if self._enable_synchronous_mode:
+                rt_data = self.GetRobotRtData(synchronous_update=True)
+                if math.isclose(rt_data.rt_gripper_pos.data[0], target, abs_tol=0.1):
+                    return
+                self.WaitGripperMoveCompletion()
 
     @disconnect_on_exception
     def SetGripperForce(self, p: float):
@@ -2439,7 +2560,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2454,7 +2575,7 @@ class Robot:
            wait for the disconnection.
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2482,7 +2603,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2510,7 +2631,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
 
         """
@@ -2525,7 +2646,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2539,7 +2660,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
 
         """
@@ -2554,7 +2675,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2570,7 +2691,7 @@ class Robot:
         ----------
         activated : bool
             Recovery mode to wait for (activated or deactivated
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2598,7 +2719,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2612,7 +2733,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2626,7 +2747,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2640,7 +2761,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
 
@@ -2655,7 +2776,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         if self._robot_events.on_end_of_cycle.is_set():
@@ -2891,7 +3012,7 @@ class Robot:
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated joints positions and waits for response, else uses last known positions.
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time in second to wait for forced update.
 
         Return
@@ -2942,7 +3063,7 @@ class Robot:
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated pose and waits for response, else uses last know pose.
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time in second to wait for forced update.
 
         Return
@@ -3080,9 +3201,9 @@ class Robot:
 
         if self._enable_synchronous_mode:
             if sim_ext_tool_type == mx_def.MX_EXT_TOOL_NONE:
-                self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=self.default_timeout)
+                self.WaitExtToolSimDeactivated()
             else:
-                self._robot_events.on_activate_ext_tool_sim.wait(timeout=self.default_timeout)
+                self.WaitExtToolSimActivated()
 
     @disconnect_on_exception
     def SetRecoveryMode(self, activated: bool = True):
@@ -3178,8 +3299,15 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_info)
 
-    def GetRobotRtData(self) -> RobotRtData:
+    def GetRobotRtData(self, synchronous_update: bool = False, timeout: float = None) -> RobotRtData:
         """Return a copy of the current robot real-time data, with all values associated with the same timestamp
+
+        Parameters
+        ----------
+        synchronous_update: boolean
+            True -> Synchronously wait for the next data cycle to get updated data. False -> Get latest known data.
+        timeout: float
+            Timeout (in seconds) waiting for updated cyclic data from the robot. Only used for synchronous requests.
 
         Return
         ------
@@ -3187,6 +3315,9 @@ class Robot:
             Object containing the current robot real-time data
 
         """
+        if synchronous_update:
+            self.WaitEndOfCycle(timeout)
+
         with self._main_lock:
             return copy.deepcopy(self._robot_rt_data_stable)
 
@@ -3198,7 +3329,7 @@ class Robot:
         ----------
         synchronous_update: boolean
             True -> Synchronously get updated robot status. False -> Get latest known status.
-        timeout: float, by default 10
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -3217,16 +3348,14 @@ class Robot:
             return copy.deepcopy(self._robot_status)
 
     @disconnect_on_exception
-    def GetStatusGripper(self, synchronous_update: bool = True, timeout: float = None) -> GripperStatus:
+    def GetStatusGripper(self, synchronous_update: bool = False, timeout: float = None) -> GripperStatus:
         """Return a copy of the current gripper status
 
         Parameters
         ----------
         synchronous_update: boolean
             True -> Synchronously get updated gripper status. False -> Get latest known status.
-            *** Note: Synchronous mode by default because robot does not report gripper status change events by default
-                      (unless SetStatusEvents command is used to enable gripper status updates)
-        timeout: float, by default 10
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -3243,6 +3372,33 @@ class Robot:
 
         with self._main_lock:
             return copy.deepcopy(self._gripper_status)
+
+    @disconnect_on_exception
+    def GetGripperRange(self, timeout: float = None) -> Tuple[float, float]:
+        """Return the currently configured gripper range.
+            Note that the reported values are valid only when the robot is activated and homed.
+
+        Parameters
+        ----------
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        Tupple [close_pos, open_pos]
+            Tupple indicating the close and open position of the gripper, in mm from the completely closed position
+            detected during homing.
+
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+
+        response = self._send_custom_command('GetGripperRange', expected_responses=[mx_def.MX_ST_GET_GRIPPER_RANGE])
+        response.wait(timeout=self.default_timeout)
+        positions = _string_to_numbers(response.data.data)
+        assert len(positions) == 2
+        return positions[0], positions[1]
 
     def LogTrace(self, trace: str):
         """Send a text trace that is printed in the robot's log internal file (which can be retrieved from robot's Web
@@ -4477,8 +4633,11 @@ class Robot:
         self._robot_rt_data.rt_gripper_state.update_from_csv(response.data)
         status_flags = self._robot_rt_data.rt_gripper_state.data
 
-        self._gripper_state.holding_part = status_flags[0]
-        self._gripper_state.target_pos_reached = status_flags[1]
+        self._gripper_state.holding_part = bool(status_flags[0])
+        self._gripper_state.target_pos_reached = bool(status_flags[1])
+        if len(status_flags) > 2:
+            self._gripper_state.closed = bool(status_flags[2])
+            self._gripper_state.opened = bool(status_flags[3])
 
         if self._is_in_sync():
             self._robot_events.on_gripper_state_updated.set()

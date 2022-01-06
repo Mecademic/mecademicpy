@@ -821,7 +821,7 @@ def test_callbacks(robot: mdr.Robot):
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,1,0'))
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, '34,1,1'))
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, '35,1,1'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, '35,1,1,0,0'))
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_ON, ''))
         robot.SetRecoveryMode(True)
@@ -1186,7 +1186,7 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
                 mdr._Message(mx_def.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(seed=16000, length=3)))
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, fake_string(seed=20, length=6)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, fake_string(seed=21, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, fake_string(seed=21, length=5)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, fake_string(seed=22, length=3)))
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_FORCE, fake_string(seed=23, length=2)))
