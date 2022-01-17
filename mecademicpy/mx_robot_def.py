@@ -385,6 +385,8 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MX_ST_ALREADY_SAVING, "MX_ST_ALREADY_SAVING", is_error=True),
     MX_ST_ILLEGAL_WHILE_SAVING:
     RobotStatusCodeInfo(MX_ST_ILLEGAL_WHILE_SAVING, "MX_ST_ILLEGAL_WHILE_SAVING", is_error=True),
+    MX_ST_HOMING_JOINTS_OUT_OF_RANGE:
+    RobotStatusCodeInfo(MX_ST_HOMING_JOINTS_OUT_OF_RANGE, "MX_ST_HOMING_JOINTS_OUT_OF_RANGE", is_error=True),
     MX_ST_NO_GRIPPER:
     RobotStatusCodeInfo(MX_ST_NO_GRIPPER, "MX_ST_NO_GRIPPER", is_error=True),
     MX_ST_NO_VBOX:
