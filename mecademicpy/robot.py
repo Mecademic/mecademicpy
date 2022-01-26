@@ -922,8 +922,6 @@ class RobotRtData:
     rt_target_cart_vel : TimestampedData
         Controller desired end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
         [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z] (GetRtTargetCartVel)
-    rt_target_joint_torq : TimestampedData
-        Controller desired torque ratio as a percent of maximum [torque_1...6], with timestamp. (GetRtTargetJointTorq)
     rt_target_conf : TimestampedData
         Controller joint configuration that corresponds to desired joint positions. (GetRtTargetConf)
     rt_target_conf_turn : TimestampedData
@@ -969,7 +967,6 @@ class RobotRtData:
         self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
         self.rt_target_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
         self.rt_target_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.rt_target_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
         self.rt_target_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
         self.rt_target_conf = TimestampedData.zeros(3)
         self.rt_target_conf_turn = TimestampedData.zeros(1)
@@ -4128,8 +4125,6 @@ class Robot:
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
             self._robot_rt_data.rt_target_joint_vel.update_from_csv(response.data)
-        elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-            self._robot_rt_data.rt_target_joint_torq.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_TARGET_CART_VEL:
             self._robot_rt_data.rt_target_cart_vel.update_from_csv(response.data)
 
@@ -4480,8 +4475,6 @@ class Robot:
                 self._robot_rt_data.rt_target_cart_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
                 self._robot_rt_data.rt_target_joint_vel.enabled = True
-            if event_id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-                self._robot_rt_data.rt_target_joint_torq.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CART_VEL:
                 self._robot_rt_data.rt_target_cart_vel.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CONF:
