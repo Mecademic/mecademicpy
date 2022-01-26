@@ -947,7 +947,7 @@ class RobotRtData:
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g. (GetRtAccelerometer)
 
     rt_external_tool_status : TimestampedData
-        External tool status [exttool_type, activated, homed, error]. (GetRTExtToolStatus)
+        External tool status [exttool_type, activated, homed, error]. (GetRtExtToolStatus)
     rt_gripper_state : TimestampedData
         Gripper state [holding_part, limit_reached]. (GetRtGripperState)
     rt_valve_state : TimestampedData
@@ -955,10 +955,10 @@ class RobotRtData:
 
     rt_wrf : TimestampedData
         Current definition of the WRF w.r.t. the BRF with timestamp. Cartesian data are in mm, Eular angles in degrees.
-        [cartesian coordonates x, y, z, Eular angles omega-x, omega-y, omega-z] (GetRTWRF)
+        [cartesian coordonates x, y, z, Eular angles omega-x, omega-y, omega-z] (GetRtWrf)
     rt_trf : TimestampedData
         Current definition of the TRF w.r.t. the FRF with timestamp. cartesian data are in mm, Eular angles in degrees.
-        [cartesian coordonates x, y, z, Eular angles omega-x, omega-y, omega-z] (GetRTTRF)
+        [cartesian coordonates x, y, z, Eular angles omega-x, omega-y, omega-z] (GetRtTrf)
     rt_checkpoint : TimestampedData
         Last executed checkpoint with timestamp. (GetCheckpoint)
 """
