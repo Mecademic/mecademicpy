@@ -28,6 +28,7 @@ robot_rt_data_to_real_time_monit = {
     'rt_cart_vel': (mx_def.MX_ST_RT_CART_VEL, 'CartVel'),
     'rt_conf': (mx_def.MX_ST_RT_CONF, 'Conf'),
     'rt_conf_turn': (mx_def.MX_ST_RT_CONF_TURN, 'ConfTurn'),
+    'rt_abs_joint_pos': (mx_def.MX_ST_RT_JOINT_POS, 'AbsJointPos'),
     'rt_accelerometer': (mx_def.MX_ST_RT_ACCELEROMETER, 'Accel'),
     'rt_gripper_force': (mx_def.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),  # Unused in RobotState right now
     'rt_wrf': (mx_def.MX_ST_RT_WRF, 'Wrf'),
