@@ -967,6 +967,10 @@ class RobotRtData:
         self.rt_conf = TimestampedData.zeros(3)
         self.rt_conf_turn = TimestampedData.zeros(1)
 
+        # Another way of getting robot joint position using less-precise encoders.
+        # For robot production testing (otherwise use rt_joint_pos which is much more precise)
+        self.rt_abs_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+
         # Contains dictionary of accelerometers stored in the robot indexed by joint number.
         # For example, Meca500 currently only reports the accelerometer in joint 5.
         self.rt_accelerometer = dict()  # 16000 = 1g
@@ -4150,6 +4154,9 @@ class Robot:
                 self._robot_rt_data.rt_accelerometer[index].timestamp = timestamp
                 self._robot_rt_data.rt_accelerometer[index].data = measurements
 
+        elif response.id == mx_def.MX_ST_RT_ABS_JOINT_POS:
+            self._robot_rt_data.rt_abs_joint_pos.update_from_csv(response.data)
+
         elif response.id == mx_def.MX_ST_RT_WRF:
             self._robot_rt_data.rt_wrf.update_from_csv(response.data)
 
@@ -4496,6 +4503,8 @@ class Robot:
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
                 for accelerometer in self._robot_rt_data.rt_accelerometer.values():
                     accelerometer.enabled = True
+            if event_id == mx_def.MX_ST_RT_ABS_JOINT_POS:
+                self._robot_rt_data.rt_abs_joint_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_EXTTOOL_STATUS:
                 self._robot_rt_data.rt_external_tool_status.enabled = True
             if event_id == mx_def.MX_ST_RT_GRIPPER_STATE:
