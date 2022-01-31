@@ -1905,7 +1905,7 @@ class Robot:
             self.WaitMotionCleared(timeout=self.default_timeout)
 
     @disconnect_on_exception
-    def MoveJoints(self, *args: list[float]):
+    def MoveJoints(self, *args: float):
         """Move the robot by specifying each joint's target angular position.
 
         Parameters
@@ -1920,7 +1920,7 @@ class Robot:
         self._send_motion_command('MoveJoints', args)
 
     @disconnect_on_exception
-    def MoveJointsRel(self, *args: list[float]):
+    def MoveJointsRel(self, *args: float):
         """Move the robot relative to current position by specifying each joint's offset angular position.
 
         Parameters
@@ -1935,7 +1935,7 @@ class Robot:
         self._send_motion_command('MoveJointsRel', args)
 
     @disconnect_on_exception
-    def MoveJointsVel(self, *args: list[float]):
+    def MoveJointsVel(self, *args: float):
         """Moves joints to at desired velocities.
 
         Parameters
@@ -3037,7 +3037,7 @@ class Robot:
         self._send_motion_command('SetTorqueLimitsCfg', [severity_int, skip_acceleration_int])
 
     @disconnect_on_exception
-    def SetTorqueLimits(self, *args: list[float]):
+    def SetTorqueLimits(self, *args: float):
         """Set the torque limit (in percent) for each joint.
         Note that torque limits will be applied only if severity mode is set to other than 'disabled' by
         calling SetTorqueLimitsCfg.
