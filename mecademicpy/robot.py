@@ -734,11 +734,13 @@ class RobotInfo:
     def __init__(self,
                  model: str = None,
                  revision: int = None,
+                 is_test_bench: bool = None,
                  is_virtual: bool = None,
                  version: RobotVersion = None,
                  serial: str = None):
         self.model = model
         self.revision = revision
+        self.is_test_bench = is_test_bench
         self.is_virtual = is_virtual
         self.version = RobotVersion(version)
         self.serial = serial
@@ -780,8 +782,9 @@ class RobotInfo:
 
         """
         ROBOT_CONNECTION_STRING = \
-            r"Connected to (?P<model>\w+) ?R?(?P<revision>\d)?(?P<virtual>-virtual)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
+            r"Connected to (?P<model>\w+) ?R?(?P<revision>\d)?(?P<test_bench>-TB)?(?P<virtual>-virtual)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
 
+        test_bench = False
         virtual = False
         try:
             robot_info_regex = re.search(ROBOT_CONNECTION_STRING, input_string)
@@ -789,9 +792,15 @@ class RobotInfo:
                 model = robot_info_regex.group('model')
             if robot_info_regex.group('revision'):
                 revision = int(robot_info_regex.group('revision'))
+            if robot_info_regex.group('testbench'):
+                test_bench = True
             if robot_info_regex.group('virtual'):
                 virtual = True
-            return cls(model=model, revision=revision, is_virtual=virtual, version=robot_info_regex.group('version'))
+            return cls(model=model,
+                       revision=revision,
+                       is_test_bench=test_bench,
+                       is_virtual=virtual,
+                       version=robot_info_regex.group('version'))
         except Exception as exception:
             raise ValueError(f'Could not parse robot info string "{input_string}", error: {exception}')
 
