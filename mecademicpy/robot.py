@@ -904,57 +904,69 @@ class TimestampedData:
 class RobotRtData:
     """Class for storing the internal real-time data of a Mecademic robot.
 
-    Note that the frequency and availability of real-time data depends on the monitoring interval and which monitoring
+    Most real-time data query methods from the programming guide were not implemented explicitly in Python.
+    The information, however, are avaialble using the GetRobotRtData() method.
+    The attribute corresponding programming method is shown between parentheses.
+
+    The frequency and availability of real-time data depends on the monitoring interval and which monitoring
     events are enabled. Monitoring events can be configured using SetMonitoringInterval() and SetRealTimeMonitoring().
 
     Attributes
     ----------
     rt_target_joint_pos : TimestampedData
-        Controller desired joint positions in degrees [theta_1...6], includes timestamp.
+        Controller desired joint positions in degrees [theta_1...6], includes timestamp. (GetRtTargetJointPos)
     rt_target_cart_pos : TimestampedData
-        Controller desired end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
+        Controller desired end effector pose [x, y, z, alpha, beta, gamma], includes timestamp. (GetRtTargetCartPos)
     rt_target_joint_vel : TimestampedData
-        Controller desired joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
+        Controller desired joint velocity in degrees/second [theta_dot_1...6], includes timestamp. (GetRtTargetJointVel)
     rt_target_cart_vel : TimestampedData
         Controller desired end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
-        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]
+        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z] (GetRtTargetCartVel)
     rt_target_conf : TimestampedData
-        Controller joint configuration that corresponds to desired joint positions.
+        Controller joint configuration that corresponds to desired joint positions. (GetRtTargetConf)
     rt_target_conf_turn : TimestampedData
-        Controller last joint turn number that corresponds to desired joint positions.
+        Controller last joint turn number that corresponds to desired joint positions. (GetRtTargetConfTurn)
 
     rt_joint_pos : TimestampedData
-        Drive-measured joint positions in degrees [theta_1...6], includes timestamp.
+        Drive-measured joint positions in degrees [theta_1...6], includes timestamp. (GetRtJointPos)
     rt_cart_pos : TimestampedData
-        Drive-measured end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
+        Drive-measured end effector pose [x, y, z, alpha, beta, gamma], includes timestamp. (GetRtCartPos)
     rt_joint_vel : TimestampedData
-        Drive-measured joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
+        Drive-measured joint velocity in degrees/second [theta_dot_1...6], includes timestamp. (GetRtJointVel)
     rt_joint_torq : TimestampedData
-        Drive-measured torque ratio as a percent of maximum [torque_1...6], includes timestamp.
+        Drive-measured torque ratio as a percent of maximum [torque_1...6], includes timestamp. (GetRtJointTorq)
     rt_cart_vel : TimestampedData
         Drive-measured end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
-        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]
+        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z] (GetRtCartVel)
     rt_conf : TimestampedData
-        Controller joint configuration that corresponds to drives-measured joint positions.
+        Controller joint configuration that corresponds to drives-measured joint positions. (GetRtConf)
     rt_conf_turn : TimestampedData
-        Controller last joint turn number that corresponds to drives-measured joint positions.
+        Controller last joint turn number that corresponds to drives-measured joint positions. (GetRtConfTurn)
 
     rt_accelerometer : TimestampedData
-        Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
+        Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g. (GetRtAccelerometer)
 
     rt_external_tool_status : TimestampedData
-        External tool status [exttool_type, activated, homed, error].
+        External tool status [exttool_type, activated, homed, error]. (GetRtExtToolStatus)
     rt_gripper_state : TimestampedData
-        Gripper state [holding_part, limit_reached].
+        Gripper state [holding_part, limit_reached]. (GetRtGripperState)
     rt_valve_state : TimestampedData
-        Valve state [valve_opened[0], valve_opened[1]].
+        Valve state [valve_opened[0], valve_opened[1]]. (GetRtValveState)
+
+    rt_wrf : TimestampedData
+        Current definition of the WRF w.r.t. the BRF with timestamp. Cartesian data are in mm, Eular angles in degrees.
+        [cartesian coordonates x, y, z, Eular angles omega-x, omega-y, omega-z] (GetRtWrf)
+    rt_trf : TimestampedData
+        Current definition of the TRF w.r.t. the FRF with timestamp. cartesian data are in mm, Eular angles in degrees.
+        [cartesian coordonates x, y, z, Eular angles omega-x, omega-y, omega-z] (GetRtTrf)
+    rt_checkpoint : TimestampedData
+        Last executed checkpoint with timestamp. (GetCheckpoint)
 """
 
     def __init__(self, num_joints: int):
         self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
         self.rt_target_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
         self.rt_target_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.rt_target_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
         self.rt_target_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
         self.rt_target_conf = TimestampedData.zeros(3)
         self.rt_target_conf_turn = TimestampedData.zeros(1)
@@ -4113,8 +4125,6 @@ class Robot:
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
             self._robot_rt_data.rt_target_joint_vel.update_from_csv(response.data)
-        elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-            self._robot_rt_data.rt_target_joint_torq.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_TARGET_CART_VEL:
             self._robot_rt_data.rt_target_cart_vel.update_from_csv(response.data)
 
@@ -4465,8 +4475,6 @@ class Robot:
                 self._robot_rt_data.rt_target_cart_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
                 self._robot_rt_data.rt_target_joint_vel.enabled = True
-            if event_id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-                self._robot_rt_data.rt_target_joint_torq.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CART_VEL:
                 self._robot_rt_data.rt_target_cart_vel.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CONF:
