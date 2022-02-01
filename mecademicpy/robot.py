@@ -815,6 +815,12 @@ class TimestampedData:
         self.data = data
         self.enabled = False
 
+    def __str__(self):
+        return str([self.timestamp] + self.data)
+
+    def __repr__(self):
+        return str(self)
+
     def clear_if_disabled(self):
         """Clear timestamp and data if not reported by the robot (not part of enabled real-time monitoring events)
         """
@@ -1115,6 +1121,13 @@ class ExtToolStatus:
         self.error_status = False
         self.overload_error = False
 
+    def __str__(self) -> str:
+        return f"Sim tool type: {self.sim_tool_type}, Physical tool type: {self.physical_tool_type}, " \
+               f"homed: {self.homing_state}, error: {self.error_status}, overload: {self.overload_error}"
+
+    def __repr__(self) -> str:
+        return str(self)
+
     def current_tool_type(self) -> int:
         """Returns current external tool type (simulated or physical)
 
@@ -1218,7 +1231,11 @@ class GripperState:
         self.opened = False
 
     def __str__(self):
-        return f'holding={self.holding_part} pos_reached={self.target_pos_reached} closed={self.closed} opened={self.opened}'
+        return f'holding={self.holding_part} pos_reached={self.target_pos_reached} ' \
+               f'closed={self.closed} opened={self.opened}'
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 class Robot:
@@ -2355,8 +2372,8 @@ class Robot:
     @disconnect_on_exception
     def MoveGripper(self, target: Union[bool, float]):
         """Move the gripper to a target position.
-           If the target specified is a boolean, it indicates if the target position is the opened (True, GRIPPER_OPEN) or
-           closed (False, GRIPPER_CLOSE) position.
+           If the target specified is a boolean, it indicates if the target position is the opened (True, GRIPPER_OPEN)
+           or closed (False, GRIPPER_CLOSE) position.
            Otherwhise the target position indicates the opening of the gripper, in mm from the most closed position.
 
         Corresponds to text API calls "GripperOpen" / "GripperClose" / "MoveGripper".
