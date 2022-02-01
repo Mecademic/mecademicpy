@@ -792,7 +792,7 @@ class RobotInfo:
                 model = robot_info_regex.group('model')
             if robot_info_regex.group('revision'):
                 revision = int(robot_info_regex.group('revision'))
-            if robot_info_regex.group('testbench'):
+            if robot_info_regex.group('test_bench'):
                 test_bench = True
             if robot_info_regex.group('virtual'):
                 virtual = True
