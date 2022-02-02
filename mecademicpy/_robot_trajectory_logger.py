@@ -17,7 +17,6 @@ robot_rt_data_to_real_time_monit = {
     'rt_target_joint_pos': (mx_def.MX_ST_RT_TARGET_JOINT_POS, 'TargetJointPos'),
     'rt_target_cart_pos': (mx_def.MX_ST_RT_TARGET_CART_POS, 'TargetCartPos'),
     'rt_target_joint_vel': (mx_def.MX_ST_RT_TARGET_JOINT_VEL, 'TargetJointVel'),
-    'rt_target_joint_torq': (mx_def.MX_ST_RT_TARGET_JOINT_TORQ, 'TargetJointTorq'),  # Unused in RobotState right now
     'rt_target_cart_vel': (mx_def.MX_ST_RT_TARGET_CART_VEL, 'TargetCartVel'),
     'rt_target_conf': (mx_def.MX_ST_RT_TARGET_CONF, 'TargetConf'),
     'rt_target_conf_turn': (mx_def.MX_ST_RT_TARGET_CONF_TURN, 'TargetConfTurn'),
