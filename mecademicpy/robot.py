@@ -246,13 +246,14 @@ class _Message:
         id_start = input.find('[') + 1
         id_end = input.find(']', id_start)
         id = int(input[id_start:id_end])
+
         # Find next square brackets (contains data).
         data_start = input.find('[', id_end) + 1
         data_end = input.find(']', data_start)
 
         data = ''
         if data_start != -1 and data_end != -1:
-            data = input[data_start:data_end]
+            data = str(input[data_start:data_end])
 
         return cls(id, data)
 
@@ -3024,7 +3025,7 @@ class Robot:
             Severity-level of exceeding torque limits.
             Available severity levels (see TORQUE_LIMIT_SEVERITIES):
                 - 0 or 'disabled':     Torque limits disabled (this by default when robot is activated)
-                - 1 or 'warning':      Send a warning event (MX_ST_EXCESSIVE_TRQ) when torque exceeds the limit
+                - 1 or 'warning':      Send a warning event (MX_ST_TORQUE_LIMIT_STATUS) when torque exceeds the limit
                 - 2 or 'pause-motion': Pause motion when torque exceeds the limit
                 - 3 or 'clear-motion': Pause motion when torque exceeds the limit
                 - 4 or 'error':        Set robot in error state when torque exceeds the limit
