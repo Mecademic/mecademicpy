@@ -253,7 +253,7 @@ class _Message:
 
         data = ''
         if data_start != -1 and data_end != -1:
-            data = str(input[data_start:data_end])
+            data = input[data_start:data_end]
 
         return cls(id, data)
 
@@ -530,7 +530,9 @@ class _RobotEvents:
                 'on_connected',  # Don't abort a wait for "on_connected" (should be done by now anyways)
                 'on_status_updated',  # Don't abort a wait for "on_status_updated", that's what we're doing!
                 'on_error_reset',  # Don't abort a wait for "on_error_reset" because we got an error
-                'on_end_of_cycle'  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
+                'on_end_of_cycle',  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
+                'on_activate_recovery_mode',  # Don't abort a wait for "on_activate_recovery_mode", available in error
+                'on_deactivate_recovery_mode'  # Don't abort a wait for "on_deactivate_recovery_mode", available in error
             ],
             message=message)
 
