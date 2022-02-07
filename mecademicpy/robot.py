@@ -249,6 +249,7 @@ class _Message:
         id_start = input.find('[') + 1
         id_end = input.find(']', id_start)
         id = int(input[id_start:id_end])
+
         # Find next square brackets (contains data).
         data_start = input.find('[', id_end) + 1
         data_end = input.find(']', data_start)
@@ -532,7 +533,9 @@ class _RobotEvents:
                 'on_connected',  # Don't abort a wait for "on_connected" (should be done by now anyways)
                 'on_status_updated',  # Don't abort a wait for "on_status_updated", that's what we're doing!
                 'on_error_reset',  # Don't abort a wait for "on_error_reset" because we got an error
-                'on_end_of_cycle'  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
+                'on_end_of_cycle',  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
+                'on_activate_recovery_mode',  # Don't abort a wait for "on_activate_recovery_mode", available in error
+                'on_deactivate_recovery_mode'  # Don't abort a wait for "on_deactivate_recovery_mode", available in error
             ],
             message=message)
 
@@ -3261,7 +3264,7 @@ class Robot:
             Severity-level of exceeding torque limits.
             Available severity levels (see TORQUE_LIMIT_SEVERITIES):
                 - 0 or 'disabled':     Torque limits disabled (this by default when robot is activated)
-                - 1 or 'warning':      Send a warning event (MX_ST_EXCESSIVE_TRQ) when torque exceeds the limit
+                - 1 or 'warning':      Send a warning event (MX_ST_TORQUE_LIMIT_STATUS) when torque exceeds the limit
                 - 2 or 'pause-motion': Pause motion when torque exceeds the limit
                 - 3 or 'clear-motion': Pause motion when torque exceeds the limit
                 - 4 or 'error':        Set robot in error state when torque exceeds the limit
