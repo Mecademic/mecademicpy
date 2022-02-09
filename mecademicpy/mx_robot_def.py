@@ -285,6 +285,7 @@ MX_ST_UPGRADE_IN_PROGRESS = 3002
 MX_ST_CMD_TOO_LONG = 3003
 MX_ST_EOM = 3004
 MX_ST_ERROR_MOTION = 3005
+MX_ST_ERROR_DRIVE_COMM = 3006
 MX_ST_SEND_JOINT_RT = 3007
 MX_ST_COLLISION = 3008
 MX_ST_INIT_FAILED = 3009
@@ -596,6 +597,8 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MX_ST_EOM, "MX_ST_EOM", is_error=False),
     MX_ST_ERROR_MOTION:
     RobotStatusCodeInfo(MX_ST_ERROR_MOTION, "MX_ST_ERROR_MOTION", is_error=True),
+    MX_ST_ERROR_DRIVE_COMM:
+    RobotStatusCodeInfo(MX_ST_ERROR_DRIVE_COMM, "MX_ST_ERROR_DRIVE_COMM", is_error=True),
     MX_ST_INIT_FAILED:
     RobotStatusCodeInfo(MX_ST_INIT_FAILED, "MX_ST_INIT_FAILED", is_error=True),
     MX_ST_EOB:

@@ -4298,7 +4298,7 @@ class Robot:
         if response.id in mx_def.robot_status_code_info:
             code_info = mx_def.robot_status_code_info[response.id]
             if code_info.is_error:
-                self.logger.error(f'Received robot error {code_info.code} ({code_info.name})')
+                self.logger.error(f'Received robot error {code_info.code} ({code_info.name}): {response.data}')
         else:
             self.logger.debug(f'Received unknown robot status code {response.id}')
 
