@@ -781,7 +781,7 @@ class RobotInfo:
 
         """
         ROBOT_CONNECTION_STRING = \
-            r"Connected to (?P<model>\w+) ?R?(?P<revision>\d)?(?P<virtual>-virtual)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
+            r"Connected to (?P<model>[\w|-]+) ?R?(?P<revision>\d)?(?P<virtual>-virtual)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
 
         virtual = False
         try:
@@ -3745,10 +3745,26 @@ class Robot:
             raise CommunicationError('Connection error: {}'.format(response))
 
         # Attempt to parse robot return data.
-        self._robot_info = RobotInfo.from_command_response_string(response.data)
+        self._robot_info = self._parse_welcome_message(response.data)
 
         self._robot_rt_data = RobotRtData(self._robot_info.num_joints)
         self._robot_rt_data_stable = RobotRtData(self._robot_info.num_joints)
+
+    def _parse_welcome_message(self, message: str) -> RobotInfo:
+        """Parse the robot's connetion 'welcome' message and build RobotInfo from it
+           (identify robot model, version, etc.)
+
+        Parameters
+        ----------
+        message : str
+            Welcome string received from the robot
+
+        Returns
+        -------
+        RobotInfo
+            Robot information class built from the received welcome message
+        """
+        return RobotInfo.from_command_response_string(message)
 
     def _initialize_command_connection(self):
         """Attempt to connect to the command port of the Mecademic Robot.
