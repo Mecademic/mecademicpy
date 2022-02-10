@@ -21,6 +21,7 @@ import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.tools as tools
 
 from ._robot_trajectory_logger import _RobotTrajectoryLogger
+from .robot_trajectory_files import RobotTrajectories
 
 GRIPPER_OPEN = True
 GRIPPER_CLOSE = False
@@ -786,7 +787,7 @@ class RobotInfo:
 
         """
         ROBOT_CONNECTION_STRING = \
-            r"Connected to (?P<model>\w+) ?R?(?P<revision>\d)?(?P<virtual>-virtual)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
+            r"Connected to (?P<model>[\w|-]+) ?R?(?P<revision>\d)?(?P<virtual>-virtual)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
 
         virtual = False
         try:
@@ -959,7 +960,7 @@ class RobotRtData:
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g. (GetRtAccelerometer)
 
     rt_external_tool_status : TimestampedData
-        External tool status [exttool_type, activated, homed, error]. (GetRtExtToolStatus)
+        External tool status [sim tool type, physical tool type, activated, homed, error]. (GetRtExtToolStatus)
     rt_valve_state : TimestampedData
         Valve state [valve_opened[0], valve_opened[1]]. (GetRtValveState)
     rt_gripper_state : TimestampedData
@@ -996,6 +997,10 @@ class RobotRtData:
         self.rt_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
         self.rt_conf = TimestampedData.zeros(3)
         self.rt_conf_turn = TimestampedData.zeros(1)
+
+        # Another way of getting robot joint position using less-precise encoders.
+        # For robot production testing (otherwise use rt_joint_pos which is much more precise)
+        self.rt_abs_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
 
         # Contains dictionary of accelerometers stored in the robot indexed by joint number.
         # For example, Meca500 currently only reports the accelerometer in joint 5.
@@ -1452,6 +1457,8 @@ class Robot:
 
         self._tx_sync = 0
         self._rx_sync = 0
+
+        self._captured_trajectory = None
 
         self._is_initialized = True
 
@@ -3510,9 +3517,18 @@ class Robot:
                                                    record_time=record_time,
                                                    monitoring_interval=monitoringInterval)
 
-    def EndLogging(self) -> str:
+    def EndLogging(self, keep_captured_trajectory: bool = False) -> str:
         """Stop logging robot real-time data to file.
+        Parameters
+        ----------
+        keep_captured_trajectory: bool
+            Tells to keep a copy of captured trajectory that can be accessed later via
+            GetCapturedTrajectory()
 
+        Return
+        ------
+        string
+            Name of the zip file that contains robot information and captured trajectory
         """
         if self._file_logger is None:
             raise InvalidStateError('No existing logger to stop.')
@@ -3531,10 +3547,23 @@ class Robot:
                                                  skip_internal_check=True)
             response.wait(timeout=self.default_timeout)
 
+        if keep_captured_trajectory:
+            self._captured_trajectory = self._file_logger.robot_trajectories
+
         file_name = self._file_logger.end_log()
         self._file_logger = None
 
         return file_name
+
+    def GetCapturedTrajectory(self) -> RobotTrajectories:
+        """Returns the most recent robot trajectory captured using StartLogging or FileLogger functions.
+
+        Returns
+        -------
+        RobotTrajectories
+            Object that contains robot information and captured trajectory information
+        """
+        return self._captured_trajectory
 
     @contextlib.contextmanager
     def FileLogger(self,
@@ -3542,7 +3571,8 @@ class Robot:
                    file_name: str = None,
                    file_path: str = None,
                    fields: list = None,
-                   record_time: bool = True):
+                   record_time: bool = True,
+                   keep_captured_trajectory: bool = False):
         """Contextmanager interface for file logger.
 
         Parameters
@@ -3564,6 +3594,9 @@ class Robot:
         record_time : bool
             If true, current date and time will be recorded in file.
 
+        keep_captured_trajectory: bool
+            Tells to keep a copy of captured trajectory that can be accessed later via
+            GetCapturedTrajectory()
         """
         self.StartLogging(
             monitoringInterval,
@@ -3575,7 +3608,7 @@ class Robot:
         try:
             yield
         finally:
-            self.EndLogging()
+            self.EndLogging(keep_captured_trajectory)
 
     def UpdateRobot(self, firmware: str, address: str = None):
         """
@@ -3860,7 +3893,7 @@ class Robot:
                 self._send_command(f'SyncCmdQueue({self._tx_sync})')
             if event.is_set():
                 event.clear()
-                self._send_command(command)
+            self._send_command(command)
 
         # Wait until response is received (this will throw TimeoutException if appropriate)
         event.wait(timeout=timeout)
@@ -3999,10 +4032,26 @@ class Robot:
             raise CommunicationError('Connection error: {}'.format(response))
 
         # Attempt to parse robot return data.
-        self._robot_info = RobotInfo.from_command_response_string(response.data)
+        self._robot_info = self._parse_welcome_message(response.data)
 
         self._robot_rt_data = RobotRtData(self._robot_info.num_joints)
         self._robot_rt_data_stable = RobotRtData(self._robot_info.num_joints)
+
+    def _parse_welcome_message(self, message: str) -> RobotInfo:
+        """Parse the robot's connetion 'welcome' message and build RobotInfo from it
+           (identify robot model, version, etc.)
+
+        Parameters
+        ----------
+        message : str
+            Welcome string received from the robot
+
+        Returns
+        -------
+        RobotInfo
+            Robot information class built from the received welcome message
+        """
+        return RobotInfo.from_command_response_string(message)
 
     def _initialize_command_connection(self):
         """Attempt to connect to the command port of the Mecademic Robot.
@@ -4441,6 +4490,9 @@ class Robot:
                 self._robot_rt_data.rt_accelerometer[index].timestamp = timestamp
                 self._robot_rt_data.rt_accelerometer[index].data = measurements
 
+        elif response.id == mx_def.MX_ST_RT_ABS_JOINT_POS:
+            self._robot_rt_data.rt_abs_joint_pos.update_from_csv(response.data)
+
         elif response.id == mx_def.MX_ST_RT_WRF:
             self._robot_rt_data.rt_wrf.update_from_csv(response.data)
 
@@ -4789,6 +4841,8 @@ class Robot:
             if event_id == mx_def.MX_ST_RT_ACCELEROMETER:
                 for accelerometer in self._robot_rt_data.rt_accelerometer.values():
                     accelerometer.enabled = True
+            if event_id == mx_def.MX_ST_RT_ABS_JOINT_POS:
+                self._robot_rt_data.rt_abs_joint_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_EXTTOOL_STATUS:
                 self._robot_rt_data.rt_external_tool_status.enabled = True
             if event_id == mx_def.MX_ST_RT_VALVE_STATE:

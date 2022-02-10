@@ -438,6 +438,7 @@ def test_monitoring_connection(robot: mdr.Robot):
     robot._monitor_rx_queue.put(make_test_message(mx_def.MX_ST_RT_TARGET_CONF_TURN, range(2)))
 
     robot._monitor_rx_queue.put(make_test_message(mx_def.MX_ST_RT_JOINT_POS, range(7)))
+    robot._monitor_rx_queue.put(make_test_message(mx_def.MX_ST_RT_ABS_JOINT_POS, range(7)))
     robot._monitor_rx_queue.put(make_test_message(mx_def.MX_ST_RT_CART_POS, range(7)))
     robot._monitor_rx_queue.put(make_test_message(mx_def.MX_ST_RT_JOINT_VEL, range(7)))
     robot._monitor_rx_queue.put(make_test_message(mx_def.MX_ST_RT_JOINT_TORQ, range(7)))
@@ -459,6 +460,7 @@ def test_monitoring_connection(robot: mdr.Robot):
     assert robot._robot_rt_data.rt_target_conf_turn == make_test_data(mx_def.MX_ST_RT_TARGET_CONF_TURN, range(2))
 
     assert robot._robot_rt_data.rt_joint_pos == make_test_data(mx_def.MX_ST_RT_JOINT_POS, range(7))
+    assert robot._robot_rt_data.rt_abs_joint_pos == make_test_data(mx_def.MX_ST_RT_ABS_JOINT_POS, range(7))
     assert robot._robot_rt_data.rt_cart_pos == make_test_data(mx_def.MX_ST_RT_CART_POS, range(7))
     assert robot._robot_rt_data.rt_joint_vel == make_test_data(mx_def.MX_ST_RT_JOINT_VEL, range(7))
     assert robot._robot_rt_data.rt_joint_torq == make_test_data(mx_def.MX_ST_RT_JOINT_TORQ, range(7))
@@ -1184,6 +1186,8 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
 
             robot._command_rx_queue.put(
                 mdr._Message(mx_def.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(seed=16000, length=3)))
+
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_ABS_JOINT_POS, fake_string(seed=99, length=7)))
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, fake_string(seed=17, length=6)))
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, fake_string(seed=18, length=3)))
