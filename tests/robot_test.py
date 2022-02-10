@@ -821,9 +821,9 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM, '0'))
         robot.SetExtToolSim(mx_def.MX_EXT_TOOL_NONE)
 
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,0'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,1,0'))
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, '34,1,1'))
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, '35,1,1'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, '35,1,1,0,0'))
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_ON, ''))
         robot.SetRecoveryMode(True)
@@ -1189,13 +1189,16 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_ABS_JOINT_POS, fake_string(seed=99, length=7)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, fake_string(seed=20, length=5)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, fake_string(seed=21, length=3)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, fake_string(seed=22, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, fake_string(seed=17, length=6)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, fake_string(seed=18, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, fake_string(seed=19, length=5)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_WRF, fake_string(seed=17, length=7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TRF, fake_string(seed=18, length=7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CHECKPOINT, fake_string(seed=19, length=2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_FORCE, fake_string(seed=20, length=2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_POS, fake_string(seed=21, length=2)))
+
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_WRF, fake_string(seed=22, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TRF, fake_string(seed=23, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CHECKPOINT, fake_string(seed=24, length=2)))
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CYCLE_END, str(i * 100)))
 
