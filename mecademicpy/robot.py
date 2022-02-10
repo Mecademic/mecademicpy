@@ -960,7 +960,7 @@ class RobotRtData:
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g. (GetRtAccelerometer)
 
     rt_external_tool_status : TimestampedData
-        External tool status [exttool_type, activated, homed, error]. (GetRtExtToolStatus)
+        External tool status [sim tool type, physical tool type, activated, homed, error]. (GetRtExtToolStatus)
     rt_valve_state : TimestampedData
         Valve state [valve_opened[0], valve_opened[1]]. (GetRtValveState)
     rt_gripper_state : TimestampedData
