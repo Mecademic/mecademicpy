@@ -63,7 +63,7 @@ def connect_robot_helper(robot: mdr.Robot,
                          disconnect_on_exception=False,
                          enable_synchronous_mode=False):
 
-    file_path = pathlib.Path.cwd().joinpath('tests', 'robot_config')
+    file_path = pathlib.Path.cwd().joinpath('mecademicpy', 'tests', 'robot_config')
     yaml_file_full_path = pathlib.Path.joinpath(file_path, yaml_filename)
 
     with open(yaml_file_full_path, 'r') as file_stream:
@@ -868,19 +868,21 @@ def test_event_with_exception():
         exception_event.wait(timeout=0)
 
 
-# Test all motion commands except those in skip_list. Skipped commands do not follow standard motion command format, or
-# their arguments cannot be deduced from the function signature.
+# Test all motion commands except those in skip_commands or deprecated_commands. Skipped commands do not follow
+#  standard motion command format, or their arguments cannot be deduced from the function signature.
 def test_motion_commands(robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    skip_list = [
+    skip_commands = [
         'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
         'SetTorqueLimitsCfg'
     ]
 
+    deprecated_commands = ['MoveLinRelTRF', 'MoveLinRelWRF', 'MoveLinVelTRF', 'MoveLinVelWRF', 'SetTRF', 'SetWRF']
+
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
-        if name in skip_list:
+        if name in skip_commands or name in deprecated_commands:
             continue
         elif name.startswith('Move') or name.startswith('Set'):
             method = getattr(robot, name)

@@ -3,6 +3,7 @@ from __future__ import annotations
 from argparse import ArgumentError
 import contextlib
 import copy
+import deprecation
 import functools
 import ipaddress
 import json
@@ -12,6 +13,7 @@ import pathlib
 import queue
 import re
 import requests
+import pkg_resources
 import socket
 import threading
 import time
@@ -21,6 +23,8 @@ import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.tools as tools
 
 from ._robot_trajectory_logger import _RobotTrajectoryLogger
+
+__version__ = pkg_resources.get_distribution('mecademicpy').version
 
 GRIPPER_OPEN = True
 GRIPPER_CLOSE = False
@@ -534,8 +538,8 @@ class _RobotEvents:
                 'on_status_updated',  # Don't abort a wait for "on_status_updated", that's what we're doing!
                 'on_error_reset',  # Don't abort a wait for "on_error_reset" because we got an error
                 'on_end_of_cycle',  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
-                'on_activate_recovery_mode',  # Don't abort a wait for "on_activate_recovery_mode", available in error
-                'on_deactivate_recovery_mode'  # Don't abort a wait for "on_deactivate_recovery_mode", available in error
+                'on_activate_recovery_mode',  # Don't abort wait for "on_activate_recovery_mode", available in error
+                'on_deactivate_recovery_mode'  # Don't abort wait for "on_deactivate_recovery_mode", available in error
             ],
             message=message)
 
@@ -2086,8 +2090,18 @@ class Robot:
         """
         self._send_motion_command('MoveLin', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'MoveLinRelTrf' function instead")
     @disconnect_on_exception
     def MoveLinRelTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use MoveLinRelTrf instead.
+        """
+        self.MoveLinRelTrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def MoveLinRelTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Linearly move robot's tool to a Cartesian position relative to current TRF position.
 
         Parameters
@@ -2098,10 +2112,21 @@ class Robot:
             Desired orientation change in deg.
 
         """
-        self._send_motion_command('MoveLinRelTRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('MoveLinRelTrf', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'MoveLinRelWrf' function instead")
     @disconnect_on_exception
     def MoveLinRelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use MoveLinRelWrf instead.
+        """
+        print(f"x {x}, y {y}, z {z}, alpha {alpha}, beta {beta}, gamma {gamma}")
+        self.MoveLinRelWrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def MoveLinRelWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Linearly move robot's tool to a Cartesian position relative to a reference frame that has the same
         orientation.
 
@@ -2113,10 +2138,21 @@ class Robot:
             Desired orientation change in deg.
 
         """
-        self._send_motion_command('MoveLinRelWRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('MoveLinRelWrf', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'MoveLinVelTrf' function instead")
     @disconnect_on_exception
     def MoveLinVelTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use MoveLinVelTrf instead
+
+        """
+        self.MoveLinVelTrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def MoveLinVelTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Move robot's by Cartesian velocity relative to the TRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).
@@ -2129,8 +2165,12 @@ class Robot:
             Desired angular velocity in degrees/s.
 
         """
-        self._send_motion_command('MoveLinVelTRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('MoveLinVelTrf', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'MoveLinVelWrf' function instead")
     @disconnect_on_exception
     def MoveLinVelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Move robot's by Cartesian velocity relative to the WRF.
@@ -2145,7 +2185,23 @@ class Robot:
             Desired angular velocity in degrees/s.
 
         """
-        self._send_motion_command('MoveLinVelWRF', [x, y, z, alpha, beta, gamma])
+        self.MoveLinVelWrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def MoveLinVelWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Move robot's by Cartesian velocity relative to the WRF.
+
+           Joints will move for a time controlled by velocity timeout (SetVelTimeout).
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired velocity in mm/s.
+        alpha, beta, gamma
+            Desired angular velocity in degrees/s.
+
+        """
+        self._send_motion_command('MoveLinVelWrf', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def SetVelTimeout(self, t: float):
@@ -2496,8 +2552,19 @@ class Robot:
         """
         self._send_motion_command('SetJointVel', [p])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'SetTrf' function instead")
     @disconnect_on_exception
     def SetTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use SetTrf instead
+
+        """
+        self.SetTrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def SetTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Set the TRF (tool reference frame) Cartesian position.
 
         Parameters
@@ -2508,10 +2575,21 @@ class Robot:
             Desired reference orientation in degrees.
 
         """
-        self._send_motion_command('SetTRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('SetTrf', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'SetWrf' function instead")
     @disconnect_on_exception
     def SetWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use SetWrf instead
+
+        """
+        self.SetWrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def SetWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Set the WRF (world reference frame) Cartesian position.
 
         Parameters
@@ -2522,7 +2600,7 @@ class Robot:
             Desired reference orientation in degrees.
 
         """
-        self._send_motion_command('SetWRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('SetWrf', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def SetCheckpoint(self, n: int) -> InterruptableEvent:
