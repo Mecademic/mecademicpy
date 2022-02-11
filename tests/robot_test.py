@@ -878,7 +878,10 @@ def test_motion_commands(robot: mdr.Robot):
         'SetTorqueLimitsCfg'
     ]
 
-    deprecated_commands = ['MoveLinRelTRF', 'MoveLinRelWRF', 'MoveLinVelTRF', 'MoveLinVelWRF', 'SetTRF', 'SetWRF']
+    # List of methods that will be deprecated. The deprecation decorator breaks the way we use to test those methods.
+    deprecated_commands = [
+        'MoveLinRelTRF', 'MoveLinRelWRF', 'MoveLinVelTRF', 'MoveLinVelWRF', 'SetRTC', 'SetTRF', 'SetWRF'
+    ]
 
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
