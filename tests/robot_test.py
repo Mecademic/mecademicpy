@@ -63,7 +63,7 @@ def connect_robot_helper(robot: mdr.Robot,
                          disconnect_on_exception=False,
                          enable_synchronous_mode=False):
 
-    file_path = pathlib.Path.cwd().joinpath('mecademicpy', 'tests', 'robot_config')
+    file_path = pathlib.Path.cwd().joinpath('tests', 'robot_config')
     yaml_file_full_path = pathlib.Path.joinpath(file_path, yaml_filename)
 
     with open(yaml_file_full_path, 'r') as file_stream:
