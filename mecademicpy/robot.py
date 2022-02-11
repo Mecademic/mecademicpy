@@ -2122,7 +2122,6 @@ class Robot:
     def MoveLinRelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Deprecated use MoveLinRelWrf instead.
         """
-        print(f"x {x}, y {y}, z {z}, alpha {alpha}, beta {beta}, gamma {gamma}")
         self.MoveLinRelWrf(x, y, z, alpha, beta, gamma)
 
     @disconnect_on_exception
@@ -2173,16 +2172,7 @@ class Robot:
                             details="Use the 'MoveLinVelWrf' function instead")
     @disconnect_on_exception
     def MoveLinVelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
-        """Move robot's by Cartesian velocity relative to the WRF.
-
-           Joints will move for a time controlled by velocity timeout (SetVelTimeout).
-
-        Parameters
-        ----------
-        x, y, z : float
-            Desired velocity in mm/s.
-        alpha, beta, gamma
-            Desired angular velocity in degrees/s.
+        """Deprecated use MoveLinVelWrf instead
 
         """
         self.MoveLinVelWrf(x, y, z, alpha, beta, gamma)
@@ -3255,8 +3245,18 @@ class Robot:
                 events = list(events)
             self._send_command('SetRealTimeMonitoring', events)
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'SetRtc' function instead")
     @disconnect_on_exception
     def SetRTC(self, t: int):
+        """Deprecated use SetRtc instead.
+        """
+        self.SetRtc(t)
+
+    @disconnect_on_exception
+    def SetRtc(self, t: int):
         """Sets the rate at which the monitoring port sends data.
 
         Parameters
@@ -3267,7 +3267,7 @@ class Robot:
         """
         with self._main_lock:
             self._check_internal_states()
-            self._send_command('SetRTC', [t])
+            self._send_command('SetRtc', [t])
 
     @disconnect_on_exception
     def ActivateSim(self):
