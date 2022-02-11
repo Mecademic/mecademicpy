@@ -917,7 +917,7 @@ class RobotRtData:
     """Class for storing the internal real-time data of a Mecademic robot.
 
     Most real-time data query methods from the programming guide were not implemented explicitly in Python.
-    The information, however, are avaialble using the GetRobotRtData() method.
+    The information, however, are available using the GetRobotRtData() method.
     The attribute corresponding programming method is shown between parentheses.
 
     The frequency and availability of real-time data depends on the monitoring interval and which monitoring
@@ -972,11 +972,11 @@ class RobotRtData:
 
 
     rt_wrf : TimestampedData
-        Current definition of the WRF w.r.t. the BRF with timestamp. Cartesian data are in mm, Eular angles in degrees.
-        [cartesian coordonates x, y, z, Eular angles omega-x, omega-y, omega-z] (GetRtWrf)
+        Current definition of the WRF w.r.t. the BRF with timestamp. Cartesian data are in mm, Euler angles in degrees.
+        [cartesian coordinates x, y, z, Euler angles omega-x, omega-y, omega-z] (GetRtWrf)
     rt_trf : TimestampedData
-        Current definition of the TRF w.r.t. the FRF with timestamp. cartesian data are in mm, Eular angles in degrees.
-        [cartesian coordonates x, y, z, Eular angles omega-x, omega-y, omega-z] (GetRtTrf)
+        Current definition of the TRF w.r.t. the FRF with timestamp. cartesian data are in mm, Euler angles in degrees.
+        [cartesian coordinates x, y, z, Euler angles omega-x, omega-y, omega-z] (GetRtTrf)
     rt_checkpoint : TimestampedData
         Last executed checkpoint with timestamp. (GetCheckpoint)
 """
@@ -2389,7 +2389,7 @@ class Robot:
         """Move the gripper to a target position.
            If the target specified is a boolean, it indicates if the target position is the opened (True, GRIPPER_OPEN)
            or closed (False, GRIPPER_CLOSE) position.
-           Otherwhise the target position indicates the opening of the gripper, in mm from the most closed position.
+           Otherwise the target position indicates the opening of the gripper, in mm from the most closed position.
 
         Corresponds to text API calls "GripperOpen" / "GripperClose" / "MoveGripper".
 
@@ -3417,8 +3417,8 @@ class Robot:
 
         Returns
         -------
-        Tupple [close_pos, open_pos]
-            Tupple indicating the close and open position of the gripper, in mm from the completely closed position
+        Tuple [close_pos, open_pos]
+            Tuple indicating the close and open position of the gripper, in mm from the completely closed position
             detected during homing.
 
         """
