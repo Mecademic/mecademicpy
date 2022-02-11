@@ -868,19 +868,24 @@ def test_event_with_exception():
         exception_event.wait(timeout=0)
 
 
-# Test all motion commands except those in skip_list. Skipped commands do not follow standard motion command format, or
-# their arguments cannot be deduced from the function signature.
+# Test all motion commands except those in skip_commands or deprecated_commands. Skipped commands do not follow
+#  standard motion command format, or their arguments cannot be deduced from the function signature.
 def test_motion_commands(robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    skip_list = [
+    skip_commands = [
         'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
         'SetTorqueLimitsCfg'
     ]
 
+    # List of methods that will be deprecated. The deprecation decorator breaks the way we use to test those methods.
+    deprecated_commands = [
+        'MoveLinRelTRF', 'MoveLinRelWRF', 'MoveLinVelTRF', 'MoveLinVelWRF', 'SetRTC', 'SetTRF', 'SetWRF'
+    ]
+
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
-        if name in skip_list:
+        if name in skip_commands or name in deprecated_commands:
             continue
         elif name.startswith('Move') or name.startswith('Set'):
             method = getattr(robot, name)

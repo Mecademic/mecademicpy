@@ -6,7 +6,7 @@ If you have any technical questions, please use the technical support form on ou
 
 Mecademic Inc.~assumes no responsibility for any errors or omissions in this document.
 
-Copyright &copy; 2021 by Mecademic Inc.
+Copyright &copy; 2022 by Mecademic Inc.
 
 ---
 
