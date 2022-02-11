@@ -172,7 +172,7 @@ class RobotCallbacks:
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
         on_end_of_cycle : function object
-            Function to be called each time end of cycle is reached""".
+            Function to be called each time end of cycle is reached."""
 
     def __init__(self):
         self.on_connected = None
@@ -1111,6 +1111,7 @@ class GripperStatus:
         self.target_pos_reached = False
         self.error_status = False
         self.overload_error = False
+
 
 class ExtToolStatus:
     """Class for storing the Mecademic robot's external tool status.
