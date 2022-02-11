@@ -963,11 +963,12 @@ class RobotRtData:
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g. (GetRtAccelerometer)
 
     rt_external_tool_status : TimestampedData
-        External tool status [exttool_type, activated, homed, error]. (GetRtExtToolStatus)
+        External tool status [sim_tool_type, physical_tool_type, homing_state, error_status, overload_error].
+        (GetRtExtToolStatus)
     rt_valve_state : TimestampedData
         Valve state [valve_opened[0], valve_opened[1]]. (GetRtValveState)
     rt_gripper_state : TimestampedData
-        Gripper state [holding_part, target_pos_reached]. (GetRtGripperState)
+        Gripper state [holding_part, target_pos_reached, opened, closed]. (GetRtGripperState)
     rt_gripper_force : TimestampedData
         Gripper force in % of maximum force. (GetRtGripperForce)
     rt_gripper_pos : TimestampedData. (GetRtValveState)
@@ -1219,7 +1220,7 @@ class ValveState:
     Attributes
     ----------
     valve_opened : list[int]
-        List of valve state, 1 if valve is opened, 0 otherwise.
+        List of valve state: mx_def.MX_VALVE_STATE_CLOSE or mx_def.MX_VALVE_STATE_OPENED
 """
 
     def __init__(self):
@@ -1928,7 +1929,7 @@ class Robot:
         return can_move
 
     def SetSynchronousMode(self, sync_mode: bool = True):
-        """Changes synchronous mode option. See
+        """Changes synchronous mode option.
            If True, function calls in this class will be blocking until the robot has finished executing the
            command. Note that no blending is possible in this mode.
            If False, function calls in this class will post requests to the robot and return immediately before
