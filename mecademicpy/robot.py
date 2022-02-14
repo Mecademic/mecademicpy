@@ -2438,7 +2438,7 @@ class Robot:
 
         if self._enable_synchronous_mode:
             gripper_state = self.GetRtGripperState(synchronous_update=True)
-            if gripper_state.opened:
+            if gripper_state.opened and gripper_state.target_pos_reached:
                 return
             self.WaitGripperMoveCompletion()
 
@@ -2454,7 +2454,7 @@ class Robot:
 
         if self._enable_synchronous_mode:
             gripper_state = self.GetRtGripperState(synchronous_update=True)
-            if gripper_state.closed:
+            if gripper_state.closed and gripper_state.target_pos_reached:
                 return
             self.WaitGripperMoveCompletion()
 
