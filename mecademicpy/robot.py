@@ -809,6 +809,22 @@ class RobotInfo:
             raise ValueError(f'Could not parse robot info string "{input_string}", error: {exception}')
 
 
+class UpdateProgress:
+    """ Class containing firmware update progress information
+
+    Attributes
+    ----------
+    complete : bool
+        Firmware update process state
+    progress : string
+        Update progress message received from robot
+"""
+
+    def __init__(self) -> None:
+        self.complete: bool = False
+        self.progress: str = ''
+
+
 class TimestampedData:
     """ Class for storing timestamped data (real-time data received from the robot)
 
@@ -3695,6 +3711,71 @@ class Robot:
         finally:
             self.EndLogging()
 
+    def _check_update_progress(self, robot_url: str, update_progress: UpdateProgress):
+        """
+        Check progress of firmware update.
+
+        Parameters
+        ----------
+        robot_url: string
+            Robot URL
+
+        update_progress: UpdateProgress
+            Update progress information object
+
+        """
+        update_progress.complete = False
+        request_get = requests.get(robot_url, 'update', timeout=10)
+        try:
+            request_get.raise_for_status()
+        except requests.exceptions as e:
+            self.logger.error(f'Upgrade get request error: {e}')
+            raise
+
+        # get only correct answer (http code 200)
+        if request_get.status_code == 200:
+            request_response = request_get.text
+        else:
+            request_response = None
+        # while the json file is note created, get function will return 0
+        if request_response is None or request_response == '0':
+            return
+
+        try:
+            request_answer = json.loads(request_response)
+        except Exception as e:
+            self.logger.info(f'Error retrieving json from request_response: {e}')
+            return
+
+        if not request_answer:
+            self.logger.info(f'Answer is empty')
+            return
+
+        if request_answer['STATUS']:
+            status_code = int(request_answer['STATUS']['Code'])
+            status_msg = request_answer['STATUS']['MSG']
+
+        if status_code in [0, 1]:
+            keys = sorted(request_answer['LOG'].keys())
+            if keys:
+                previous_progress = update_progress.progress
+                update_progress.progress = request_answer['LOG'][keys[-1]]
+                new_progress = update_progress.progress.replace(previous_progress, '')
+                if '#' in new_progress:
+                    self.logger.info(new_progress)
+                elif '100%' in new_progress:
+                    self.logger.info(new_progress)
+                else:
+                    self.logger.debug(new_progress)
+            if status_code == 0:
+                self.logger.info(f'status_msg {status_msg}')
+                update_progress.complete = True
+                return
+        else:
+            error_message = f'error while updating: {status_msg}'
+            self.logger.error(error_message)
+            raise RuntimeError(error_message)
+
     def UpdateRobot(self, firmware: str, address: str = None):
         """
         Install a new firmware and verifies robot version afterward.
@@ -3766,70 +3847,23 @@ class Robot:
             raise RuntimeError(error_message)
 
         self.logger.info(f"Upgrading the robot")
-        update_done = False
-        progress = ''
-        last_progress = ''
+        update_progress = UpdateProgress()
 
         start_time = time.monotonic()
-        while not update_done:
+        while True:
+
             # Give time to the web server restart, the function doesn't handle well errors.
             time.sleep(2)
 
-            request_get = requests.get(robot_url, 'update', timeout=10)
-            try:
-                request_get.raise_for_status()
-            except requests.exceptions as e:
-                self.logger.error(f'Upgrade get request error: {e}')
-                raise
-
-            # get only correct answer (http code 200)
-            if request_get.status_code == 200:
-                request_response = request_get.text
-            else:
-                request_response = None
-            # while the json file is note created, get function will return 0
-            if request_response is None or request_response == '0':
-                continue
-
-            try:
-                request_answer = json.loads(request_response)
-            except Exception as e:
-                self.logger.info(f'Error retrieving json from request_response: {e}')
-                continue
-
-            if not request_answer:
-                self.logger.info(f'Answer is empty')
-                continue
-
-            if request_answer['STATUS']:
-                status_code = int(request_answer['STATUS']['Code'])
-                status_msg = request_answer['STATUS']['MSG']
-
-            if status_code in [0, 1]:
-                keys = sorted(request_answer['LOG'].keys())
-                if keys:
-                    last_progress = progress
-                    progress = request_answer['LOG'][keys[-1]]
-                    new_progress = progress.replace(last_progress, '')
-                    if '#' in new_progress:
-                        self.logger.info(new_progress)
-                    elif '100%' in new_progress:
-                        self.logger.info(new_progress)
-                    else:
-                        self.logger.debug(new_progress)
-                if status_code == 0:
-                    update_done = True
-                    self.logger.info(f'status_msg {status_msg}')
-            else:
-                error_message = f"error while updating: {status_msg}"
-                self.logger.error(error_message)
-                raise RuntimeError(error_message)
-
+            self._check_update_progress(robot_url, update_progress)
+            if update_progress.complete:
+                self.logger.info(f"Firmware update complete")
+                break
             if time.monotonic() > start_time + self._UPDATE_TIMEOUT:
                 error_message = f"Timeout while waiting for update done response, after {self._UPDATE_TIMEOUT} seconds"
                 raise TimeoutError(error_message)
 
-        self.logger.info(f"Update completed, waiting for robot to reboot")
+        self.logger.info(f"Waiting for robot to reboot")
 
         # need to wait to make sure the robot shutdown before attempting to ping it.
         time.sleep(15)
