@@ -643,10 +643,10 @@ class RobotVersion:
 
     REGEX_VERSION_BUILD = r"(?P<version>\d+\.\d+\.\d+)\.?(?P<build>\d+)?-?(?P<extra>[0-9a-zA-Z_-]*).*"
 
-    def __init__(self, version):
+    def __init__(self, version: str):
         """Creates
 
-        :param version: version of firmware. Supports multiple version formats
+        :param version: version of firmware. See update_version for supported formats
         """
         self.full_version = version
         self.update_version(self.full_version)
@@ -728,10 +728,12 @@ class RobotInfo:
         Robot revision.
     is_virtual : bool
         True if is a virtual robot.
-    version : RobotVersion object
-        robot firmware revision number.
+    version : str
+        robot firmware revision number as received from the connection string.
     serial : string
         Serial identifier of robot.
+    ip_address : string
+        IP address of this robot.
     rt_message_capable : bool
         True if robot is capable of sending real-time monitoring messages.
     rt_on_ctrl_port_capable : bool
@@ -748,13 +750,14 @@ class RobotInfo:
                  model: str = None,
                  revision: int = None,
                  is_virtual: bool = None,
-                 version: RobotVersion = None,
+                 version: str = None,
                  serial: str = None):
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
         self.version = RobotVersion(version)
         self.serial = serial
+        self.ip_address = None  # Set later
         self.rt_message_capable = False
         self.rt_on_ctrl_port_capable = False
 
@@ -1858,6 +1861,9 @@ class Robot:
                 with self._main_lock:
                     self._initialize_monitoring_socket(timeout)
                     self._initialize_monitoring_connection()
+
+            # Now that we're connected, let's update _robot_info with the connected Ip address
+            self._robot_info.ip_address = address
 
             if self._robot_info.version.major < 8:
                 self.logger.warning('Python API not supported for firmware under version 8')
@@ -4095,8 +4101,11 @@ class Robot:
         """
         response = _Message(None, None)
 
+        # Wait for connection string (MX_ST_CONNECTED).
+        # Alternatively, wait for status robot (MX_ST_GET_STATUS_ROBOT) since older robots will not post the
+        # connection string on the monitoring port
         start = time.time()
-        while response.id != mx_def.MX_ST_CONNECTED:
+        while response.id != mx_def.MX_ST_CONNECTED and response.id != mx_def.MX_ST_GET_STATUS_ROBOT:
             try:
                 response = message_queue.get(block=True, timeout=self.default_timeout)
             except queue.Empty:
@@ -4112,12 +4121,16 @@ class Robot:
                 self.logger.error('No connect message received within timeout interval.')
                 break
 
-        if response.id != mx_def.MX_ST_CONNECTED:
+        if response.id == mx_def.MX_ST_CONNECTED:
+            # Attempt to parse robot return data.
+            self._robot_info = RobotInfo.from_command_response_string(response.data)
+        elif response.id == mx_def.MX_ST_GET_STATUS_ROBOT:
+            # This means we're connected to a Legacy robot that does not send MX_ST_CONNECTED on monitoring port.
+            # We will not be able to deduce robot version. Assume some 8.x version
+            self._robot_info = RobotInfo(model='Meca500', revision=3, version='8.0.0.0-unknown-version')
+        else:
             self.logger.error('Connection error: {}'.format(response))
             raise CommunicationError('Connection error: {}'.format(response))
-
-        # Attempt to parse robot return data.
-        self._robot_info = RobotInfo.from_command_response_string(response.data)
 
         self._robot_rt_data = RobotRtData(self._robot_info.num_joints)
         self._robot_rt_data_stable = RobotRtData(self._robot_info.num_joints)
