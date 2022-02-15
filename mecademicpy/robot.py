@@ -732,6 +732,8 @@ class RobotInfo:
         robot firmware revision number as received from the connection string.
     serial : string
         Serial identifier of robot.
+    ip_address : string
+        IP address of this robot.
     rt_message_capable : bool
         True if robot is capable of sending real-time monitoring messages.
     rt_on_ctrl_port_capable : bool
@@ -755,6 +757,7 @@ class RobotInfo:
         self.is_virtual = is_virtual
         self.version = RobotVersion(version)
         self.serial = serial
+        self.ip_address = None  # Set later
         self.rt_message_capable = False
         self.rt_on_ctrl_port_capable = False
 
@@ -1858,6 +1861,9 @@ class Robot:
                 with self._main_lock:
                     self._initialize_monitoring_socket(timeout)
                     self._initialize_monitoring_connection()
+
+            # Now that we're connected, let's update _robot_info with the connected Ip address
+            self._robot_info.ip_address = address
 
             if self._robot_info.version.major < 8:
                 self.logger.warning('Python API not supported for firmware under version 8')
