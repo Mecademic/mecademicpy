@@ -13,11 +13,14 @@ Copyright &copy; 2022 by Mecademic Inc.
 ## Version 1.2.0 (February 2022)
 
 **Features**
-- Update API to support new features from 9.1 robot firmware
+- Update API to support new features in 9.1 robot firmware
 
 **Fixes**
-- Can't connect in monitoring mode to a robot with version 8.3
-- UpdateRobot may never timeouts when it should
+- Fix connection in monitoring mode for robot running version 8.3
+- Fix UpdateRobot that didn't always timeout
+- Streamlining robot method cases
+- Fix GetRtExtToolStatus data that was not always included on the connect
+- Add 'deprecation' module requirement
 
 ## Version 1.1.0 (November 2021)
 
