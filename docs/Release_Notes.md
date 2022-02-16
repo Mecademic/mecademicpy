@@ -10,6 +10,15 @@ Copyright &copy; 2022 by Mecademic Inc.
 
 ---
 
+## Version 1.2.0 (February 2022)
+
+**Features**
+- Update API to support new features from 9.1 robot firmware
+
+**Fixes**
+- Can't connect in monitoring mode to a robot with version 8.3
+- UpdateRobot may never timeouts when it should
+
 ## Version 1.1.0 (November 2021)
 
 **Features**
