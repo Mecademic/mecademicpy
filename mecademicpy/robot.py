@@ -3378,6 +3378,10 @@ class Robot:
            11: mx_def.MX_EXT_TOOL_MEGP25_LONG
            20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
         """
+        # Firmware version 8.4 and older only support 1 as tool type
+        if sim_ext_tool_type != mx_def.MX_EXT_TOOL_NONE and not self._robot_info.gripper_pos_ctrl_capable:
+            sim_ext_tool_type = 1
+
         with self._main_lock:
             self._check_internal_states()
             self._send_command('SetExtToolSim', [sim_ext_tool_type])
