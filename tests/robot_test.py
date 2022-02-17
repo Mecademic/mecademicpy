@@ -261,10 +261,11 @@ def test_7_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.patch == 6
     assert not robot.GetRobotInfo().rt_message_capable
     assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
-    assert robot.GetRobotInfo().serial is None
+    assert not robot.GetRobotInfo().gripper_pos_ctrl_capable
+    assert robot.GetRobotInfo().serial is ''
 
 
-# Test that we can connect to a M500 robot running older version 8.3
+# Test that we can connect to a M500 robot running version 8.3
 def test_8_3_connection(robot: mdr.Robot):
     cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v8_3.yml')
@@ -275,10 +276,11 @@ def test_8_3_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.minor == 3
     assert not robot.GetRobotInfo().rt_message_capable
     assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert not robot.GetRobotInfo().gripper_pos_ctrl_capable
     assert robot.GetRobotInfo().serial == 'm500-83'
 
 
-# Test that we can connect to a M500 robot running older version 8.4
+# Test that we can connect to a M500 robot running version 8.4
 def test_8_4_connection(robot: mdr.Robot):
     cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v8_4.yml')
@@ -289,11 +291,12 @@ def test_8_4_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.minor == 4
     assert robot.GetRobotInfo().rt_message_capable
     assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert not robot.GetRobotInfo().gripper_pos_ctrl_capable
     assert robot.GetRobotInfo().serial == 'm500-84'
 
 
-# Test that we can connect to a M500 robot running older version 8.4
-def test_9_0_connection(robot: mdr.Robot):
+# Test that we can connect to a M500 robot running version 9.1
+def test_9_1_connection(robot: mdr.Robot):
     cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
     assert not robot.GetStatusRobot().activation_state
@@ -305,6 +308,7 @@ def test_9_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.build == 1213
     assert robot.GetRobotInfo().rt_message_capable
     assert robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert robot.GetRobotInfo().gripper_pos_ctrl_capable
     assert robot.GetRobotInfo().serial == 'm500-99999999'
 
 
