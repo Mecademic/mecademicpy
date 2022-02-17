@@ -2375,7 +2375,7 @@ class Robot:
         timeout : float
             Maximum time to spend waiting for the move to complete (in seconds).
         """
-        if self._robot_info.gripper_pos_ctrl_capable:
+        if not self._robot_info.gripper_pos_ctrl_capable:
             raise NotImplementedError(f"Unsupported method for this firmware version")
 
         if timeout is not None and timeout <= 0:
