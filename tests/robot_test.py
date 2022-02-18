@@ -261,10 +261,11 @@ def test_7_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.patch == 6
     assert not robot.GetRobotInfo().rt_message_capable
     assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
-    assert robot.GetRobotInfo().serial is None
+    assert not robot.GetRobotInfo().gripper_pos_ctrl_capable
+    assert robot.GetRobotInfo().serial is ''
 
 
-# Test that we can connect to a M500 robot running older version 8.3
+# Test that we can connect to a M500 robot running version 8.3
 def test_8_3_connection(robot: mdr.Robot):
     cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v8_3.yml')
@@ -275,10 +276,11 @@ def test_8_3_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.minor == 3
     assert not robot.GetRobotInfo().rt_message_capable
     assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert not robot.GetRobotInfo().gripper_pos_ctrl_capable
     assert robot.GetRobotInfo().serial == 'm500-83'
 
 
-# Test that we can connect to a M500 robot running older version 8.4
+# Test that we can connect to a M500 robot running version 8.4
 def test_8_4_connection(robot: mdr.Robot):
     cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v8_4.yml')
@@ -289,11 +291,12 @@ def test_8_4_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.minor == 4
     assert robot.GetRobotInfo().rt_message_capable
     assert not robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert not robot.GetRobotInfo().gripper_pos_ctrl_capable
     assert robot.GetRobotInfo().serial == 'm500-84'
 
 
-# Test that we can connect to a M500 robot running older version 8.4
-def test_9_0_connection(robot: mdr.Robot):
+# Test that we can connect to a M500 robot running version 9.1
+def test_9_1_connection(robot: mdr.Robot):
     cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
     assert not robot.GetStatusRobot().activation_state
@@ -305,6 +308,7 @@ def test_9_0_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.build == 1213
     assert robot.GetRobotInfo().rt_message_capable
     assert robot.GetRobotInfo().rt_on_ctrl_port_capable
+    assert robot.GetRobotInfo().gripper_pos_ctrl_capable
     assert robot.GetRobotInfo().serial == 'm500-99999999'
 
 
@@ -819,9 +823,9 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_EXTTOOL_SIM, '0'))
         robot.SetExtToolSim(mx_def.MX_EXT_TOOL_NONE)
 
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,0'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,1,0'))
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, '34,1,1'))
-        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, '35,1,1'))
+        robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, '35,1,1,0,0'))
 
         robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RECOVERY_MODE_ON, ''))
         robot.SetRecoveryMode(True)
@@ -868,19 +872,24 @@ def test_event_with_exception():
         exception_event.wait(timeout=0)
 
 
-# Test all motion commands except those in skip_list. Skipped commands do not follow standard motion command format, or
-# their arguments cannot be deduced from the function signature.
+# Test all motion commands except those in skip_commands or deprecated_commands. Skipped commands do not follow
+#  standard motion command format, or their arguments cannot be deduced from the function signature.
 def test_motion_commands(robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    skip_list = [
+    skip_commands = [
         'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
         'SetTorqueLimitsCfg'
     ]
 
+    # List of methods that will be deprecated. The deprecation decorator breaks the way we use to test those methods.
+    deprecated_commands = [
+        'MoveLinRelTRF', 'MoveLinRelWRF', 'MoveLinVelTRF', 'MoveLinVelWRF', 'SetRTC', 'SetTRF', 'SetWRF'
+    ]
+
     # Run all move-type commands in API and check that the text_command matches.
     for name in dir(robot):
-        if name in skip_list:
+        if name in skip_commands or name in deprecated_commands:
             continue
         elif name.startswith('Move') or name.startswith('Set'):
             method = getattr(robot, name)
@@ -1185,13 +1194,16 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
             robot._command_rx_queue.put(
                 mdr._Message(mx_def.MX_ST_RT_ACCELEROMETER, '16,5,' + fake_string(seed=16000, length=3)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, fake_string(seed=20, length=5)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, fake_string(seed=21, length=3)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, fake_string(seed=22, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_EXTTOOL_STATUS, fake_string(seed=17, length=6)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_VALVE_STATE, fake_string(seed=18, length=3)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_STATE, fake_string(seed=19, length=5)))
 
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_WRF, fake_string(seed=17, length=7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TRF, fake_string(seed=18, length=7)))
-            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CHECKPOINT, fake_string(seed=19, length=2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_FORCE, fake_string(seed=20, length=2)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_GRIPPER_POS, fake_string(seed=21, length=2)))
+
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_WRF, fake_string(seed=22, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_TRF, fake_string(seed=23, length=7)))
+            robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CHECKPOINT, fake_string(seed=24, length=2)))
 
             robot._command_rx_queue.put(mdr._Message(mx_def.MX_ST_RT_CYCLE_END, str(i * 100)))
 

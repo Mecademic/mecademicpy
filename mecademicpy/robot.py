@@ -3,6 +3,7 @@ from __future__ import annotations
 from argparse import ArgumentError
 import contextlib
 import copy
+import deprecation
 import functools
 import ipaddress
 import json
@@ -12,17 +13,23 @@ import pathlib
 import queue
 import re
 import requests
+import pkg_resources
 import socket
 import threading
 import time
+from typing import Tuple, Union
 
 import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.tools as tools
 
 from ._robot_trajectory_logger import _RobotTrajectoryLogger
 
+__version__ = pkg_resources.get_distribution('mecademicpy').version
+
 GRIPPER_OPEN = True
 GRIPPER_CLOSE = False
+
+DEFAULT_WAIT_TIMEOUT = 10
 
 # Available levels for SetTorqueLimitsCfg
 TORQUE_LIMIT_SEVERITIES = {'disabled': 0, 'warning': 1, 'pause-motion': 2, 'clear-motion': 3, 'error': 4}
@@ -169,7 +176,7 @@ class RobotCallbacks:
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
         on_end_of_cycle : function object
-            Function to be called each time end of cycle is reached"""
+            Function to be called each time end of cycle is reached."""
 
     def __init__(self):
         self.on_connected = None
@@ -246,6 +253,7 @@ class _Message:
         id_start = input.find('[') + 1
         id_end = input.find(']', id_start)
         id = int(input[id_start:id_end])
+
         # Find next square brackets (contains data).
         data_start = input.find('[', id_end) + 1
         data_end = input.find(']', data_start)
@@ -258,7 +266,8 @@ class _Message:
 
 
 class InterruptableEvent:
-    """Extend default event class to also be able to unblock and raise an exception.
+    """Extend default event class to also be able to unblock and raise an exception in case the event becomes
+       irrelevant and will not occur (for example: Waiting on a checkpoint when robot is in error)
 
     Attributes
     ----------
@@ -271,7 +280,7 @@ class InterruptableEvent:
     _interrupted : boolean
         If true, event is in an error state.
     _interrupted_msg : string
-        User message that explains the reason of interruption
+        User message that explains the reason of interruption.
 """
 
     def __init__(self, id=None, data=None):
@@ -282,8 +291,17 @@ class InterruptableEvent:
         self._interrupted = False
         self._interrupted_msg = ""
 
+    def check_interrupted(self):
+        if self._interrupted:
+            if self._interrupted_msg != "":
+                raise InterruptException('Event received exception because ' + self._interrupted_msg)
+            else:
+                raise InterruptException('Event received exception, possibly because event will never be triggered.')
+
     def wait(self, timeout: float = None) -> _Message:
         """Block until event is set or should raise an exception (InterruptException or TimeoutException).
+           InterruptException is raised if waiting for the event has become irrelevant, like waiting for
+           a checkpoint while robot is in error.
 
         Attributes
         ----------
@@ -296,13 +314,10 @@ class InterruptableEvent:
             Return the data object (or None for events not returning any data)
 
         """
+        self.check_interrupted()
         wait_result = self._event.wait(timeout=timeout)
-        if self._interrupted:
-            if self._interrupted_msg != "":
-                raise InterruptException('Event received exception because ' + self._interrupted_msg)
-            else:
-                raise InterruptException('Event received exception, possibly because event will never be triggered.')
-        elif not wait_result:
+        self.check_interrupted()
+        if not wait_result:
             raise TimeoutException()
         return self._data
 
@@ -322,7 +337,8 @@ class InterruptableEvent:
             if not self._event.is_set():
                 self._interrupted_msg = message
                 self._interrupted = True
-                self._event.set()
+                self._event.set()  # Awake all threads
+                self._event.clear()  # Restore previous state (important to keep state even if interrupted)
 
     def clear(self):
         """Reset the event to its initial state.
@@ -348,13 +364,12 @@ class InterruptableEvent:
                 return self._event.is_set()
 
     def clear_abort(self):
-        """Clears the abort.
+        """Clears the abort to make the event waitable again.
 
         """
         with self._lock:
             if self._interrupted:
                 self._interrupted = False
-                self._event.clear()
 
     @property
     def id(self) -> int:
@@ -435,7 +450,7 @@ class _RobotEvents:
     on_end_of_block : event
         Set if end of block has been reached.
     on_end_of_cycle: event
-        Set if end of cycle has been reached
+        Set if end of cycle has been reached.
 
 """
 
@@ -525,7 +540,9 @@ class _RobotEvents:
                 'on_connected',  # Don't abort a wait for "on_connected" (should be done by now anyways)
                 'on_status_updated',  # Don't abort a wait for "on_status_updated", that's what we're doing!
                 'on_error_reset',  # Don't abort a wait for "on_error_reset" because we got an error
-                'on_end_of_cycle'  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
+                'on_end_of_cycle',  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
+                'on_activate_recovery_mode',  # Don't abort wait for "on_activate_recovery_mode", available in error
+                'on_deactivate_recovery_mode'  # Don't abort wait for "on_deactivate_recovery_mode", available in error
             ],
             message=message)
 
@@ -602,13 +619,13 @@ class RobotVersion:
     ----------
 
     build : integer
-        Build firmware version value, None if unavailable
+        Firmware build number, None if unavailable
 
     extra : string
-        Extra firmware version name, None if unavailable
+        Firmware version 'extra' name, None if unavailable
 
     full_version : string
-        Full firmware version containing major.minor.path.build-extra
+        Full firmware version containing major.minor.patch.build-extra
 
     major : integer
         Major firmware version value
@@ -626,10 +643,10 @@ class RobotVersion:
 
     REGEX_VERSION_BUILD = r"(?P<version>\d+\.\d+\.\d+)\.?(?P<build>\d+)?-?(?P<extra>[0-9a-zA-Z_-]*).*"
 
-    def __init__(self, version):
+    def __init__(self, version: str):
         """Creates
 
-        :param version: version of firmware. Supports multiple version formats
+        :param version: version of firmware. See update_version for supported formats
         """
         self.full_version = version
         self.update_version(self.full_version)
@@ -638,14 +655,20 @@ class RobotVersion:
         return self.full_version
 
     def update_version(self, version: str):
-        """Update object firmware version values.
+        """Update object firmware version values by parsing a version string.
 
         :param version: string
             New version of firmware. Supports multiple version formats
             ie. 8.1.9, 8.4.3.1805-official
         """
+        self.short_version = '0.0.0'
+
         regex_version = re.search(self.REGEX_VERSION_BUILD, version)
-        self.short_version = regex_version.group("version")
+        if regex_version.group("version"):
+            self.short_version = regex_version.group("version")
+        else:
+            raise ValueError(f'Invalid version format: "{version}"')
+
         splitted_version = self.short_version.split(".")
         self.major = int(splitted_version[0])
         self.minor = int(splitted_version[1])
@@ -711,35 +734,39 @@ class RobotInfo:
         Robot revision.
     is_virtual : bool
         True if is a virtual robot.
-    version : RobotVersion object
-        robot firmware revision number.
+    version : str
+        robot firmware revision number as received from the connection string.
     serial : string
         Serial identifier of robot.
+    ip_address : string
+        IP address of this robot.
     rt_message_capable : bool
         True if robot is capable of sending real-time monitoring messages.
     rt_on_ctrl_port_capable : bool
-        True if robot is capable of sending real-time monitoring messages on control port (SetCtrlPortMonitoring)
+        True if robot is capable of sending real-time monitoring messages on control port (SetCtrlPortMonitoring).
     num_joints : int
         Number of joints on the robot.
     requires_homing : bool
-        Tells if this robot requires homing
+        Tells if this robot requires homing.
     supports_ext_tool : bool
-        Tells if this robot supports connecting external tools (gripper, valve box...)
+        Tells if this robot supports connecting external tools (gripper or valve box).
 """
 
     def __init__(self,
-                 model: str = None,
-                 revision: int = None,
-                 is_virtual: bool = None,
-                 version: RobotVersion = None,
-                 serial: str = None):
+                 model: str = 'Unknown',
+                 revision: int = 0,
+                 is_virtual: bool = False,
+                 version: str = '0.0.0',
+                 serial: str = ''):
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
         self.version = RobotVersion(version)
         self.serial = serial
+        self.ip_address = None  # Set later
         self.rt_message_capable = False
         self.rt_on_ctrl_port_capable = False
+        self.gripper_pos_ctrl_capable = False
 
         if self.model == 'Meca500':
             self.num_joints = 6
@@ -749,7 +776,7 @@ class RobotInfo:
             self.num_joints = 4
             self.requires_homing = False
             self.supports_ext_tool = False
-        elif self.model is None:
+        elif self.model == 'Unknown':
             self.num_joints = 1
             self.requires_homing = False
             self.supports_ext_tool = False
@@ -759,9 +786,12 @@ class RobotInfo:
         # Check if this robot supports real-time monitoring events
         if self.version.is_at_least(8, 4):
             self.rt_message_capable = True
-        # Check if this robot supports real-time monitoring on control port (8.4.3+)
+        # Check if this robot supports real-time monitoring on control port
         if self.version.is_at_least(9, 0):
             self.rt_on_ctrl_port_capable = True
+        # Check if this robot supports gripper position control
+        if self.version.is_at_least(9, 1):
+            self.gripper_pos_ctrl_capable = True
 
     @classmethod
     def from_command_response_string(cls, input_string: str):
@@ -792,13 +822,30 @@ class RobotInfo:
             raise ValueError(f'Could not parse robot info string "{input_string}", error: {exception}')
 
 
+class UpdateProgress:
+    """ Class containing firmware update progress information
+
+    Attributes
+    ----------
+    complete : bool
+        Firmware update process state
+    progress : string
+        Update progress message received from robot
+"""
+
+    def __init__(self) -> None:
+        self.complete: bool = False
+        self.progress: str = ''
+
+
 class TimestampedData:
-    """ Class for storing timestamped data.
+    """ Class for storing timestamped data (real-time data received from the robot)
 
     Attributes
     ----------
     timestamp : number-like
-        Timestamp associated with data.
+        Monotonic timestamp associated with data (in microseconds since robot last reboot)
+        This timestamp is stamped by the robot so it is not affected by host/network jitter
     data : object
         Data to be stored.
 """
@@ -807,6 +854,12 @@ class TimestampedData:
         self.timestamp = timestamp
         self.data = data
         self.enabled = False
+
+    def __str__(self):
+        return str([self.timestamp] + self.data)
+
+    def __repr__(self):
+        return str(self)
 
     def clear_if_disabled(self):
         """Clear timestamp and data if not reported by the robot (not part of enabled real-time monitoring events)
@@ -900,57 +953,74 @@ class TimestampedData:
 class RobotRtData:
     """Class for storing the internal real-time data of a Mecademic robot.
 
-    Note that the frequency and availability of real-time data depends on the monitoring interval and which monitoring
+    Most real-time data query methods from the programming guide were not implemented explicitly in Python.
+    The information, however, are available using the GetRobotRtData() method.
+    The attribute corresponding programming method is shown between parentheses.
+
+    The frequency and availability of real-time data depends on the monitoring interval and which monitoring
     events are enabled. Monitoring events can be configured using SetMonitoringInterval() and SetRealTimeMonitoring().
 
     Attributes
     ----------
     rt_target_joint_pos : TimestampedData
-        Controller desired joint positions in degrees [theta_1...6], includes timestamp.
+        Controller desired joint positions in degrees [theta_1...6]. (GetRtTargetJointPos)
     rt_target_cart_pos : TimestampedData
-        Controller desired end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
+        Controller desired end effector pose [x, y, z, alpha, beta, gamma]. (GetRtTargetCartPos)
     rt_target_joint_vel : TimestampedData
-        Controller desired joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
+        Controller desired joint velocity in degrees/second [theta_dot_1...6]. (GetRtTargetJointVel)
     rt_target_cart_vel : TimestampedData
         Controller desired end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
-        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]
+        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]. (GetRtTargetCartVel)
     rt_target_conf : TimestampedData
-        Controller joint configuration that corresponds to desired joint positions.
+        Controller joint configuration that corresponds to desired joint positions. (GetRtTargetConf)
     rt_target_conf_turn : TimestampedData
-        Controller last joint turn number that corresponds to desired joint positions.
+        Controller last joint turn number that corresponds to desired joint positions. (GetRtTargetConfTurn)
 
     rt_joint_pos : TimestampedData
-        Drive-measured joint positions in degrees [theta_1...6], includes timestamp.
+        Drive-measured joint positions in degrees [theta_1...6]. (GetRtJointPos)
     rt_cart_pos : TimestampedData
-        Drive-measured end effector pose [x, y, z, alpha, beta, gamma], includes timestamp.
+        Drive-measured end effector pose [x, y, z, alpha, beta, gamma]. (GetRtCartPos)
     rt_joint_vel : TimestampedData
-        Drive-measured joint velocity in degrees/second [theta_dot_1...6], includes timestamp.
+        Drive-measured joint velocity in degrees/second [theta_dot_1...6]. (GetRtJointVel)
     rt_joint_torq : TimestampedData
-        Drive-measured torque ratio as a percent of maximum [torque_1...6], includes timestamp.
+        Drive-measured torque ratio as a percent of maximum [torque_1...6]. (GetRtJointTorq)
     rt_cart_vel : TimestampedData
         Drive-measured end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
-        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]
+        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z]. (GetRtCartVel)
     rt_conf : TimestampedData
-        Controller joint configuration that corresponds to drives-measured joint positions.
+        Controller joint configuration that corresponds to drives-measured joint positions. (GetRtConf)
     rt_conf_turn : TimestampedData
-        Controller last joint turn number that corresponds to drives-measured joint positions.
+        Controller last joint turn number that corresponds to drives-measured joint positions. (GetRtConfTurn)
 
     rt_accelerometer : TimestampedData
-        Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g.
+        Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g. (GetRtAccelerometer)
 
     rt_external_tool_status : TimestampedData
-        External tool status [exttool_type, activated, homed, error].
-    rt_gripper_state : TimestampedData
-        Gripper state [holding_part, limit_reached].
+        External tool status [sim_tool_type, physical_tool_type, homing_state, error_status, overload_error].
+        (GetRtExtToolStatus)
     rt_valve_state : TimestampedData
-        Valve state [valve_opened[0], valve_opened[1]].
+        Valve state [valve_opened[0], valve_opened[1]]. (GetRtValveState)
+    rt_gripper_state : TimestampedData
+        Gripper state [holding_part, target_pos_reached, opened, closed]. (GetRtGripperState)
+    rt_gripper_force : TimestampedData
+        Gripper force in % of maximum force. (GetRtGripperForce)
+    rt_gripper_pos : TimestampedData. (GetRtValveState)
+        Gripper position in mm. (GetRtGripperPos)
+
+    rt_wrf : TimestampedData
+        Current definition of the WRF w.r.t. the BRF with timestamp. Cartesian data are in mm, Euler angles in degrees.
+        [cartesian coordinates x, y, z, Euler angles omega-x, omega-y, omega-z] (GetRtWrf)
+    rt_trf : TimestampedData
+        Current definition of the TRF w.r.t. the FRF with timestamp. cartesian data are in mm, Euler angles in degrees.
+        [cartesian coordinates x, y, z, Euler angles omega-x, omega-y, omega-z] (GetRtTrf)
+    rt_checkpoint : TimestampedData
+        Last executed checkpoint with timestamp. (GetCheckpoint)
 """
 
     def __init__(self, num_joints: int):
         self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
         self.rt_target_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
         self.rt_target_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.rt_target_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
         self.rt_target_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
         self.rt_target_conf = TimestampedData.zeros(3)
         self.rt_target_conf_turn = TimestampedData.zeros(1)
@@ -968,10 +1038,13 @@ class RobotRtData:
         self.rt_accelerometer = dict()  # 16000 = 1g
 
         self.rt_external_tool_status = TimestampedData.zeros(
-            4)  # microseconds timestamp, tool type, activated, homed, error
-        self.rt_gripper_state = TimestampedData.zeros(2)  # microseconds timestamp, holding part, limit reached
+            5)  # microseconds timestamp, sim tool type, physical tool type, activated, homed, error
         self.rt_valve_state = TimestampedData.zeros(
             mx_def.MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
+        self.rt_gripper_state = TimestampedData.zeros(
+            4)  # microseconds timestamp, holding part, target pos reached, closed, opened
+        self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
+        self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
 
         self.rt_wrf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
         self.rt_trf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
@@ -1026,6 +1099,10 @@ class RobotStatus:
         True if motion is currently paused.
     end_of_block_status : bool
         True if robot is not moving and motion queue is empty.
+        Note: We recommend not using end_of_block_status to detect when robot has finished executing previously sent
+              commands. Some posted commands may still be transient (on the network for example) and the robot may,
+              in some cases, declare end-of-block in-between two commands.
+              Instead, we recommend using checkpoints or the WaitIdle method.
 """
 
     def __init__(self):
@@ -1041,6 +1118,7 @@ class RobotStatus:
 
 class GripperStatus:
     """Class for storing the Mecademic robot's gripper status.
+       LEGACY, use ExtToolStatus and GripperState instead.
 
     Attributes
     ----------
@@ -1050,10 +1128,10 @@ class GripperStatus:
         True if the gripper has been homed (ready to be used).
     holding_part : bool
         True if the gripper is currently holding a part.
-    limit_reached : bool
-        True if the gripper is at a limit (fully opened or closed).
+    target_pos_reached : bool
+        True if the gripper is at target position or at a limit (fully opened or closed).
     error_status : bool
-        True if the gripper is in error state
+        True if the gripper is in error state.
     overload_error : bool
         True if the gripper is in overload error state.
 """
@@ -1064,7 +1142,7 @@ class GripperStatus:
         self.present = False
         self.homing_state = False
         self.holding_part = False
-        self.limit_reached = False
+        self.target_pos_reached = False
         self.error_status = False
         self.overload_error = False
 
@@ -1074,16 +1152,18 @@ class ExtToolStatus:
 
     Attributes
     ----------
-    tool_type : int
-        External tool type. Available types:
-        0: mx_def.MX_EXT_TOOL_NONE
-        1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
-        2: mx_def.MX_EXT_TOOL_MEGP25_LONG
-        3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+    sim_tool_type : int
+        Simulated tool type.
+         0: mx_def.MX_EXT_TOOL_NONE
+        10: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+        11: mx_def.MX_EXT_TOOL_MEGP25_LONG
+        20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+    physical_tool_type : int
+        Physical external tool type (same values as mentioned above).
     homing_state : bool
-        True if the robot is homed.
+        True if the gripper is homed.
     error_status : bool
-        True if the gripper is in error state
+        True if the gripper is in error state.
     overload_error : bool
         True if the gripper is in overload error state.
 """
@@ -1091,10 +1171,80 @@ class ExtToolStatus:
     def __init__(self):
 
         # The following are status fields.
-        self.tool_type = 0
+        self.sim_tool_type = mx_def.MX_EXT_TOOL_NONE
+        self.physical_tool_type = mx_def.MX_EXT_TOOL_NONE
         self.homing_state = False
         self.error_status = False
         self.overload_error = False
+
+    def __str__(self) -> str:
+        return f"Sim tool type: {self.sim_tool_type}, Physical tool type: {self.physical_tool_type}, " \
+               f"homed: {self.homing_state}, error: {self.error_status}, overload: {self.overload_error}"
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    def current_tool_type(self) -> int:
+        """Returns current external tool type (simulated or physical)
+
+        Returns
+        -------
+        int
+            Current external tool
+        """
+        return self.sim_tool_type if self.sim_tool_type != mx_def.MX_EXT_TOOL_NONE else self.physical_tool_type
+
+    def is_physical_tool_present(self) -> bool:
+        """Returns if physical tool is connected
+
+        Returns
+        -------
+        bool
+            True if physical gripper is connected, False otherwise
+        """
+        return self.physical_tool_type != mx_def.MX_EXT_TOOL_NONE
+
+    def is_tool_sim(self) -> bool:
+        """Returns if tool is simulated or not
+
+        Returns
+        -------
+        bool
+            True if tool is simulated, False otherwise
+        """
+        return self.sim_tool_type != mx_def.MX_EXT_TOOL_NONE
+
+    def is_gripper(self, physical: bool = False) -> bool:
+        """Returns if current external tool (simulated or physical) is a gripper
+
+        Parameters
+        ----------
+        physical : bool
+            True check physical gripper, False use current one (simulated or physical)
+
+        Returns
+        -------
+        bool
+            True if tool is a gripper, False otherwise
+        """
+        tool_type = self.physical_tool_type if physical else self.current_tool_type()
+        return tool_type in [mx_def.MX_EXT_TOOL_MEGP25_SHORT, mx_def.MX_EXT_TOOL_MEGP25_LONG]
+
+    def is_pneumatic_module(self, physical: bool = False) -> bool:
+        """Returns if current external tool (simulated or physical) is a pneumatic module
+
+        Parameters
+        ----------
+        physical : bool
+            True check physical gripper, False use current one (simulated or physical)
+
+        Returns
+        -------
+        bool
+            True if tool is a pneumatic module, False otherwise
+        """
+        tool_type = self.physical_tool_type if physical else self.current_tool_type()
+        return tool_type in [mx_def.MX_EXT_TOOL_VBOX_2VALVES]
 
 
 class ValveState:
@@ -1102,8 +1252,8 @@ class ValveState:
 
     Attributes
     ----------
-    valve_opened
-        List of valve state. True if valve is opened, false otherwise.
+    valve_opened : list[int]
+        List of valve state: mx_def.MX_VALVE_STATE_CLOSE or mx_def.MX_VALVE_STATE_OPENED
 """
 
     def __init__(self):
@@ -1119,28 +1269,44 @@ class GripperState:
     ----------
     holding_part : bool
         True if the gripper is currently holding a part.
-    limit_reached : bool
-        True if the gripper is at a limit (fully opened or closed).
+    target_pos_reached : bool
+        True if the gripper is at requested position:
+          - At configured opened/closed position following GripperOpen/GripperClose.
+          - At requested position after MoveGripper.
+    closed : bool
+        True if the gripper is at the configured 'close' position (ref SetGripperRanger) or less.
+    opened : bool
+        True if the gripper is at the configured 'open' position (ref SetGripperRanger) or more.
+
 """
 
     def __init__(self):
 
         # The following are status fields.
         self.holding_part = False
-        self.limit_reached = False
+        self.target_pos_reached = False
+        self.closed = False
+        self.opened = False
+
+    def __str__(self):
+        return f'holding={self.holding_part} pos_reached={self.target_pos_reached} ' \
+               f'closed={self.closed} opened={self.opened}'
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 class Robot:
     """Class for controlling a Mecademic robot.
 
-    Attributes
+    Attributes (private, please use public methods instead, i.e. methods not starting with underscore)
     ----------
     _address : string
         The IP address associated to the Mecademic Robot.
     _command_socket : socket object
-        Socket connecting to the command port of the physical Mecademic robot.
+        Socket connecting to the command port of the Mecademic robot.
     _monitor_socket : socket object
-        Socket connecting to the monitor port of the physical Mecademic robot.
+        Socket connecting to the monitor port of the Mecademic robot.
 
     _command_rx_thread : thread handle
         Thread used to receive messages from the command port.
@@ -1297,7 +1463,7 @@ class Robot:
         self._callback_queue = _CallbackQueue(self._robot_callbacks)
         self._callback_thread = None
 
-        self._robot_info = None
+        self._robot_info = RobotInfo()
         self._robot_rt_data = None
         self._robot_rt_data_stable = None
         self._robot_status = RobotStatus()
@@ -1321,7 +1487,7 @@ class Robot:
         self._monitor_mode = None
 
         self.logger = logging.getLogger(__name__)
-        self.default_timeout = 10
+        self.default_timeout = DEFAULT_WAIT_TIMEOUT
 
         # Variables to hold joint positions and poses while waiting for timestamp.
         self._tmp_rt_joint_pos = None
@@ -1527,7 +1693,8 @@ class Robot:
     # General management functions.
 
     def RegisterCallbacks(self, callbacks: RobotCallbacks, run_callbacks_in_separate_thread: bool):
-        """Register callback functions to be executed.
+        """Register callback functions to be executed when corresponding event occurs.
+           Callback functions are optional.
 
         Parameters
         ----------
@@ -1563,6 +1730,8 @@ class Robot:
 
     def RunCallbacks(self):
         """Run all triggered callback functions.
+           Calling this function is required only when RegisterCallback option run_callbacks_in_separate_thread
+           has been set to False (when True, callbacks are automatically called from a background thread).
 
         """
         if self._callback_thread:
@@ -1598,18 +1767,22 @@ class Robot:
                 monitor_mode: bool = False,
                 offline_mode: bool = False,
                 timeout=0.1):
-        """Attempt to connect to a physical Mecademic Robot.
+        """Attempt to connect to a Mecademic Robot.
+           This function is synchronous (awaits for success or timeout) even when using this class in asynchronous mode
+           (see enable_synchronous_mode below).
 
         Parameters
         ----------
         address : string
             The IP address associated to the Mecademic Robot.
         enable_synchronous_mode : bool
-            If true, each command will wait until previous is done executing.
+            Select synchronous or asynchronous mode for this class.
+            See SetSynchronousMode for details.
         disconnect_on_exception : bool
             If true, will attempt to disconnect from the robot on exception from api call.
+            Also note that the robot will automatically pause motion whenever a disconnection occurs.
         monitor_mode : bool
-            If true, command connection will not be established.
+            If true, command connection will not be established, only monitoring connection.
         offline_mode : bool
             If true, socket connections are not created, only used for testing.
 
@@ -1715,6 +1888,9 @@ class Robot:
                     self._initialize_monitoring_socket(timeout)
                     self._initialize_monitoring_connection()
 
+            # Now that we're connected, let's update _robot_info with the connected Ip address
+            self._robot_info.ip_address = address
+
             if self._robot_info.version.major < 8:
                 self.logger.warning('Python API not supported for firmware under version 8')
 
@@ -1725,7 +1901,8 @@ class Robot:
             raise
 
     def Disconnect(self):
-        """Disconnects Mecademic Robot object from the physical Mecademic robot.
+        """Disconnects Mecademic Robot object from the Mecademic robot.
+           This function is synchronous (awaits for disconnection or timeout) even when connected in asynchronous mode.
 
         """
         if self.IsConnected():
@@ -1736,8 +1913,7 @@ class Robot:
 
     def _disconnect(self):
         """
-        Internal function to disconnect Mecademic Robot object from the physical
-        Mecademic robot and cleanup internal states.
+        Internal function to disconnect Mecademic Robot object from the Mecademic robot and cleanup internal states.
 
         """
         # Don't acquire _main_lock while shutting down queues to avoid deadlock.
@@ -1789,9 +1965,14 @@ class Robot:
         return can_move
 
     def SetSynchronousMode(self, sync_mode: bool = True):
-        """Enables synchronous mode. In this mode, all commands are blocking until robot's response is received.
-           Note that this will apply to next API calls.
-           So disabling synchronous mode will not not awake thread already awaiting on synchronous operations.
+        """Changes synchronous mode option.
+           If True, function calls in this class will be blocking until the robot has finished executing the
+           command. Note that no blending is possible in this mode.
+           If False, function calls in this class will post requests to the robot and return immediately before
+           the robot has received/processed the commands.
+           Method WaitIdle (among other things) can be used in that case to wait for robot to complete posted commands.
+
+           Note that disabling synchronous mode will not not awake thread already awaiting on synchronous operations.
 
         Parameters
         ----------
@@ -1889,7 +2070,7 @@ class Robot:
             self.WaitMotionCleared(timeout=self.default_timeout)
 
     @disconnect_on_exception
-    def MoveJoints(self, *args: list[float]):
+    def MoveJoints(self, *args: float):
         """Move the robot by specifying each joint's target angular position.
 
         Parameters
@@ -1904,7 +2085,7 @@ class Robot:
         self._send_motion_command('MoveJoints', args)
 
     @disconnect_on_exception
-    def MoveJointsRel(self, *args: list[float]):
+    def MoveJointsRel(self, *args: float):
         """Move the robot relative to current position by specifying each joint's offset angular position.
 
         Parameters
@@ -1919,7 +2100,7 @@ class Robot:
         self._send_motion_command('MoveJointsRel', args)
 
     @disconnect_on_exception
-    def MoveJointsVel(self, *args: list[float]):
+    def MoveJointsVel(self, *args: float):
         """Moves joints to at desired velocities.
 
         Parameters
@@ -1961,8 +2142,18 @@ class Robot:
         """
         self._send_motion_command('MoveLin', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'MoveLinRelTrf' function instead")
     @disconnect_on_exception
     def MoveLinRelTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use MoveLinRelTrf instead.
+        """
+        self.MoveLinRelTrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def MoveLinRelTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Linearly move robot's tool to a Cartesian position relative to current TRF position.
 
         Parameters
@@ -1973,10 +2164,20 @@ class Robot:
             Desired orientation change in deg.
 
         """
-        self._send_motion_command('MoveLinRelTRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('MoveLinRelTrf', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'MoveLinRelWrf' function instead")
     @disconnect_on_exception
     def MoveLinRelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use MoveLinRelWrf instead.
+        """
+        self.MoveLinRelWrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def MoveLinRelWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Linearly move robot's tool to a Cartesian position relative to a reference frame that has the same
         orientation.
 
@@ -1988,10 +2189,21 @@ class Robot:
             Desired orientation change in deg.
 
         """
-        self._send_motion_command('MoveLinRelWRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('MoveLinRelWrf', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'MoveLinVelTrf' function instead")
     @disconnect_on_exception
     def MoveLinVelTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use MoveLinVelTrf instead
+
+        """
+        self.MoveLinVelTrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def MoveLinVelTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Move robot's by Cartesian velocity relative to the TRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).
@@ -2004,10 +2216,21 @@ class Robot:
             Desired angular velocity in degrees/s.
 
         """
-        self._send_motion_command('MoveLinVelTRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('MoveLinVelTrf', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'MoveLinVelWrf' function instead")
     @disconnect_on_exception
     def MoveLinVelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use MoveLinVelWrf instead
+
+        """
+        self.MoveLinVelWrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def MoveLinVelWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Move robot's by Cartesian velocity relative to the WRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).
@@ -2020,7 +2243,7 @@ class Robot:
             Desired angular velocity in degrees/s.
 
         """
-        self._send_motion_command('MoveLinVelWRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('MoveLinVelWrf', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def SetVelTimeout(self, t: float):
@@ -2078,7 +2301,7 @@ class Robot:
 
     @disconnect_on_exception
     def SetAutoConfTurn(self, e: int):
-        """Enable or disable auto-conf (automatic selection of inverse kinematics options) for joint 6..
+        """Enable or disable auto-conf (automatic selection of inverse kinematics options) for joint 6.
 
         Parameters
         ----------
@@ -2140,44 +2363,168 @@ class Robot:
         """
         self._send_motion_command('SetCartLinVel', [w])
 
+    def WaitGripperMoveCompletion(self, timeout: float = None):
+        """Wait for the gripper move to complete.
+           Note that any move command in the motion queue following a gripper command will start executing at the same
+           time the gripper starts moving.
+           If you wish to wait for the gripper to finish moving first, DO NOT send motion commands to the robot after
+           your gripper command, then call WaitGripperMoveCompletion, and finally post following motion commands.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the move to complete (in seconds).
+        """
+        if not self._robot_info.gripper_pos_ctrl_capable:
+            raise NotImplementedError(f"Unsupported method for this firmware version")
+
+        if timeout is not None and timeout <= 0:
+            raise ValueError("timeout must be None or a positive value")
+
+        DEFAULT_START_MOVE_TIMEOUT = 0.2
+        DEFAULT_COMPLETE_MOVE_TIMEOUT = 2
+        if timeout is not None:
+            complete_move_timeout = timeout
+        else:
+            complete_move_timeout = DEFAULT_COMPLETE_MOVE_TIMEOUT
+
+        # Use a checkpoint to make sure the last gripper command has been processed
+        if not self._enable_synchronous_mode:
+            start_time = time.monotonic()
+            checkpoint = self._set_checkpoint_internal()
+            checkpoint.wait(complete_move_timeout)
+            # Update timeout left
+            complete_move_timeout -= (time.monotonic() - start_time)
+
+        start_move_timeout = DEFAULT_START_MOVE_TIMEOUT
+        if start_move_timeout > complete_move_timeout:
+            start_move_timeout = complete_move_timeout
+
+        # Detect a rising edge of either `target_pos_reached` or `holding_part` to rapidly confirm the end of move.
+        # This is needed to ensure the gripper has started moving and we're not reporting a previous state.
+        # When we have given the gripper enough time to start moving and `target_pos_reached` or `holding_part`
+        # are still true, it means that the gripper was already at target position or that an object is preventing
+        # the gripper from reaching that position, so the move completes.
+        holding_part_seen_false = False
+        pos_reached_seen_false = False
+
+        current_time = time.monotonic()
+        start_time = current_time
+        timeout_time = start_time + start_move_timeout
+        waiting_move_start = True
+        while current_time < timeout_time:
+            wait_duration = timeout_time - current_time
+            self.logger.debug(f'WaitGripperMoveCompletion: Waiting for {wait_duration}s')
+            try:
+                self._robot_events.on_gripper_state_updated.wait(wait_duration)
+                with self._main_lock:
+                    gripper_state = self._gripper_state
+                    self._robot_events.on_gripper_state_updated.clear()
+                    self.logger.debug(f'WaitGripperMoveCompletion: New state is {str(gripper_state)}')
+
+                if waiting_move_start:
+                    if pos_reached_seen_false and gripper_state.target_pos_reached:
+                        self.logger.debug(f'WaitGripperMoveCompletion: target_pos_reached')
+                        return
+                    if holding_part_seen_false and gripper_state.holding_part:
+                        self.logger.debug(f'WaitGripperMoveCompletion: holding_part')
+                        return
+
+                    if gripper_state.holding_part is False:
+                        self.logger.debug(f'WaitGripperMoveCompletion: holding_part_seen_false')
+                        holding_part_seen_false = True
+
+                    if gripper_state.target_pos_reached is False:
+                        self.logger.debug(f'WaitGripperMoveCompletion: pos_reached_seen_false')
+                        pos_reached_seen_false = True
+                else:
+                    if gripper_state.target_pos_reached or gripper_state.holding_part:
+                        self.logger.debug(f'WaitGripperMoveCompletion: move completed ')
+                        return
+            except TimeoutException:
+                if waiting_move_start:
+                    self.logger.debug(f'WaitGripperMoveCompletion: start_move_timeout reached')
+                    gripper_state = self._gripper_state
+                    if gripper_state.target_pos_reached or gripper_state.holding_part:
+                        # Gripper had time to start moving and the state still report that the gripper is at the target
+                        # position or holding a part. This happens when the gripper was not able to move because it is
+                        # forcing on an object.
+                        self.logger.debug(
+                            f'WaitGripperMoveCompletion: start_move_timeout reached with no change detected')
+                        return
+                    # We now give enough time for the move to complete
+                    waiting_move_start = False
+                    timeout_time = start_time + complete_move_timeout
+            current_time = time.monotonic()
+
+        if not gripper_state.target_pos_reached and not gripper_state.holding_part:
+            self.logger.warning(f'WaitGripperMoveCompletion: Timeout reached')
+            raise TimeoutException('Timeout while waiting for gripper to complete movement.')
+
     @disconnect_on_exception
     def GripperOpen(self):
         """Open the gripper.
+           Note that the robot may move while the gripper is opening.
+           See method WaitGripperMoveCompletion for more information.
 
         """
 
         self._send_motion_command('GripperOpen')
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
+
+        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable:
+            gripper_state = self.GetRtGripperState(synchronous_update=True)
+            if gripper_state.opened and gripper_state.target_pos_reached:
+                return
+            self.WaitGripperMoveCompletion()
 
     @disconnect_on_exception
     def GripperClose(self):
         """Close the gripper.
+           Note that the robot may move while the gripper is closing.
+           See method WaitGripperMoveCompletion for more information.
 
         """
 
         self._send_motion_command('GripperClose')
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
+
+        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable:
+            gripper_state = self.GetRtGripperState(synchronous_update=True)
+            if gripper_state.closed and gripper_state.target_pos_reached:
+                return
+            self.WaitGripperMoveCompletion()
 
     @disconnect_on_exception
-    def MoveGripper(self, state: bool = GRIPPER_OPEN):
-        """Open or close the gripper.
+    def MoveGripper(self, target: Union[bool, float]):
+        """Move the gripper to a target position.
+           Note that the robot may move while the gripper is moving.
+           See method WaitGripperMoveCompletion for more information.
 
-        Corresponds to text API calls "_GripperOpen" / "GripperClose".
+           If the target specified is a boolean, it indicates if the target position is the opened (True, GRIPPER_OPEN)
+           or closed (False, GRIPPER_CLOSE) position.
+           Otherwise the target position indicates the opening of the gripper, in mm from the most closed position.
+
+        Corresponds to text API calls "GripperOpen" / "GripperClose" / "MoveGripper".
+
 
         Parameters
         ----------
-        state : boolean
-            Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+        target : boolean or float
+            boolean type: Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+            float type: The gripper's target position, in mm from the most closed position.
 
         """
-        if state:
-            self.GripperOpen()
+        if isinstance(target, bool):
+            if target:
+                self.GripperOpen()
+            else:
+                self.GripperClose()
         else:
-            self.GripperClose()
+            self._send_motion_command('MoveGripper', [target])
+            if self._enable_synchronous_mode:
+                rt_data = self.GetRobotRtData(synchronous_update=True)
+                if math.isclose(rt_data.rt_gripper_pos.data[0], target, abs_tol=0.1):
+                    return
+                self.WaitGripperMoveCompletion()
 
     @disconnect_on_exception
     def SetGripperForce(self, p: float):
@@ -2204,8 +2551,31 @@ class Robot:
         self._send_motion_command('SetGripperVel', [p])
 
     @disconnect_on_exception
+    def SetGripperRange(self, closePos: float, openPos):
+        """Set the gripper's range that will be used when calling GripperClose and GripperOpen.
+           This function is useful for example to set a smaller (and thus quicker) movement range when it is not
+           required to fully open the gripper to release objects. This is especially apparent on long-stroke grippers.
+
+           Setting both values to 0 will reset the range to the maximum range found during homing.
+
+        Parameters
+        ----------
+        closePos : float
+            The position relative to the completely closed position that the gripper will move to when calling
+            GripperClose. In mm.
+        openPos : float
+            The position relative to the completely closed position that the gripper will move to when calling
+            GripperOpen. In mm.
+
+        """
+        self._send_motion_command('SetGripperRange', [closePos, openPos])
+
+    @disconnect_on_exception
     def SetValveState(self, *args: list[int]):
         """Set the pneumatic module valve states.
+           Note that the robot may move while the valves are being opened/closed.
+           Using the Delay method may be appropriate to postpone subsequent move commands in the motion queue
+           if necessary.
 
         Parameters
         ----------
@@ -2216,9 +2586,6 @@ class Robot:
         """
 
         self._send_motion_command('SetValveState', args)
-        if self._enable_synchronous_mode:
-            checkpoint = self._set_checkpoint_internal()
-            checkpoint.wait()
 
     @disconnect_on_exception
     def SetJointAcc(self, p: float):
@@ -2244,8 +2611,19 @@ class Robot:
         """
         self._send_motion_command('SetJointVel', [p])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'SetTrf' function instead")
     @disconnect_on_exception
     def SetTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use SetTrf instead
+
+        """
+        self.SetTrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def SetTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Set the TRF (tool reference frame) Cartesian position.
 
         Parameters
@@ -2256,10 +2634,21 @@ class Robot:
             Desired reference orientation in degrees.
 
         """
-        self._send_motion_command('SetTRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('SetTrf', [x, y, z, alpha, beta, gamma])
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'SetWrf' function instead")
     @disconnect_on_exception
     def SetWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+        """Deprecated use SetWrf instead
+
+        """
+        self.SetWrf(x, y, z, alpha, beta, gamma)
+
+    @disconnect_on_exception
+    def SetWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
         """Set the WRF (world reference frame) Cartesian position.
 
         Parameters
@@ -2270,11 +2659,13 @@ class Robot:
             Desired reference orientation in degrees.
 
         """
-        self._send_motion_command('SetWRF', [x, y, z, alpha, beta, gamma])
+        self._send_motion_command('SetWrf', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def SetCheckpoint(self, n: int) -> InterruptableEvent:
         """Set checkpoint with desired id.
+           This function then returns an InterruptableEvent that can be used at any time to
+           wait until the robot's motion queue execution reaches this checkpoint.
            This method is non-blocking whether robot connection is in asynchronous or synchronous mode.
            Therefore, it is required to use the wait() method of the return object to catch the checkpoint event.
 
@@ -2297,6 +2688,7 @@ class Robot:
     @disconnect_on_exception
     def ExpectExternalCheckpoint(self, n: int) -> InterruptableEvent:
         """Expect the robot to receive a checkpoint with given id (e.g. from saved program).
+           Make sure to call this function before starting the saved program otherwise the checkpoint could be missed.
 
         Parameters
         ----------
@@ -2334,11 +2726,13 @@ class Robot:
 
     @disconnect_on_exception
     def WaitConnected(self, timeout: float = None):
-        """Pause program execution until robot is disconnected.
+        """Pause program execution until robot is connected.
+           Since the Connect() command is always blocking, this command is only useful if a separate thread wants to
+           wait for the connection to be established.
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2349,10 +2743,11 @@ class Robot:
     @disconnect_on_exception
     def WaitDisconnected(self, timeout: float = None):
         """Pause program execution until the robot is disconnected.
-
+           Since the Disconnect() command is always blocking, this command is only useful if a separate thread wants to
+           wait for the disconnection.
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2380,7 +2775,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2408,7 +2803,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
 
         """
@@ -2423,7 +2818,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2437,7 +2832,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
 
         """
@@ -2452,7 +2847,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2468,7 +2863,7 @@ class Robot:
         ----------
         activated : bool
             Recovery mode to wait for (activated or deactivated
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2496,7 +2891,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2510,7 +2905,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2524,7 +2919,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
@@ -2538,7 +2933,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
 
@@ -2553,7 +2948,7 @@ class Robot:
 
         Parameters
         ----------
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
         if self._robot_events.on_end_of_cycle.is_set():
@@ -2637,7 +3032,8 @@ class Robot:
 
     @disconnect_on_exception
     def SendCustomCommand(self, command: str, expected_responses: list[int] = None) -> InterruptableEvent:
-        """Send custom command to robot.
+        """Send custom command to robot (a command that the robot may support but that this Python API does not
+           provide an explicit function for).
 
         Parameters
         ----------
@@ -2789,7 +3185,7 @@ class Robot:
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated joints positions and waits for response, else uses last known positions.
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time in second to wait for forced update.
 
         Return
@@ -2821,7 +3217,7 @@ class Robot:
             return copy.deepcopy(self._robot_rt_data.rt_target_joint_pos.data)
 
     def GetJoints(self, synchronous_update: bool = False, timeout: float = None):
-        """Legacy command. Please use GetRtTargetJointPos instead"""
+        """Legacy command. Please use GetRtTargetJointPos instead."""
         # Use appropriate default timeout of not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -2840,7 +3236,7 @@ class Robot:
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
             If true, requests updated pose and waits for response, else uses last know pose.
-        timeout : float, by default 10
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time in second to wait for forced update.
 
         Return
@@ -2870,7 +3266,7 @@ class Robot:
             return copy.deepcopy(self._robot_rt_data.rt_target_cart_pos.data)
 
     def GetPose(self, synchronous_update: bool = False, timeout: float = None) -> TimestampedData:
-        """Legacy command. Please use GetRtTargetCartPos instead"""
+        """Legacy command. Please use GetRtTargetCartPos instead."""
         # Use appropriate default timeout of not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -2891,7 +3287,7 @@ class Robot:
 
     @disconnect_on_exception
     def SetMonitoringInterval(self, t: float):
-        """Sets the rate at which the monitoring port sends data.
+        """Sets the interval at which the monitoring port sends real-time data.
 
         Parameters
         ----------
@@ -2922,9 +3318,19 @@ class Robot:
                 events = list(events)
             self._send_command('SetRealTimeMonitoring', events)
 
+    @deprecation.deprecated(deprecated_in="1.2.0",
+                            removed_in="1.3.0",
+                            current_version=__version__,
+                            details="Use the 'SetRtc' function instead")
     @disconnect_on_exception
     def SetRTC(self, t: int):
-        """Sets the rate at which the monitoring port sends data.
+        """Deprecated use SetRtc instead.
+        """
+        self.SetRtc(t)
+
+    @disconnect_on_exception
+    def SetRtc(self, t: int):
+        """Sets the robot's real-time clock (date/time).
 
         Parameters
         ----------
@@ -2934,11 +3340,11 @@ class Robot:
         """
         with self._main_lock:
             self._check_internal_states()
-            self._send_command('SetRTC', [t])
+            self._send_command('SetRtc', [t])
 
     @disconnect_on_exception
     def ActivateSim(self):
-        """Enables simulation mode. Motors don't move, but commands will be processed.
+        """Enables simulation mode. Motors and external tool don't move, but commands will be processed.
 
         """
         with self._main_lock:
@@ -2949,7 +3355,7 @@ class Robot:
 
     @disconnect_on_exception
     def DeactivateSim(self):
-        """Disables simulation mode. Motors will now move normally.
+        """Disables simulation mode. Motors and external tool will now move normally.
 
         """
         with self._main_lock:
@@ -2960,26 +3366,31 @@ class Robot:
 
     @disconnect_on_exception
     def SetExtToolSim(self, sim_ext_tool_type: int = mx_def.MX_EXT_TOOL_MEGP25_SHORT):
-        """Simulate an external tool, allowing GripperOpen/Close and SetValveState commands
+        """Simulate an external tool, allowing GripperOpen/Close, MoveGripper and SetValveState commands
             on a robot without an external tool present.
 
         Parameters
         ----------
         sim_ext_tool_type : int or mx_def constants
             0: mx_def.MX_EXT_TOOL_NONE
-            1: mx_def.MX_EXT_TOOL_MEGP25_SHORT
-            2: mx_def.MX_EXT_TOOL_MEGP25_LONG
-            3: mx_def.MX_EXT_TOOL_VBOX_2VALVES
+            1: mx_def.MX_EXT_TOOL_CURRENT
+           10: mx_def.MX_EXT_TOOL_MEGP25_SHORT
+           11: mx_def.MX_EXT_TOOL_MEGP25_LONG
+           20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
         """
+        # Firmware version 8.4 and older only support 1 as tool type
+        if sim_ext_tool_type != mx_def.MX_EXT_TOOL_NONE and not self._robot_info.gripper_pos_ctrl_capable:
+            sim_ext_tool_type = 1
+
         with self._main_lock:
             self._check_internal_states()
             self._send_command('SetExtToolSim', [sim_ext_tool_type])
 
         if self._enable_synchronous_mode:
             if sim_ext_tool_type == mx_def.MX_EXT_TOOL_NONE:
-                self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=self.default_timeout)
+                self.WaitExtToolSimDeactivated()
             else:
-                self._robot_events.on_activate_ext_tool_sim.wait(timeout=self.default_timeout)
+                self.WaitExtToolSimActivated()
 
     @disconnect_on_exception
     def SetRecoveryMode(self, activated: bool = True):
@@ -3008,7 +3419,7 @@ class Robot:
             Severity-level of exceeding torque limits.
             Available severity levels (see TORQUE_LIMIT_SEVERITIES):
                 - 0 or 'disabled':     Torque limits disabled (this by default when robot is activated)
-                - 1 or 'warning':      Send a warning event (MX_ST_EXCESSIVE_TRQ) when torque exceeds the limit
+                - 1 or 'warning':      Send a warning event (MX_ST_TORQUE_LIMIT_STATUS) when torque exceeds the limit
                 - 2 or 'pause-motion': Pause motion when torque exceeds the limit
                 - 3 or 'clear-motion': Pause motion when torque exceeds the limit
                 - 4 or 'error':        Set robot in error state when torque exceeds the limit
@@ -3021,7 +3432,7 @@ class Robot:
         self._send_motion_command('SetTorqueLimitsCfg', [severity_int, skip_acceleration_int])
 
     @disconnect_on_exception
-    def SetTorqueLimits(self, *args: list[float]):
+    def SetTorqueLimits(self, *args: float):
         """Set the torque limit (in percent) for each joint.
         Note that torque limits will be applied only if severity mode is set to other than 'disabled' by
         calling SetTorqueLimitsCfg.
@@ -3075,8 +3486,15 @@ class Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_info)
 
-    def GetRobotRtData(self) -> RobotRtData:
+    def GetRobotRtData(self, synchronous_update: bool = False, timeout: float = None) -> RobotRtData:
         """Return a copy of the current robot real-time data, with all values associated with the same timestamp
+
+        Parameters
+        ----------
+        synchronous_update: boolean
+            True -> Synchronously wait for the next data cycle to get updated data. False -> Get latest known data.
+        timeout: float
+            Timeout (in seconds) waiting for updated cyclic data from the robot. Only used for synchronous requests.
 
         Return
         ------
@@ -3084,6 +3502,9 @@ class Robot:
             Object containing the current robot real-time data
 
         """
+        if synchronous_update:
+            self.WaitEndOfCycle(timeout)
+
         with self._main_lock:
             return copy.deepcopy(self._robot_rt_data_stable)
 
@@ -3095,7 +3516,7 @@ class Robot:
         ----------
         synchronous_update: boolean
             True -> Synchronously get updated robot status. False -> Get latest known status.
-        timeout: float, by default 10
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -3114,16 +3535,15 @@ class Robot:
             return copy.deepcopy(self._robot_status)
 
     @disconnect_on_exception
-    def GetStatusGripper(self, synchronous_update: bool = True, timeout: float = None) -> GripperStatus:
-        """Return a copy of the current gripper status
+    def GetStatusGripper(self, synchronous_update: bool = False, timeout: float = None) -> GripperStatus:
+        """Return a copy of the current gripper status.
+           LEGACY. Use GetRtExtToolStatus and GetRtGripperState instead.
 
         Parameters
         ----------
         synchronous_update: boolean
             True -> Synchronously get updated gripper status. False -> Get latest known status.
-            *** Note: Synchronous mode by default because robot does not report gripper status change events by default
-                      (unless SetStatusEvents command is used to enable gripper status updates)
-        timeout: float, by default 10
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -3140,6 +3560,33 @@ class Robot:
 
         with self._main_lock:
             return copy.deepcopy(self._gripper_status)
+
+    @disconnect_on_exception
+    def GetGripperRange(self, timeout: float = None) -> Tuple[float, float]:
+        """Return the currently configured gripper range.
+            Note that the reported values are valid only when the robot is activated and homed.
+
+        Parameters
+        ----------
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        Tuple [close_pos, open_pos]
+            Tuple indicating the close and open position of the gripper, in mm from the completely closed position
+            detected during homing.
+
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+
+        response = self._send_custom_command('GetGripperRange', expected_responses=[mx_def.MX_ST_GET_GRIPPER_RANGE])
+        response.wait(timeout=self.default_timeout)
+        positions = _string_to_numbers(response.data.data)
+        assert len(positions) == 2
+        return positions[0], positions[1]
 
     def LogTrace(self, trace: str):
         """Send a text trace that is printed in the robot's log internal file (which can be retrieved from robot's Web
@@ -3162,10 +3609,15 @@ class Robot:
                      file_path: str = None,
                      fields: list = None,
                      record_time: bool = True):
-        """Start logging robot state to file.
+        """Start logging robot state and real-time data to a zip file that contains:
+           - a json file (robot information summary, commands sent to the robot)
+           - a csv file (real-time data received from the robot)
 
-        Fields logged are controlled by SetRealtimeMonitoring(). Logging frequency is set by SetMonitoringInterval().
-        By default, will wait until robot is idle before logging.
+        This function will use SetRealtimeMonitoring() to enable specified real-time data fields.
+        This function will use SetMonitoringInterval() to configure the requested monitoring interval.
+
+        Using WaitIdle before StartLogging may be useful if you want to ensure that the captured data includes
+        subsequent move commands only.
 
         Parameters
         ----------
@@ -3181,7 +3633,9 @@ class Robot:
             If not provided, file will be saved in working directory.
 
         fields : list of strings or None
-            List of fields to log. Taken from RobotRtData attributes. None means log all compatible fields.
+            List of real-time data fields to log.
+            Available field names correspond to fields from the RobotRtData attributes.
+            None means log all possible real-time data.
 
         record_time : bool
             If true, current date and time will be recorded in file.
@@ -3253,26 +3707,20 @@ class Robot:
                    fields: list = None,
                    record_time: bool = True):
         """Contextmanager interface for file logger.
+           See StartLogging for more information.
 
         Parameters
         ----------
         monitoring_interval: float
-            Indicates rate at which real-time data from robot will be received on monitor port. Unit: seconds
-
+            See StartLogging.
         file_name: string or None
-            Log file name
-            If None, file name will be built with date/time and robot information (robot type, serial, version).
-
+            See StartLogging.
         file_path : string or None
-            Path to save the zip file that contains logged data.
-            If not provided, file will be saved in working directory.
-
+            See StartLogging.
         fields : list of strings or None
-            List of fields to log. Taken from RobotRtData attributes. None means log all compatible fields.
-
+            See StartLogging.
         record_time : bool
-            If true, current date and time will be recorded in file.
-
+            See StartLogging.
         """
         self.StartLogging(
             monitoringInterval,
@@ -3285,6 +3733,71 @@ class Robot:
             yield
         finally:
             self.EndLogging()
+
+    def _check_update_progress(self, robot_url: str, update_progress: UpdateProgress):
+        """
+        Check progress of firmware update.
+
+        Parameters
+        ----------
+        robot_url: string
+            Robot URL
+
+        update_progress: UpdateProgress
+            Update progress information object
+
+        """
+        update_progress.complete = False
+        request_get = requests.get(robot_url, 'update', timeout=10)
+        try:
+            request_get.raise_for_status()
+        except requests.exceptions as e:
+            self.logger.error(f'Upgrade get request error: {e}')
+            raise
+
+        # get only correct answer (http code 200)
+        if request_get.status_code == 200:
+            request_response = request_get.text
+        else:
+            request_response = None
+        # while the json file is note created, get function will return 0
+        if request_response is None or request_response == '0':
+            return
+
+        try:
+            request_answer = json.loads(request_response)
+        except Exception as e:
+            self.logger.info(f'Error retrieving json from request_response: {e}')
+            return
+
+        if not request_answer:
+            self.logger.info(f'Answer is empty')
+            return
+
+        if request_answer['STATUS']:
+            status_code = int(request_answer['STATUS']['Code'])
+            status_msg = request_answer['STATUS']['MSG']
+
+        if status_code in [0, 1]:
+            keys = sorted(request_answer['LOG'].keys())
+            if keys:
+                previous_progress = update_progress.progress
+                update_progress.progress = request_answer['LOG'][keys[-1]]
+                new_progress = update_progress.progress.replace(previous_progress, '')
+                if '#' in new_progress:
+                    self.logger.info(new_progress)
+                elif '100%' in new_progress:
+                    self.logger.info(new_progress)
+                else:
+                    self.logger.debug(new_progress)
+            if status_code == 0:
+                self.logger.info(f'status_msg {status_msg}')
+                update_progress.complete = True
+                return
+        else:
+            error_message = f'error while updating: {status_msg}'
+            self.logger.error(error_message)
+            raise RuntimeError(error_message)
 
     def UpdateRobot(self, firmware: str, address: str = None):
         """
@@ -3357,70 +3870,23 @@ class Robot:
             raise RuntimeError(error_message)
 
         self.logger.info(f"Upgrading the robot")
-        update_done = False
-        progress = ''
-        last_progress = ''
+        update_progress = UpdateProgress()
 
         start_time = time.monotonic()
-        while not update_done:
+        while True:
+
             # Give time to the web server restart, the function doesn't handle well errors.
             time.sleep(2)
 
-            request_get = requests.get(robot_url, 'update', timeout=10)
-            try:
-                request_get.raise_for_status()
-            except requests.exceptions as e:
-                self.logger.error(f'Upgrade get request error: {e}')
-                raise
-
-            # get only correct answer (http code 200)
-            if request_get.status_code == 200:
-                request_response = request_get.text
-            else:
-                request_response = None
-            # while the json file is note created, get function will return 0
-            if request_response is None or request_response == '0':
-                continue
-
-            try:
-                request_answer = json.loads(request_response)
-            except Exception as e:
-                self.logger.info(f'Error retrieving json from request_response: {e}')
-                continue
-
-            if not request_answer:
-                self.logger.info(f'Answer is empty')
-                continue
-
-            if request_answer['STATUS']:
-                status_code = int(request_answer['STATUS']['Code'])
-                status_msg = request_answer['STATUS']['MSG']
-
-            if status_code in [0, 1]:
-                keys = sorted(request_answer['LOG'].keys())
-                if keys:
-                    last_progress = progress
-                    progress = request_answer['LOG'][keys[-1]]
-                    new_progress = progress.replace(last_progress, '')
-                    if '#' in new_progress:
-                        self.logger.info(new_progress)
-                    elif '100%' in new_progress:
-                        self.logger.info(new_progress)
-                    else:
-                        self.logger.debug(new_progress)
-                if status_code == 0:
-                    update_done = True
-                    self.logger.info(f'status_msg {status_msg}')
-            else:
-                error_message = f"error while updating: {status_msg}"
-                self.logger.error(error_message)
-                raise RuntimeError(error_message)
-
+            self._check_update_progress(robot_url, update_progress)
+            if update_progress.complete:
+                self.logger.info(f"Firmware update complete")
+                break
             if time.monotonic() > start_time + self._UPDATE_TIMEOUT:
                 error_message = f"Timeout while waiting for update done response, after {self._UPDATE_TIMEOUT} seconds"
                 raise TimeoutError(error_message)
 
-        self.logger.info(f"Update completed, waiting for robot to reboot")
+        self.logger.info(f"Waiting for robot to reboot")
 
         # need to wait to make sure the robot shutdown before attempting to ping it.
         time.sleep(15)
@@ -3686,8 +4152,11 @@ class Robot:
         """
         response = _Message(None, None)
 
+        # Wait for connection string (MX_ST_CONNECTED).
+        # Alternatively, wait for status robot (MX_ST_GET_STATUS_ROBOT) since older robots will not post the
+        # connection string on the monitoring port
         start = time.time()
-        while response.id != mx_def.MX_ST_CONNECTED:
+        while response.id != mx_def.MX_ST_CONNECTED and response.id != mx_def.MX_ST_GET_STATUS_ROBOT:
             try:
                 response = message_queue.get(block=True, timeout=self.default_timeout)
             except queue.Empty:
@@ -3703,12 +4172,16 @@ class Robot:
                 self.logger.error('No connect message received within timeout interval.')
                 break
 
-        if response.id != mx_def.MX_ST_CONNECTED:
+        if response.id == mx_def.MX_ST_CONNECTED:
+            # Attempt to parse robot return data.
+            self._robot_info = RobotInfo.from_command_response_string(response.data)
+        elif response.id == mx_def.MX_ST_GET_STATUS_ROBOT:
+            # This means we're connected to a Legacy robot that does not send MX_ST_CONNECTED on monitoring port.
+            # We will not be able to deduce robot version. Assume some 8.x version
+            self._robot_info = RobotInfo(model='Meca500', revision=3, version='8.0.0.0-unknown-version')
+        else:
             self.logger.error('Connection error: {}'.format(response))
             raise CommunicationError('Connection error: {}'.format(response))
-
-        # Attempt to parse robot return data.
-        self._robot_info = RobotInfo.from_command_response_string(response.data)
 
         self._robot_rt_data = RobotRtData(self._robot_info.num_joints)
         self._robot_rt_data_stable = RobotRtData(self._robot_info.num_joints)
@@ -4007,7 +4480,7 @@ class Robot:
         if response.id in mx_def.robot_status_code_info:
             code_info = mx_def.robot_status_code_info[response.id]
             if code_info.is_error:
-                self.logger.error(f'Received robot error {code_info.code} ({code_info.name})')
+                self.logger.error(f'Received robot error {code_info.code} ({code_info.name}): {response.data}')
         else:
             self.logger.debug(f'Received unknown robot status code {response.id}')
 
@@ -4075,11 +4548,17 @@ class Robot:
         elif response.id == mx_def.MX_ST_RT_EXTTOOL_STATUS:
             self._handle_external_tool_status_response(response)
 
+        elif response.id == mx_def.MX_ST_RT_VALVE_STATE:
+            self._handle_valve_state_response(response)
+
         elif response.id == mx_def.MX_ST_RT_GRIPPER_STATE:
             self._handle_gripper_state_response(response)
 
-        elif response.id == mx_def.MX_ST_RT_VALVE_STATE:
-            self._handle_valve_state_response(response)
+        elif response.id == mx_def.MX_ST_RT_GRIPPER_FORCE:
+            self._robot_rt_data.rt_gripper_force.update_from_csv(response.data)
+
+        elif response.id == mx_def.MX_ST_RT_GRIPPER_POS:
+            self._robot_rt_data.rt_gripper_pos.update_from_csv(response.data)
 
         elif response.id == mx_def.MX_ST_EXTTOOL_SIM:
             if not str(response.data).isdigit():
@@ -4109,8 +4588,6 @@ class Robot:
 
         elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
             self._robot_rt_data.rt_target_joint_vel.update_from_csv(response.data)
-        elif response.id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-            self._robot_rt_data.rt_target_joint_torq.update_from_csv(response.data)
         elif response.id == mx_def.MX_ST_RT_TARGET_CART_VEL:
             self._robot_rt_data.rt_target_cart_vel.update_from_csv(response.data)
 
@@ -4231,7 +4708,7 @@ class Robot:
             self._robot_status.simulation_mode = status_flags[2]
             if self._robot_events.on_activate_ext_tool_sim.is_set() != self._robot_status.simulation_mode:
                 # Sim mode was just disabled -> Also means external tool sim has been disabled
-                self._handle_ext_tool_sim_status(self._external_tool_status.tool_type)
+                self._handle_ext_tool_sim_status(self._external_tool_status.sim_tool_type)
 
         if not self._first_robot_status_received or self._robot_status.error_status != status_flags[3]:
             if status_flags[3]:
@@ -4287,7 +4764,7 @@ class Robot:
         self._gripper_status.present = status_flags[0]
         self._gripper_status.homing_state = status_flags[1]
         self._gripper_status.holding_part = status_flags[2]
-        self._gripper_status.limit_reached = status_flags[3]
+        self._gripper_status.target_pos_reached = status_flags[3]
         self._gripper_status.error_status = status_flags[4]
         self._gripper_status.overload_error = status_flags[5]
 
@@ -4345,10 +4822,11 @@ class Robot:
         self._robot_rt_data.rt_external_tool_status.update_from_csv(response.data)
         status_flags = self._robot_rt_data.rt_external_tool_status.data
 
-        self._external_tool_status.tool_type = status_flags[0]
-        self._external_tool_status.homing_state = status_flags[1]
-        self._external_tool_status.error_status = status_flags[2]
-        self._external_tool_status.overload_error = status_flags[3]
+        self._external_tool_status.sim_tool_type = status_flags[0]
+        self._external_tool_status.physical_tool_type = status_flags[1]
+        self._external_tool_status.homing_state = status_flags[2]
+        self._external_tool_status.error_status = status_flags[3]
+        self._external_tool_status.overload_error = status_flags[4]
 
         if self._is_in_sync():
             self._robot_events.on_external_tool_status_updated.set()
@@ -4367,8 +4845,11 @@ class Robot:
         self._robot_rt_data.rt_gripper_state.update_from_csv(response.data)
         status_flags = self._robot_rt_data.rt_gripper_state.data
 
-        self._gripper_state.holding_part = status_flags[0]
-        self._gripper_state.limit_reached = status_flags[1]
+        self._gripper_state.holding_part = bool(status_flags[0])
+        self._gripper_state.target_pos_reached = bool(status_flags[1])
+        if len(status_flags) > 2:
+            self._gripper_state.closed = bool(status_flags[2])
+            self._gripper_state.opened = bool(status_flags[3])
 
         if self._is_in_sync():
             self._robot_events.on_gripper_state_updated.set()
@@ -4424,7 +4905,8 @@ class Robot:
             if not self._internal_checkpoints[checkpoint_id]:
                 self._internal_checkpoints.pop(checkpoint_id)
         else:
-            self.logger.warning('Received un-tracked checkpoint. Please use ExpectExternalCheckpoint() to track.')
+            self.logger.warning(
+                'Received un-tracked checkpoint {checkpoint_id}. Please use ExpectExternalCheckpoint() to track.')
 
     def _handle_get_realtime_monitoring_response(self, response: _Message):
         """Parse robot response to "get" or "set" real-time monitoring.
@@ -4460,8 +4942,6 @@ class Robot:
                 self._robot_rt_data.rt_target_cart_pos.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_JOINT_VEL:
                 self._robot_rt_data.rt_target_joint_vel.enabled = True
-            if event_id == mx_def.MX_ST_RT_TARGET_JOINT_TORQ:
-                self._robot_rt_data.rt_target_joint_torq.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CART_VEL:
                 self._robot_rt_data.rt_target_cart_vel.enabled = True
             if event_id == mx_def.MX_ST_RT_TARGET_CONF:
@@ -4493,10 +4973,12 @@ class Robot:
                     accelerometer.enabled = True
             if event_id == mx_def.MX_ST_RT_EXTTOOL_STATUS:
                 self._robot_rt_data.rt_external_tool_status.enabled = True
-            if event_id == mx_def.MX_ST_RT_GRIPPER_STATE:
-                self._robot_rt_data.rt_gripper_state.enabled = True
             if event_id == mx_def.MX_ST_RT_VALVE_STATE:
                 self._robot_rt_data.rt_valve_state.enabled = True
+            if event_id == mx_def.MX_ST_RT_GRIPPER_FORCE:
+                self._robot_rt_data.rt_gripper_force.enabled = True
+            if event_id == mx_def.MX_ST_RT_GRIPPER_POS:
+                self._robot_rt_data.rt_gripper_pos.enabled = True
 
         # Make sure to clear values that we should no more received
         self._robot_rt_data._clear_if_disabled()
