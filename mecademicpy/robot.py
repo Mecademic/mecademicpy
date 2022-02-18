@@ -662,8 +662,14 @@ class RobotVersion:
             New version of firmware. Supports multiple version formats
             ie. 8.1.9, 8.4.3.1805-official
         """
+        self.short_version = '0.0.0'
+
         regex_version = re.search(self.REGEX_VERSION_BUILD, version)
-        self.short_version = regex_version.group("version")
+        if regex_version.group("version"):
+            self.short_version = regex_version.group("version")
+        else:
+            raise ValueError(f'Invalid version format: "{version}"')
+
         splitted_version = self.short_version.split(".")
         self.major = int(splitted_version[0])
         self.minor = int(splitted_version[1])
@@ -748,11 +754,11 @@ class RobotInfo:
 """
 
     def __init__(self,
-                 model: str = None,
-                 revision: int = None,
-                 is_virtual: bool = None,
-                 version: str = None,
-                 serial: str = None):
+                 model: str = 'Unknown',
+                 revision: int = 0,
+                 is_virtual: bool = False,
+                 version: str = '0.0.0',
+                 serial: str = ''):
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
@@ -761,6 +767,7 @@ class RobotInfo:
         self.ip_address = None  # Set later
         self.rt_message_capable = False
         self.rt_on_ctrl_port_capable = False
+        self.gripper_pos_ctrl_capable = False
 
         if self.model == 'Meca500':
             self.num_joints = 6
@@ -770,7 +777,7 @@ class RobotInfo:
             self.num_joints = 4
             self.requires_homing = False
             self.supports_ext_tool = False
-        elif self.model is None:
+        elif self.model == 'Unknown':
             self.num_joints = 1
             self.requires_homing = False
             self.supports_ext_tool = False
@@ -780,9 +787,12 @@ class RobotInfo:
         # Check if this robot supports real-time monitoring events
         if self.version.is_at_least(8, 4):
             self.rt_message_capable = True
-        # Check if this robot supports real-time monitoring on control port (8.4.3+)
+        # Check if this robot supports real-time monitoring on control port
         if self.version.is_at_least(9, 0):
             self.rt_on_ctrl_port_capable = True
+        # Check if this robot supports gripper position control
+        if self.version.is_at_least(9, 1):
+            self.gripper_pos_ctrl_capable = True
 
     @classmethod
     def from_command_response_string(cls, input_string: str):
@@ -1458,7 +1468,7 @@ class Robot:
         self._callback_queue = _CallbackQueue(self._robot_callbacks)
         self._callback_thread = None
 
-        self._robot_info = None
+        self._robot_info = RobotInfo()
         self._robot_rt_data = None
         self._robot_rt_data_stable = None
         self._robot_status = RobotStatus()
@@ -2372,6 +2382,9 @@ class Robot:
         timeout : float
             Maximum time to spend waiting for the move to complete (in seconds).
         """
+        if not self._robot_info.gripper_pos_ctrl_capable:
+            raise NotImplementedError(f"Unsupported method for this firmware version")
+
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be None or a positive value")
 
@@ -2465,7 +2478,8 @@ class Robot:
 
         self._send_motion_command('GripperOpen')
 
-        if self._enable_synchronous_mode:
+        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable and self.GetRtExtToolStatus(
+        ).is_gripper():
             gripper_state = self.GetRtGripperState(synchronous_update=True)
             if gripper_state.opened and gripper_state.target_pos_reached:
                 return
@@ -2481,7 +2495,8 @@ class Robot:
 
         self._send_motion_command('GripperClose')
 
-        if self._enable_synchronous_mode:
+        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable and self.GetRtExtToolStatus(
+        ).is_gripper():
             gripper_state = self.GetRtGripperState(synchronous_update=True)
             if gripper_state.closed and gripper_state.target_pos_reached:
                 return
@@ -3372,6 +3387,10 @@ class Robot:
            11: mx_def.MX_EXT_TOOL_MEGP25_LONG
            20: mx_def.MX_EXT_TOOL_VBOX_2VALVES
         """
+        # Firmware version 8.4 and older only support 1 as tool type
+        if sim_ext_tool_type != mx_def.MX_EXT_TOOL_NONE and not self._robot_info.gripper_pos_ctrl_capable:
+            sim_ext_tool_type = 1
+
         with self._main_lock:
             self._check_internal_states()
             self._send_command('SetExtToolSim', [sim_ext_tool_type])
