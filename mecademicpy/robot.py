@@ -1846,49 +1846,64 @@ class Robot:
 
             connect_to_monitoring_port = True
             if not self._monitor_mode and self._robot_info.version.major >= 8:
-                # Fetch the robot serial number
-                serial_response = self._send_custom_command('GetRobotSerial',
-                                                            expected_responses=[mx_def.MX_ST_GET_ROBOT_SERIAL],
-                                                            skip_internal_check=True)
-                serial_response_message = serial_response.wait(timeout=self.default_timeout)
-                self._robot_info.serial = serial_response_message.data
+                can_query_robot_info = True
 
-                # Fetch full version
-                full_version_response = self.SendCustomCommand('GetFwVersionFull', [mx_def.MX_ST_GET_FW_VERSION_FULL])
-                full_version_response.wait(timeout=self.default_timeout)
-                full_version = full_version_response.data.data
-                self._robot_info.version.update_version(full_version)
-
-                # Fetch the current real-time monitoring settings
-                if self._robot_info.rt_message_capable:
-                    real_time_monitoring_response = self._send_custom_command(
-                        'GetRealTimeMonitoring',
-                        expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
-                        skip_internal_check=True)
-                    real_time_monitoring_response.wait(timeout=self.default_timeout)
-
-                    # Get initial monitoring interval
-                    monitoring_interval_response = self._send_custom_command(
-                        'GetMonitoringInterval',
-                        expected_responses=[mx_def.MX_ST_GET_MONITORING_INTERVAL],
-                        skip_internal_check=True)
-                    result = monitoring_interval_response.wait(timeout=self.default_timeout)
-                    self._monitoring_interval = float(result.data)
-                    self._monitoring_interval_to_restore = self._monitoring_interval
-
-                # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid race
-                # conditions between the two sockets causing potential problems with this API)
-                # Also make sure we have received a robot status event before continuing
-                if self._robot_info.rt_on_ctrl_port_capable:
-                    connect_to_monitoring_port = False  # We won't need to connect to monitoring port
-                    robot_status_event = self._send_custom_command('SetCtrlPortMonitoring(1)',
-                                                                   expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
-                                                                   skip_internal_check=True)
-                else:
+                if not self._robot_info.rt_message_capable:
+                    # For these versions (8.3-), it is not possible to get robot information if in error.
                     robot_status_event = self._send_custom_command('GetStatusRobot',
                                                                    expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
                                                                    skip_internal_check=True)
-                robot_status_event.wait(timeout=self.default_timeout)
+                    robot_status_event.wait(timeout=self.default_timeout)
+                    if self._robot_status.error_status:
+                        can_query_robot_info = False
+
+                if can_query_robot_info:
+                    # Fetch the robot serial number
+                    serial_response = self._send_custom_command('GetRobotSerial',
+                                                                expected_responses=[mx_def.MX_ST_GET_ROBOT_SERIAL],
+                                                                skip_internal_check=True)
+                    serial_response_message = serial_response.wait(timeout=self.default_timeout)
+                    self._robot_info.serial = serial_response_message.data
+
+                    # Fetch full version
+                    full_version_response = self.SendCustomCommand('GetFwVersionFull',
+                                                                   [mx_def.MX_ST_GET_FW_VERSION_FULL])
+                    full_version_response.wait(timeout=self.default_timeout)
+                    full_version = full_version_response.data.data
+                    self._robot_info.version.update_version(full_version)
+
+                    # Fetch the current real-time monitoring settings
+                    if self._robot_info.rt_message_capable:
+                        real_time_monitoring_response = self._send_custom_command(
+                            'GetRealTimeMonitoring',
+                            expected_responses=[mx_def.MX_ST_GET_REAL_TIME_MONITORING],
+                            skip_internal_check=True)
+                        real_time_monitoring_response.wait(timeout=self.default_timeout)
+
+                        # Get initial monitoring interval
+                        monitoring_interval_response = self._send_custom_command(
+                            'GetMonitoringInterval',
+                            expected_responses=[mx_def.MX_ST_GET_MONITORING_INTERVAL],
+                            skip_internal_check=True)
+                        result = monitoring_interval_response.wait(timeout=self.default_timeout)
+                        self._monitoring_interval = float(result.data)
+                        self._monitoring_interval_to_restore = self._monitoring_interval
+
+                    # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid race
+                    # conditions between the two sockets causing potential problems with this API)
+                    # Also make sure we have received a robot status event before continuing
+                    if self._robot_info.rt_on_ctrl_port_capable:
+                        connect_to_monitoring_port = False  # We won't need to connect to monitoring port
+                        robot_status_event = self._send_custom_command(
+                            'SetCtrlPortMonitoring(1)',
+                            expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
+                            skip_internal_check=True)
+                    else:
+                        robot_status_event = self._send_custom_command(
+                            'GetStatusRobot',
+                            expected_responses=[mx_def.MX_ST_GET_STATUS_ROBOT],
+                            skip_internal_check=True)
+                    robot_status_event.wait(timeout=self.default_timeout)
 
             if connect_to_monitoring_port:
                 with self._main_lock:
