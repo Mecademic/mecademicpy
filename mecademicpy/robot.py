@@ -3110,6 +3110,9 @@ class Robot:
             Object containing the current external tool status
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             self._send_sync_command('GetRtExtToolStatus', self._robot_events.on_external_tool_status_updated, timeout)
 
@@ -3141,6 +3144,9 @@ class Robot:
             Object containing the current gripper state
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             self._send_sync_command('GetRtGripperState', self._robot_events.on_gripper_state_updated, timeout)
 
@@ -3172,6 +3178,9 @@ class Robot:
             Object containing the current valve state
 
         """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
         if synchronous_update:
             self._send_sync_command('GetRtValveState', self._robot_events.on_valve_state_updated, timeout)
 
