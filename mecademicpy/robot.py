@@ -2471,7 +2471,8 @@ class Robot:
 
         self._send_motion_command('GripperOpen')
 
-        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable:
+        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable and self.GetRtExtToolStatus(
+        ).is_gripper():
             gripper_state = self.GetRtGripperState(synchronous_update=True)
             if gripper_state.opened and gripper_state.target_pos_reached:
                 return
@@ -2487,7 +2488,8 @@ class Robot:
 
         self._send_motion_command('GripperClose')
 
-        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable:
+        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable and self.GetRtExtToolStatus(
+        ).is_gripper():
             gripper_state = self.GetRtGripperState(synchronous_update=True)
             if gripper_state.closed and gripper_state.target_pos_reached:
                 return
@@ -4035,7 +4037,7 @@ class Robot:
                 self._send_command(f'SyncCmdQueue({self._tx_sync})')
             if event.is_set():
                 event.clear()
-                self._send_command(command)
+            self._send_command(command)
 
         # Wait until response is received (this will throw TimeoutException if appropriate)
         event.wait(timeout=timeout)

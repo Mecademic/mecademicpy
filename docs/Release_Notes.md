@@ -10,6 +10,11 @@ Copyright &copy; 2022 by Mecademic Inc.
 
 ---
 
+## Version 1.2.1 (February 2022)
+
+**Fixes**
+- Fix possible infinite timeout when sending command in synchronous mode
+
 ## Version 1.2.0 (February 2022)
 
 **Features**
