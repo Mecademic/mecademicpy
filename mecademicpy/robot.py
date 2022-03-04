@@ -794,6 +794,12 @@ class RobotInfo:
         if self.version.is_at_least(9, 1):
             self.gripper_pos_ctrl_capable = True
 
+    def __str__(self):
+        return f"Connected to {self.serial} ip:{self.ip_address}, {self.model} R{self.revision} v{self.version}"
+
+    def __repr__(self):
+        return str(self)
+
     @classmethod
     def from_command_response_string(cls, input_string: str):
         """Generate robot information from standard robot connection response string.
