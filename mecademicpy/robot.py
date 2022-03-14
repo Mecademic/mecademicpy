@@ -794,6 +794,12 @@ class RobotInfo:
         if self.version.is_at_least(9, 1):
             self.gripper_pos_ctrl_capable = True
 
+    def __str__(self):
+        return f"Connected to {self.serial} ip:{self.ip_address}, {self.model} R{self.revision} v{self.version}"
+
+    def __repr__(self):
+        return str(self)
+
     @classmethod
     def from_command_response_string(cls, input_string: str):
         """Generate robot information from standard robot connection response string.
@@ -1396,7 +1402,7 @@ class Robot:
     _rx_sync : integer
         Most recent response to "SyncCmdQueue" (MX_ST_SYNC_CMD_QUEUE) received from the robot
 """
-    _UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
+    UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
 
     def __init__(self):
         """Constructor for an instance of the Robot class.
@@ -1889,8 +1895,8 @@ class Robot:
                         self._monitoring_interval = float(result.data)
                         self._monitoring_interval_to_restore = self._monitoring_interval
 
-                    # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid race
-                    # conditions between the two sockets causing potential problems with this API)
+                    # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid
+                    # race conditions between the two sockets causing potential problems with this API)
                     # Also make sure we have received a robot status event before continuing
                     if self._robot_info.rt_on_ctrl_port_capable:
                         connect_to_monitoring_port = False  # We won't need to connect to monitoring port
@@ -3858,7 +3864,7 @@ class Robot:
             self.logger.error(error_message)
             raise RuntimeError(error_message)
 
-    def UpdateRobot(self, firmware: str, address: str = None):
+    def UpdateRobot(self, firmware: str, address: str = None, timeout=UPDATE_TIMEOUT):
         """
         Install a new firmware and verifies robot version afterward.
 
@@ -3900,6 +3906,7 @@ class Robot:
         if self.GetStatusRobot(synchronous_update=True).activation_state:
             self.logger.info(f'Robot is activated, will attempt to deactivate before updating firmware')
             self.DeactivateRobot()
+            self.WaitDeactivated()
         self.Disconnect()
 
         robot_url = f"http://{address}/"
@@ -3941,8 +3948,8 @@ class Robot:
             if update_progress.complete:
                 self.logger.info(f"Firmware update complete")
                 break
-            if time.monotonic() > start_time + self._UPDATE_TIMEOUT:
-                error_message = f"Timeout while waiting for update done response, after {self._UPDATE_TIMEOUT} seconds"
+            if time.monotonic() > start_time + timeout:
+                error_message = f"Timeout while waiting for update done response, after {timeout} seconds"
                 raise TimeoutError(error_message)
 
         self.logger.info(f"Waiting for robot to reboot")
