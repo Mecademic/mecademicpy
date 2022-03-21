@@ -22,4 +22,4 @@ setuptools.setup(name='mecademicpy',
                      'Operating System :: OS Independent',
                  ],
                  python_requires='>=3.7',
-                 install_requires=['dataclasses_json>=0.5.4', 'deprecation', 'pandas', 'requests'])
+                 install_requires=['dataclasses_json>=0.5.4', 'deprecation', 'pandas', 'requests', 'pyyaml'])
