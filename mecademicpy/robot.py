@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-from argparse import ArgumentError
+
 import contextlib
 import copy
-import deprecation
 import functools
 import ipaddress
 import json
@@ -12,12 +11,15 @@ import math
 import pathlib
 import queue
 import re
-import requests
-import pkg_resources
 import socket
 import threading
 import time
+from argparse import ArgumentError
 from typing import Tuple, Union
+
+import deprecation
+import pkg_resources
+import requests
 
 import mecademicpy.mx_robot_def as mx_def
 import mecademicpy.tools as tools
