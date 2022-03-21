@@ -4,19 +4,19 @@ import copy
 import logging
 import os
 import pathlib
+import queue
 import re
 import socket
 import threading
-from typing import Union
-import queue
 from functools import partial
-import yaml
-
-import pytest
+from typing import Union
 from unittest import mock
 
-import mecademicpy.robot as mdr
+import pytest
+import yaml
+
 import mecademicpy.mx_robot_def as mx_def
+import mecademicpy.robot as mdr
 import mecademicpy.robot_trajectory_files as robot_files
 
 TEST_IP = '127.0.0.1'

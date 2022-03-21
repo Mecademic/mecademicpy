@@ -1,7 +1,9 @@
-import pytest
-import mecademicpy.robot_trajectory_files as robot_files
-from tempfile import TemporaryDirectory
 from pathlib import PurePath
+from tempfile import TemporaryDirectory
+
+import pytest
+
+import mecademicpy.robot_trajectory_files as robot_files
 
 
 def test_file_integrity():

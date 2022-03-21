@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+
 import queue
 import time
+from pathlib import PurePath
 
 import pandas as pd
 
 import mecademicpy.mx_robot_def as mx_def
 
 from .robot_trajectory_files import RobotTrajectories
-from pathlib import PurePath
 
 # 2nd values of this dict are taken from controller.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
