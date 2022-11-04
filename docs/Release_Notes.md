@@ -10,6 +10,18 @@ Copyright &copy; 2022 by Mecademic Inc.
 
 ---
 
+## Version 1.3.0 (November 2022)
+
+**Features**
+- Update API to support Meca500 R4
+- Update API to support new features in 9.2 robot firmware
+
+**Migration Guide**
+Some defines were refactored in the mx_robot_def.py. Therefore, user should do one the following:
+- Change 'import mecademicpy.mx_robot_def' to 'import mecademicpy.mx_robot_def_legacy'
+or
+- Modify code to use the new defines
+
 ## Version 1.2.1 (February 2022)
 
 **Fixes**
