@@ -2,14 +2,65 @@ import logging
 import platform
 import subprocess
 import time
+from enum import IntEnum
+from typing import Tuple, Union
+from xmlrpc.client import Boolean
 
 
-def ping_robot(ip_address, timeout=90):
-    """Attempt to ping robot supp
+def string_to_numbers(input_string: str) -> list:
+    """Convert comma-separated floats in string form to relevant type.
 
-    :param ip_address: IP address to ping
-    :param timeout: time allowed to ping robot in seconds
-    :raise TimeoutError if method couldn't reach destination.
+    Parameters
+    ----------
+    input_string : string
+        Comma-separated floats values encoded as a string.
+
+    Returns
+    -------
+    list of numbers
+        Returns converted list of floats or integers, depending on nature of element in 'input_string'.
+"""
+
+    return [(float(x) if ('.' in x or 'nan' in x.lower()) else int(x)) for x in input_string.split(',')]
+
+
+def args_to_string(arg_list: list) -> str:
+    """Convert a list of arguments into a string, taking care of converting IntEnum arguments into their
+       numeric value rather than their text value
+
+    Parameters
+    ----------
+    arg_list : list
+        List of arguments (int, float, string, IntEnum...)
+
+    Returns
+    -------
+    str
+        The arguments formatted, ready to be sent to the robot
+    """
+    str_arglist = []
+    for arg in arg_list:
+        if isinstance(arg, IntEnum):
+            str_arglist.append(str(arg.value))
+        else:
+            str_arglist.append(str(arg))
+    return ','.join([x for x in str_arglist])
+
+
+def ping_robot(ip_address: str, timeout: int = 90):
+    """Ping the specified IP address, retrying until timeout
+
+    Parameters
+    ----------
+    ip_address : str
+        IP address to ping
+    timeout : int, optional
+        Maximum time to retry ping if no response, by default 90
+
+    Raises
+    ------
+    TimeoutError
+        Error raised when no reply from specified IP address after specified timeout
     """
     logger = logging.getLogger(__name__)
     logger.info(f"Attempting to ping {ip_address} for {timeout} seconds")
@@ -25,11 +76,18 @@ def ping_robot(ip_address, timeout=90):
     logger.info(f"Successfully ping {ip_address}")
 
 
-def _ping(ip_address):
-    """Pings the IP address for response
+def _ping(ip_address: str) -> bool:
+    """Ping the specified IP address (one attempt only)
 
-    :param ip_address: IP address to Ping
-    :return rep: True if replied, false if no reply
+    Parameters
+    ----------
+    ip_address : str
+        IP address to ping
+
+    Returns
+    -------
+    bool
+        True if got successful ping reply, False otherwise
     """
     logger = logging.getLogger(__name__)
     if platform.system() == 'Windows':
@@ -37,8 +95,8 @@ def _ping(ip_address):
     else:
         ping_command = ['ping', '-c', '1', ip_address]
     try:
-        proc = subprocess.Popen(ping_command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        stdout = proc.stdout.read()
+        command_result = subprocess.run(ping_command, capture_output=True, shell=False)
+        stdout = command_result.stdout.decode("utf-8")
     except subprocess.CalledProcessError as exc:
         logger.info(f"Error running command:'{ping_command}',  error: '{exc}'")
         return False
