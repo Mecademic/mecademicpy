@@ -1,42 +1,44 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+
 import queue
 import time
+from pathlib import PurePath
 
 import pandas as pd
 
-import mecademicpy.mx_robot_def as mx_def
-
+from .mx_robot_def import MxRobotStatusCode as mx_st
 from .robot_trajectory_files import RobotTrajectories
-from pathlib import PurePath
 
 # 2nd values of this dict are taken from controller.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
 # dict and put in UpperCamelCase for convenience (all column names in logged dataframe will be in the format of these
 # values)
 robot_rt_data_to_real_time_monit = {
-    'rt_target_joint_pos': (mx_def.MX_ST_RT_TARGET_JOINT_POS, 'TargetJointPos'),
-    'rt_target_cart_pos': (mx_def.MX_ST_RT_TARGET_CART_POS, 'TargetCartPos'),
-    'rt_target_joint_vel': (mx_def.MX_ST_RT_TARGET_JOINT_VEL, 'TargetJointVel'),
-    'rt_target_cart_vel': (mx_def.MX_ST_RT_TARGET_CART_VEL, 'TargetCartVel'),
-    'rt_target_conf': (mx_def.MX_ST_RT_TARGET_CONF, 'TargetConf'),
-    'rt_target_conf_turn': (mx_def.MX_ST_RT_TARGET_CONF_TURN, 'TargetConfTurn'),
-    'rt_joint_pos': (mx_def.MX_ST_RT_JOINT_POS, 'JointPos'),
-    'rt_cart_pos': (mx_def.MX_ST_RT_CART_POS, 'CartPos'),
-    'rt_joint_vel': (mx_def.MX_ST_RT_JOINT_VEL, 'JointVel'),
-    'rt_joint_torq': (mx_def.MX_ST_RT_JOINT_TORQ, 'JointTorq'),
-    'rt_cart_vel': (mx_def.MX_ST_RT_CART_VEL, 'CartVel'),
-    'rt_conf': (mx_def.MX_ST_RT_CONF, 'Conf'),
-    'rt_conf_turn': (mx_def.MX_ST_RT_CONF_TURN, 'ConfTurn'),
-    'rt_accelerometer': (mx_def.MX_ST_RT_ACCELEROMETER, 'Accel'),
-    'rt_wrf': (mx_def.MX_ST_RT_WRF, 'Wrf'),
-    'rt_trf': (mx_def.MX_ST_RT_TRF, 'Trf'),
-    'rt_checkpoint': (mx_def.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
-    'rt_external_tool_status': (mx_def.MX_ST_RT_EXTTOOL_STATUS, 'ExtToolStatus'),
-    'rt_valve_state': (mx_def.MX_ST_RT_VALVE_STATE, 'ValveState'),
-    'rt_gripper_state': (mx_def.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
-    'rt_gripper_force': (mx_def.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),
-    'rt_gripper_pos': (mx_def.MX_ST_RT_GRIPPER_POS, 'GripperPos'),
-    '': (mx_def.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
+    'rt_target_joint_pos': (mx_st.MX_ST_RT_TARGET_JOINT_POS, 'TargetJointPos'),
+    'rt_target_cart_pos': (mx_st.MX_ST_RT_TARGET_CART_POS, 'TargetCartPos'),
+    'rt_target_joint_vel': (mx_st.MX_ST_RT_TARGET_JOINT_VEL, 'TargetJointVel'),
+    'rt_target_joint_torq': (mx_st.MX_ST_RT_TARGET_JOINT_TORQ, 'TargetJointTorq'),
+    'rt_target_cart_vel': (mx_st.MX_ST_RT_TARGET_CART_VEL, 'TargetCartVel'),
+    'rt_target_conf': (mx_st.MX_ST_RT_TARGET_CONF, 'TargetConf'),
+    'rt_target_conf_turn': (mx_st.MX_ST_RT_TARGET_CONF_TURN, 'TargetConfTurn'),
+    'rt_joint_pos': (mx_st.MX_ST_RT_JOINT_POS, 'JointPos'),
+    'rt_cart_pos': (mx_st.MX_ST_RT_CART_POS, 'CartPos'),
+    'rt_joint_vel': (mx_st.MX_ST_RT_JOINT_VEL, 'JointVel'),
+    'rt_joint_torq': (mx_st.MX_ST_RT_JOINT_TORQ, 'JointTorq'),
+    'rt_cart_vel': (mx_st.MX_ST_RT_CART_VEL, 'CartVel'),
+    'rt_conf': (mx_st.MX_ST_RT_CONF, 'Conf'),
+    'rt_conf_turn': (mx_st.MX_ST_RT_CONF_TURN, 'ConfTurn'),
+    'rt_abs_joint_pos': (mx_st.MX_ST_RT_JOINT_POS, 'AbsJointPos'),
+    'rt_accelerometer': (mx_st.MX_ST_RT_ACCELEROMETER, 'Accel'),
+    'rt_wrf': (mx_st.MX_ST_RT_WRF, 'Wrf'),
+    'rt_trf': (mx_st.MX_ST_RT_TRF, 'Trf'),
+    'rt_checkpoint': (mx_st.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
+    'rt_external_tool_status': (mx_st.MX_ST_RT_EXTTOOL_STATUS, 'ExtToolStatus'),
+    'rt_valve_state': (mx_st.MX_ST_RT_VALVE_STATE, 'ValveState'),
+    'rt_gripper_state': (mx_st.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
+    'rt_gripper_force': (mx_st.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),
+    'rt_gripper_pos': (mx_st.MX_ST_RT_GRIPPER_POS, 'GripperPos'),
+    '': (mx_st.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
 }
 
 
@@ -133,13 +135,13 @@ class _RobotTrajectoryLogger:
                         break
 
         # Set attributes.
-        self.command_queue = queue.Queue()
+        self.command_queue: queue.Queue = queue.Queue()
         self.element_width = 10
         self.timestamp_element_width = 15
         self.done_logging = False
         self.logging_commands = True
-        self.expanded_fields = []
-        self.data_dict = dict()  # Key: timestamp, Value: List of all corresponding robot_rt_data values
+        self.expanded_fields: list = []
+        self.data_dict: dict = dict()  # Key: timestamp, Value: List of all corresponding robot_rt_data values
         self.robot_trajectories = RobotTrajectories()
 
         # Write robot information.
