@@ -5,7 +5,7 @@ A python module designed for robot products from Mecademic. The module offers to
 
 #### Supported Robots
 
- * Meca500 R2, R3
+ * Meca500 R2, R3, R4
 
 #### Supported Firmware Versions
 
