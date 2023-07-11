@@ -6,9 +6,15 @@ If you have any technical questions, please use the technical support form on ou
 
 Mecademic Inc.~assumes no responsibility for any errors or omissions in this document.
 
-Copyright &copy; 2022 by Mecademic Inc.
+Copyright &copy; 2023 by Mecademic Inc.
 
 ---
+
+## Version 1.4.0 (July 2023)
+
+**Features**
+- Update API to support Mcs500
+- Update API to support new features from robot firmware 9.3 and 9.4-alpha
 
 ## Version 1.3.0 (November 2022)
 
