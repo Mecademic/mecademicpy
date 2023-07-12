@@ -144,6 +144,10 @@ class RobotCallbacks:
             Function to be called once gripper state is updated.
         on_valve_state_updated: function object
             Function to be called once valve state is updated.
+        on_output_state_updated: function object
+            Function to be called when digital outputs changed.
+        on_input_state_updated: function object
+            Function to be called when digital inputs changed.
         on_activated : function object
             Function to be called once activated.
         on_deactivated : function object
@@ -181,6 +185,14 @@ class RobotCallbacks:
             Function to be called once gripper sim mode is activated.
         on_deactivate_ext_tool_sim : function object
             Function to be called once gripper sim mode is deactivated.
+        on_psu_io_sim_enabled : function object
+            Function to be called once power supply Io simulation mode is enabled.
+        on_psu_io_sim_disabled : function object
+            Function to be called once power supply Io simulation mode is disabled.
+        on_io_sim_enabled : function object
+            Function to be called once IO simulation mode is enabled.
+        on_io_sim_disabled : function object
+            Function to be called once IO simulation mode is disabled.
         on_activate_recovery_mode : function object
             Function to be called once recovery mode is activated.
         on_deactivate_recovery_mode : function object
@@ -188,11 +200,17 @@ class RobotCallbacks:
         on_command_message : function object
             Function to be called each time a command response is received.
         on_monitor_message : function object
-            Function to be called each time a monitor response is received.
+            Function to be called each time an event is received on the monitoring port.
+            Only available when connected to the robot in monitoring mode.
+            Note that on_monitor_message may not be very useful. We suggest to use on_end_of_cycle instead
+            (which works for both monitoring or control mode connections).
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
         on_end_of_cycle : function object
-            Function to be called each time end of cycle is reached."""
+            Function to be called each time end of cycle is reached.
+            It's called once all real-time data for current monitoring interval has been received.
+            At this moment, all robot real-time data is coherent (belongs to the same cycle).
+            """
 
     def __init__(self):
         self.on_connected = None
@@ -204,6 +222,8 @@ class RobotCallbacks:
         self.on_external_tool_status_updated = None
         self.on_gripper_state_updated = None
         self.on_valve_state_updated = None
+        self.on_output_state_updated = None
+        self.on_input_state_updated = None
 
         self.on_activated = None
         self.on_deactivated = None
@@ -229,6 +249,10 @@ class RobotCallbacks:
 
         self.on_activate_ext_tool_sim = None
         self.on_deactivate_ext_tool_sim = None
+        self.on_psu_io_sim_enabled = None
+        self.on_psu_io_sim_disabled = None
+        self.on_io_sim_enabled = None
+        self.on_io_sim_disabled = None
 
         self.on_activate_recovery_mode = None
         self.on_deactivate_recovery_mode = None
@@ -415,6 +439,28 @@ class RobotVersion:
     def __str__(self) -> str:
         return self.full_version
 
+    def get_str(self, build=False, extra=False) -> str:
+        """Get version string
+
+        Parameters
+        ----------
+        build : bool, optional
+            Include the build number in the version (ex:9.3.0.4739), by default False
+        extra : bool, optional
+            Include the build 'extra in the version (ex:9.3.0.4739-master), by default False
+
+        Returns
+        -------
+        str
+            Formatted version string
+        """
+        version_to_return = self.short_version
+        if build and self.build:
+            version_to_return += f'.{self.build}'
+        if extra and self.extra:
+            version_to_return += f'-{self.extra}'
+        return version_to_return
+
     def update_version(self, version: str):
         """Update object firmware version values by parsing a version string.
 
@@ -441,12 +487,7 @@ class RobotVersion:
         if regex_version.group("extra"):
             self.extra = regex_version.group("extra")
 
-        self.full_version = self.short_version
-        if self.build:
-            self.full_version += f".{self.build}"
-
-        if self.extra:
-            self.full_version += f"-{self.extra}"
+        self.full_version = self.get_str(build=True, extra=True)
 
     def is_at_least(self, major, minor=0, patch=0) -> bool:
         """Tells if this RobotInfo instance's version is at least the specified version
@@ -489,12 +530,16 @@ class RobotInfo:
 
     Attributes
     ----------
+    robot_model: MxRobotModel
+        Model of robot
     model : string
-        Model of robot.
+        Model of robot (legacy, use robot_model instead since it's an enum with well-known values)
     revision : int
         Robot revision.
     is_virtual : bool
         True if is a virtual robot.
+    is_safe_boot : bool
+        True if is booted in safe-boot mode.
     version : str
         robot firmware revision number as received from the connection string.
     serial : string
@@ -511,6 +556,8 @@ class RobotInfo:
         Tells if this robot requires homing.
     supports_ext_tool : bool
         Tells if this robot supports connecting external tools (gripper or valve box).
+    supports_io_module : bool
+        Tells if this robot supports IO expansion module.
     gripper_pos_ctrl_capable : bool
         Tells if this robot supports gripper position control.
     ext_tool_version_capable : bool
@@ -524,12 +571,15 @@ class RobotInfo:
                  model: str = 'Unknown',
                  revision: int = 0,
                  is_virtual: bool = False,
+                 is_safe_boot: bool = False,
                  version: str = '0.0.0',
                  serial: str = '',
                  ext_tool_version: str = '0.0.0.0'):
+        self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R3
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
+        self.is_safe_boot = is_safe_boot
         self.version = RobotVersion(version)
         self.serial = serial
         self.ip_address = None  # Set later
@@ -538,20 +588,35 @@ class RobotInfo:
         self.gripper_pos_ctrl_capable = False
         self.ext_tool_version_capable = False
         self.ext_tool_version = RobotVersion(ext_tool_version)
+        self.psu_dongle_detected = False
 
         if self.model == 'Meca500':
+            if self.revision == 1:
+                self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R1
+            elif self.revision == 2:
+                self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R2
+            elif self.revision == 3:
+                self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R3
+            elif self.revision == 4:
+                self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R4
             self.num_joints = 6
             self.requires_homing = True
             self.supports_ext_tool = True
-        elif self.model == 'Scara':
+            self.supports_io_module = False
+        elif self.model == 'Mcs500':
+            self.robot_model = MxRobotModel.MX_ROBOT_MODEL_MCS500_R1
             self.num_joints = 4
             self.requires_homing = False
             self.supports_ext_tool = False
+            self.supports_io_module = True
         elif self.model == 'Unknown':
+            self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
             self.num_joints = 1
             self.requires_homing = False
             self.supports_ext_tool = False
+            self.supports_ext_tool = False
         else:
+            self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
             raise ValueError(f'Invalid robot model: {self.model}')
 
         # Check if this robot supports real-time monitoring events
@@ -586,9 +651,10 @@ class RobotInfo:
 
         """
         ROBOT_CONNECTION_STRING = r"Connected to (?P<model>[\w|-]+) ?R?(?P<revision>\d)?"
-        ROBOT_CONNECTION_STRING += r"(?P<virtual>-virtual)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
+        ROBOT_CONNECTION_STRING += r"(?P<virtual>-virtual)?(?P<safe_boot>-safe-boot)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
 
         virtual = False
+        safe_boot = False
 
         try:
             robot_info_regex = re.search(ROBOT_CONNECTION_STRING, input_string)
@@ -600,7 +666,13 @@ class RobotInfo:
                 revision = int(robot_info_regex.group('revision'))
             if robot_info_regex.group('virtual'):
                 virtual = True
-            return cls(model=model, revision=revision, is_virtual=virtual, version=robot_info_regex.group('version'))
+            if robot_info_regex.group('safe_boot'):
+                safe_boot = True
+            return cls(model=model,
+                       revision=revision,
+                       is_virtual=virtual,
+                       is_safe_boot=safe_boot,
+                       version=robot_info_regex.group('version'))
         except Exception as exception:
             raise ValueError(f'Could not parse robot info string "{input_string}", error: {exception}')
 
@@ -623,19 +695,41 @@ class RobotInfo:
 
 
 class UpdateProgress:
-    """ Class containing firmware update progress information
+    """Class for storing the robot's firmware update status.
 
     Attributes
     ----------
+    in_progress : bool
+        Firmware update is in progress
     complete : bool
-        Firmware update process state
-    progress : string
+        Firmware update has completed
+    version : str
+        The firmware version being installed
+    error : boolean
+        Tells if the update failed
+    error_msg : str
+        Message that explains why the update failed
+    progress : str
         Update progress message received from robot
+    step : str
+        String that describes the current firmware update step being performed
+
+    _last_print_timestamp : float
+        Last time we have printed the firmware update status
 """
 
-    def __init__(self) -> None:
-        self.complete: bool = False
-        self.progress: str = ''
+    def __init__(self):
+        # The following are status fields.
+        self.in_progress = False
+        self.complete = False
+        self.version = ""
+        self.error = False
+        self.error_msg = ""
+        self.progress = 0.0
+        self.progress_str = ""  # For legacy update
+        self.step = ""
+
+        self._last_print_timestamp = 0.0
 
 
 class TimestampedData:
@@ -679,8 +773,10 @@ class TimestampedData:
         """
         numbs = tools.string_to_numbers(input_string)
 
-        if (len(numbs) - 1) != len(self.data):
+        if (len(numbs) - 1) < len(self.data):
             raise ValueError('Cannot update TimestampedData with incompatible data.')
+        elif (len(numbs) - 1) > len(self.data):
+            numbs = numbs[0:len(self.data) + 1]
 
         if numbs[0] >= self.timestamp:
             self.timestamp = numbs[0]
@@ -809,6 +905,20 @@ class RobotRtData:
     rt_gripper_pos : TimestampedData. (GetRtValveState)
         Gripper position in mm. (GetRtGripperPos)
 
+    rt_psu_io_status : TimestampedData
+        Power supply's IO module status
+    rt_psu_outputs : TimestampedData
+        Power supply's digital outputs state [output[0], output[1], ...]. (GetRtOutputState)
+    rt_psu_inputs : TimestampedData
+        Power supply's digital inputs state [input[0], input[1], ...]. (GetRtInputState)
+
+    rt_io_module_status : TimestampedData
+        IO module status
+    rt_io_module_outputs : TimestampedData
+        IO module's digital outputs state [output[0], output[1], ...]. (GetRtOutputState)
+    rt_io_module_inputs : TimestampedData
+        IO module's digital inputs state [input[0], input[1], ...]. (GetRtInputState)
+
     rt_wrf : TimestampedData
         Current definition of the WRF w.r.t. the BRF with timestamp. Cartesian data are in mm, Euler angles in degrees.
         [cartesian coordinates x, y, z, Euler angles omega-x, omega-y, omega-z] (GetRtWrf)
@@ -820,20 +930,28 @@ class RobotRtData:
 """
 
     def __init__(self, num_joints: int):
+        self._init_timestamped_data(num_joints)
+        self.max_queue_size = 0
+
+    def _init_timestamped_data(self, num_joints: int):
+        """Initialize timestamped data class members according to detected robot model (number of joints)"""
+        nb_cart_val = num_joints  # 4 degrees of liberty for 4 joints robots, 6 for 6 joint robots
+        nb_conf_val = 3 if num_joints == 6 else 1  # 4 degrees of liberty for 4 joints robots, 6 for 6 joint robots
+
         self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.rt_target_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_target_cart_pos = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
         self.rt_target_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.rt_target_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
+        self.rt_target_cart_vel = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm/s and deg/s
         self.rt_target_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.rt_target_conf = TimestampedData.zeros(3)
+        self.rt_target_conf = TimestampedData.zeros(nb_conf_val)
         self.rt_target_conf_turn = TimestampedData.zeros(1)
 
         self.rt_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.rt_cart_pos = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
+        self.rt_cart_pos = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
         self.rt_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
         self.rt_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.rt_cart_vel = TimestampedData.zeros(6)  # microseconds timestamp, mm/s and deg/s
-        self.rt_conf = TimestampedData.zeros(3)
+        self.rt_cart_vel = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm/s and deg/s
+        self.rt_conf = TimestampedData.zeros(nb_conf_val)
         self.rt_conf_turn = TimestampedData.zeros(1)
 
         # Another way of getting robot joint position using less-precise encoders.
@@ -853,11 +971,17 @@ class RobotRtData:
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
 
-        self.rt_wrf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
-        self.rt_trf = TimestampedData.zeros(6)  # microseconds timestamp, mm and degrees
-        self.rt_checkpoint = TimestampedData.zeros(1)  # microseconds timestamp, checkpointId
+        self.rt_psu_io_status = TimestampedData.zeros(4)
+        self.rt_psu_outputs = TimestampedData.zeros(0)
+        self.rt_psu_inputs = TimestampedData.zeros(0)
 
-        self.max_queue_size = 0
+        self.rt_io_module_status = TimestampedData.zeros(4)
+        self.rt_io_module_outputs = TimestampedData.zeros(0)
+        self.rt_io_module_inputs = TimestampedData.zeros(0)
+
+        self.rt_wrf = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
+        self.rt_trf = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
+        self.rt_checkpoint = TimestampedData.zeros(1)  # microseconds timestamp, checkpointId
 
     def _for_each_rt_data(self):
         """Iterates for each TimestampedData type member of this class (rt_joint_pos, rt_cart_pos, etc.)
@@ -937,6 +1061,12 @@ class RobotStatus:
         self.end_of_block_status = False
         self.brakes_engaged = False
 
+    def __str__(self) -> str:
+        return f"Activated: {self.activation_state}, homed: {self.homing_state}, sim: {self.simulation_mode}, " \
+               f"recovery mode: {self.recovery_mode}, error: {self.error_status}, pstop2 state: {self.pstop2State}, " \
+               f"estop state: {str(self.estopState)}, pause motion: {str(self.pause_motion_status)}, " \
+               f"EOB: {self.end_of_block_status}, brakes engaged: {self.brakes_engaged}"
+
 
 class GripperStatus:
     """Class for storing the Mecademic robot's gripper status.
@@ -988,6 +1118,10 @@ class ExtToolStatus:
         True if the gripper is in error state.
     overload_error : bool
         True if the gripper is in overload error state.
+    comm_err_warning : bool
+        True if some communication errors were detected with the external tool.
+        This could mean that the cable may be damaged and must be replaced,
+        or that the cable may simply not be screwed tight enough on either side.
 """
 
     def __init__(self):
@@ -998,6 +1132,7 @@ class ExtToolStatus:
         self.homing_state = False
         self.error_status = False
         self.overload_error = False
+        self.comm_err_warning = False
 
     def __str__(self) -> str:
         return f"Sim tool type: {self.sim_tool_type}, Physical tool type: {self.physical_tool_type}, " \
@@ -1067,6 +1202,50 @@ class ExtToolStatus:
         """
         tool_type = self.physical_tool_type if physical else self.current_tool_type()
         return tool_type in [MxExtToolType.MX_EXT_TOOL_VBOX_2VALVES]
+
+
+class IoStatus:
+    """Class for storing the Mecademic robot's IO modules status.
+
+    Attributes
+    ----------
+    bank_id : int
+        Type of this IO module.
+        1: MxIoBankId.MX_IO_BANK_ID_PSU
+        2: MxIoBankId.MX_IO_BANK_ID_IO_MODULE
+    present : bool
+        True if an IO module of this type is present on the robot.
+    nb_inputs : int
+        Number of digital inputs supported by this IO module.
+    nb_outputs : int
+        Number of digital outputs supported by this IO module.
+    sim_mode : bool
+        True if the IO module is in simulation mode.
+    error : int
+        Error code of the IO module (0 if no error).
+    timestamp : int
+        Monotonic timestamp associated with data (in microseconds since robot last reboot)
+        This timestamp is stamped by the robot so it is not affected by host/network jitter
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.bank_id = MxIoBankId.MX_IO_BANK_ID_UNDEFINED
+        self.present = False
+        self.nb_inputs = 0
+        self.nb_outputs = 0
+        self.sim_mode = False
+        self.error = 0
+        self.timestamp = 0
+
+    def __str__(self) -> str:
+        return f"BankId: {self.bank_id}, Physically present: {self.present}, " \
+               f"Digital inputs: {self.nb_inputs}, Digital outputs: {self.nb_outputs}, " \
+               f"Simulation mode: {self.sim_mode}, error: {self.error}"
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 class ValveState:

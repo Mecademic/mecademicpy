@@ -8,6 +8,7 @@ from pathlib import PurePath
 import pandas as pd
 
 from .mx_robot_def import MxRobotStatusCode as mx_st
+from .robot_classes import *
 from .robot_trajectory_files import RobotTrajectories
 
 # 2nd values of this dict are taken from controller.cpp HandleSetRealTimeMonitoring() -> ParseStatusCodeString()
@@ -38,6 +39,12 @@ robot_rt_data_to_real_time_monit = {
     'rt_gripper_state': (mx_st.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
     'rt_gripper_force': (mx_st.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),
     'rt_gripper_pos': (mx_st.MX_ST_RT_GRIPPER_POS, 'GripperPos'),
+    'rt_psu_io_status': (mx_st.MX_ST_RT_IO_STATUS, 'PsuIoModuleStatus'),
+    'rt_psu_outputs': (mx_st.MX_ST_RT_OUTPUT_STATE, 'PsuOutputState'),
+    'rt_psu_inputs': (mx_st.MX_ST_RT_INPUT_STATE, 'PsuInputState'),
+    'rt_io_module_status': (mx_st.MX_ST_RT_IO_STATUS, 'IoModuleStatus'),
+    'rt_io_module_outputs': (mx_st.MX_ST_RT_OUTPUT_STATE, 'IoModuleOutputState'),
+    'rt_io_module_inputs': (mx_st.MX_ST_RT_INPUT_STATE, 'IoModuleInputState'),
     '': (mx_st.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
 }
 
@@ -71,8 +78,8 @@ class _RobotTrajectoryLogger:
     """
 
     def __init__(self,
-                 robot_info,
-                 robot_rt_data,
+                 robot_info: RobotInfo,
+                 robot_rt_data: RobotRtData,
                  fields: list[str] = None,
                  file_name: str = None,
                  file_path: str = None,
@@ -84,10 +91,10 @@ class _RobotTrajectoryLogger:
         ----------
         robot_info : RobotInfo
             Contains robot information.
-        fields : list of strings
-            List of fields to be logged.
         robot_rt_data : RobotRtData object
             Contains state of robot.
+        fields : list of strings
+            List of fields to be logged.
         file_name: string or None
             Log file name
             If None, file name will be built with date/time and robot information (robot type, serial, version).
@@ -157,9 +164,9 @@ class _RobotTrajectoryLogger:
             self.robot_trajectories.robot_context.robot_information[0]['monitoring_interval'] = f'{monitoring_interval}'
 
         # Write headers for logged data
-        self.write_field_and_element_headers(robot_info)
+        self.write_field_and_element_headers(robot_info, robot_rt_data)
 
-    def get_timestamp_data(self, robot_rt_data, field):
+    def get_timestamp_data(self, robot_rt_data: RobotRtData, field):
         """ Return timestamp data object associated with the specific field (or None).
 
         Parameters
@@ -180,14 +187,37 @@ class _RobotTrajectoryLogger:
             field_attr = getattr(robot_rt_data, field)
         return field_attr
 
-    def write_field_and_element_headers(self, robot_info):
+    def _build_io_fields(self, prefix: str, type: str, count: int) -> list[str]:
+        """Build a list of digital IO field names
+
+        Parameters
+        ----------
+        prefix : str
+            IO bank prefix (ex: 'psu' or 'ioModule')
+        type : str
+            IO type ('Input' or 'Output')
+        count : int
+            Number of IOs of this type in this bank
+
+        Returns
+        -------
+        list[str]
+            _description_
+        """
+        fields = []
+        for idx in range(count):
+            fields.append(f'{prefix}{type}_{idx + 1}')
+        return fields
+
+    def write_field_and_element_headers(self, robot_info: RobotInfo, robot_rt_data: RobotRtData):
         """Write the full field name and element name in each column.
 
         Parameters
         ----------
         robot_info : RobotInfo
             Information about the robot, such as model name and number of joints.
-
+        robot_rt_data : RobotRtData object
+            Contains state of robot.
         """
 
         def assemble_with_prefix(field, names):
@@ -213,19 +243,40 @@ class _RobotTrajectoryLogger:
                 self.expanded_fields.append(value)
             elif key.endswith('rt_external_tool_status'):
                 self.expanded_fields.extend(
-                    assemble_with_prefix(value, ['sim_model', 'physical_model', 'present', 'homed', 'error']))
+                    assemble_with_prefix(value, ['SimModel', 'PhysicalModel', 'Present', 'Homed', 'Error']))
             elif key.endswith('rt_valve_state'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['valve1', 'valve2']))
             elif key.endswith('rt_gripper_state'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['holding', 'atpos', 'closed', 'opened']))
+                self.expanded_fields.extend(
+                    assemble_with_prefix(value, ['Holding', 'TargetReached', 'Closed', 'Opened']))
             elif key.endswith('rt_gripper_force'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
             elif key.endswith('rt_gripper_pos'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['mm']))
+            elif key.endswith('rt_psu_io_status'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['BankId', 'Present', 'SimMode', 'Error']))
+            elif key.endswith('rt_io_module_status'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['BankId', 'Present', 'SimMode', 'Error']))
+            elif key.endswith('rt_psu_outputs'):
+                nb_outputs = len(robot_rt_data.rt_psu_outputs.data)
+                if nb_outputs != 0:
+                    self.expanded_fields.extend(self._build_io_fields('Psu', 'Output', nb_outputs))
+            elif key.endswith('rt_psu_inputs'):
+                nb_inputs = len(robot_rt_data.rt_psu_inputs.data)
+                if nb_inputs != 0:
+                    self.expanded_fields.extend(self._build_io_fields('Psu', 'Input', nb_inputs))
+            elif key.endswith('rt_io_module_outputs'):
+                nb_outputs = len(robot_rt_data.rt_io_module_outputs.data)
+                if nb_outputs != 0:
+                    self.expanded_fields.extend(self._build_io_fields('IoModule', 'Output', nb_outputs))
+            elif key.endswith('rt_io_module_inputs'):
+                nb_inputs = len(robot_rt_data.rt_io_module_inputs.data)
+                if nb_inputs != 0:
+                    self.expanded_fields.extend(self._build_io_fields('IoModule', 'Input', nb_inputs))
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
-    def write_fields(self, timestamp, robot_rt_data):
+    def write_fields(self, timestamp, robot_rt_data: RobotRtData):
         """Write fields to file.
 
         Parameters
