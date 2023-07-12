@@ -58,7 +58,7 @@ class Robot(_Robot):
                 'Cannot call RunCallbacks since callback handler is already running in separate thread.')
 
         # Setting timeout=0 means we don't block on an empty queue.
-        self._handle_callbacks(self.logger, self._callback_queue, self._robot_callbacks, timeout=0)
+        self._handle_callbacks(polling=True)
 
     def Connect(self,
                 address: str = MX_DEFAULT_ROBOT_IP,
@@ -66,7 +66,7 @@ class Robot(_Robot):
                 disconnect_on_exception: bool = True,
                 monitor_mode: bool = False,
                 offline_mode: bool = False,
-                timeout=0.1):
+                timeout=1.0):
         """Attempt to connect to a Mecademic Robot.
            This function is synchronous (awaits for success or timeout) even when using this class in asynchronous mode
            (see enable_synchronous_mode below).
@@ -237,7 +237,7 @@ class Robot(_Robot):
         self._send_motion_command('MoveJointsVel', args)
 
     @disconnect_on_exception
-    def MovePose(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MovePose(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Move robot's tool to an absolute Cartesian position (non-linear move, but all joints arrive simultaneously).
 
         Parameters
@@ -246,12 +246,17 @@ class Robot(_Robot):
             Desired end effector coordinates in mm.
         alpha, beta, gamma
             Desired end effector orientation in degrees.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - MovePose(200, 10, 100, 45)
+                - MovePose(200, 10, 100, gamma=45)
 
         """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MovePose', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLin(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLin(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Linearly move robot's tool to an absolute Cartesian position.
 
         Parameters
@@ -260,12 +265,17 @@ class Robot(_Robot):
             Desired end effector coordinates in mm.
         alpha, beta, gamma
             Desired end effector orientation in degrees.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - MoveLin(200, 10, 100, 45)
+                - MoveLin(200, 10, 100, gamma=45)
 
         """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MoveLin', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
-    def MoveLinRelTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLinRelTrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Linearly move robot's tool to a Cartesian position relative to current TRF position.
 
         Parameters
@@ -274,8 +284,13 @@ class Robot(_Robot):
             Desired displacement in mm.
         alpha, beta, gamma
             Desired orientation change in deg.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - MoveLinRelTrf(200, 10, 100, 45)
+                - MoveLinRelTrf(200, 10, 100, gamma=45)
 
         """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MoveLinRelTrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
@@ -283,13 +298,13 @@ class Robot(_Robot):
                             current_version=__version__,
                             details="Use the 'MoveLinRelTrf' function instead")
     @disconnect_on_exception
-    def MoveLinRelTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLinRelTRF(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Deprecated use MoveLinRelTrf instead.
         """
         self.MoveLinRelTrf(x, y, z, alpha, beta, gamma)
 
     @disconnect_on_exception
-    def MoveLinRelWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLinRelWrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Linearly move robot's tool to a Cartesian position relative to a reference frame that has the same
         orientation.
 
@@ -299,8 +314,13 @@ class Robot(_Robot):
             Desired displacement in mm.
         alpha, beta, gamma
             Desired orientation change in deg.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - MoveLinRelWrf(200, 10, 100, 45)
+                - MoveLinRelWrf(200, 10, 100, gamma=45)
 
         """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MoveLinRelWrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
@@ -308,13 +328,13 @@ class Robot(_Robot):
                             current_version=__version__,
                             details="Use the 'MoveLinRelWrf' function instead")
     @disconnect_on_exception
-    def MoveLinRelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLinRelWRF(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Deprecated use MoveLinRelWrf instead.
         """
         self.MoveLinRelWrf(x, y, z, alpha, beta, gamma)
 
     @disconnect_on_exception
-    def MoveLinVelTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLinVelTrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Move robot's by Cartesian velocity relative to the TRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).
@@ -325,8 +345,13 @@ class Robot(_Robot):
             Desired velocity in mm/s.
         alpha, beta, gamma
             Desired angular velocity in degrees/s.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - MoveLinVelTrf(200, 10, 100, 45)
+                - MoveLinVelTrf(200, 10, 100, gamma=45)
 
         """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MoveLinVelTrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
@@ -334,14 +359,14 @@ class Robot(_Robot):
                             current_version=__version__,
                             details="Use the 'MoveLinVelTrf' function instead")
     @disconnect_on_exception
-    def MoveLinVelTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLinVelTRF(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Deprecated use MoveLinVelTrf instead
 
         """
         self.MoveLinVelTrf(x, y, z, alpha, beta, gamma)
 
     @disconnect_on_exception
-    def MoveLinVelWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLinVelWrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Move robot's by Cartesian velocity relative to the WRF.
 
            Joints will move for a time controlled by velocity timeout (SetVelTimeout).
@@ -352,8 +377,13 @@ class Robot(_Robot):
             Desired velocity in mm/s.
         alpha, beta, gamma
             Desired angular velocity in degrees/s.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - MoveLinVelWrf(200, 10, 100, 45)
+                - MoveLinVelWrf(200, 10, 100, gamma=45)
 
         """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MoveLinVelWrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
@@ -361,7 +391,7 @@ class Robot(_Robot):
                             current_version=__version__,
                             details="Use the 'MoveLinVelWrf' function instead")
     @disconnect_on_exception
-    def MoveLinVelWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def MoveLinVelWRF(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Deprecated use MoveLinVelWrf instead
 
         """
@@ -382,8 +412,12 @@ class Robot(_Robot):
         self._send_motion_command('SetVelTimeout', [t])
 
     @disconnect_on_exception
-    def SetConf(self, shoulder: int, elbow: int, wrist: int):
+    def SetConf(self, shoulder: int = None, elbow: int = None, wrist: int = None):
         """Manually set inverse kinematics options (and disable auto-conf).
+            On 4-axes robots (like Mcs500), shoulder and wrist values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - SetConf(1)
+                - SetConf(elbow=1)
 
         Parameters
         ----------
@@ -395,6 +429,7 @@ class Robot(_Robot):
             Wrist inverse kinematics parameter.
 
         """
+        [shoulder, elbow, wrist] = self._normalize_conf_cmd_args(shoulder, elbow, wrist)
         self._send_motion_command('SetConf', [shoulder, elbow, wrist])
 
     @disconnect_on_exception
@@ -403,7 +438,7 @@ class Robot(_Robot):
 
         Parameters
         ----------
-        e : boolean
+        e : bool
             If true, robot will automatically choose the best configuration for the desired pose.
 
         """
@@ -427,7 +462,7 @@ class Robot(_Robot):
 
         Parameters
         ----------
-        e : boolean
+        e : bool
             If true, robot will automatically choose the best configuration for the desired pose.
 
         """
@@ -512,7 +547,23 @@ class Robot(_Robot):
         self._send_motion_command('SetJointVel', [p])
 
     @disconnect_on_exception
-    def SetTrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def SetJointVelLimit(self, p: float):
+        """Change the safety joint velocity limit that is applied to all type of moves.
+        In joint space:     The joints velocity will be capped to this limit
+                            even if SetJointVel or MoveJointsVel request higher speed.
+        With linear moves:  The joints velocity will be capped to this limit regardless of the requested
+                            linear or angular velocity.
+
+        Parameters
+        ----------
+        p : float
+            Joint velocity limit in percent.
+
+        """
+        self._send_motion_command('SetJointVelLimit', [p])
+
+    @disconnect_on_exception
+    def SetTrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Set the TRF (tool reference frame) Cartesian position.
 
         Parameters
@@ -521,8 +572,13 @@ class Robot(_Robot):
             Desired reference coordinates in mm.
         alpha, beta, gamma
             Desired reference orientation in degrees.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - SetTrf(200, 10, 100, 45)
+                - SetTrf(200, 10, 100, gamma=45)
 
         """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('SetTrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
@@ -530,14 +586,14 @@ class Robot(_Robot):
                             current_version=__version__,
                             details="Use the 'SetTrf' function instead")
     @disconnect_on_exception
-    def SetTRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def SetTRF(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Deprecated use SetTrf instead
 
         """
         self.SetTrf(x, y, z, alpha, beta, gamma)
 
     @disconnect_on_exception
-    def SetWrf(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def SetWrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Set the WRF (world reference frame) Cartesian position.
 
         Parameters
@@ -546,8 +602,13 @@ class Robot(_Robot):
             Desired reference coordinates in mm.
         alpha, beta, gamma
             Desired reference orientation in degrees.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - SetWrf(200, 10, 100, 45)
+                - SetWrf(200, 10, 100, gamma=45)
 
         """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('SetWrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
@@ -555,7 +616,7 @@ class Robot(_Robot):
                             current_version=__version__,
                             details="Use the 'SetWrf' function instead")
     @disconnect_on_exception
-    def SetWRF(self, x: float, y: float, z: float, alpha: float, beta: float, gamma: float):
+    def SetWRF(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Deprecated use SetWrf instead
 
         """
@@ -624,8 +685,18 @@ class Robot(_Robot):
     @disconnect_on_exception
     def GripperOpen(self):
         """Open the gripper.
-           Note that the robot may move while the gripper is opening.
-           See method WaitGripperMoveCompletion for more information.
+           Note 1:  This command will not cause the robot to stop moving.
+
+           Note 2:  This command will be executed at the beginning of the blending (or deceleration) period of
+                    the previous command in the motion queue.
+                    You can insert a Delay before moving the gripper to make sure that gripper move starts only
+                    once the robot has stopped moving.
+
+           Note 3:  The robot will not wait for gripper move to be completed before continuing with the next command
+                    in the motion queue.
+                    If you need to wait for the gripper move to be completed before continuing your program, do not
+                    post any request in the motion queue after MoveGripper, then call method WaitGripperMoveCompletion
+                    in your application to know when your application can continue sending other move commands.
 
         """
         self._gripper_state_before_last_move = copy.deepcopy(self._gripper_state)
@@ -641,8 +712,18 @@ class Robot(_Robot):
     @disconnect_on_exception
     def GripperClose(self):
         """Close the gripper.
-           Note that the robot may move while the gripper is closing.
-           See method WaitGripperMoveCompletion for more information.
+           Note 1:  This command will not cause the robot to stop moving.
+
+           Note 2:  This command will be executed at the beginning of the blending (or deceleration) period of
+                    the previous command in the motion queue.
+                    You can insert a Delay before moving the gripper to make sure that gripper move starts only
+                    once the robot has stopped moving.
+
+           Note 3:  The robot will not wait for gripper move to be completed before continuing with the next command
+                    in the motion queue.
+                    If you need to wait for the gripper move to be completed before continuing your program, do not
+                    post any request in the motion queue after MoveGripper, then call method WaitGripperMoveCompletion
+                    in your application to know when your application can continue sending other move commands.
 
         """
         self._gripper_state_before_last_move = copy.deepcopy(self._gripper_state)
@@ -658,10 +739,20 @@ class Robot(_Robot):
     @disconnect_on_exception
     def MoveGripper(self, target: Union[bool, float]):
         """Move the gripper to a target position.
-           Note that the robot may move while the gripper is moving.
-           See method WaitGripperMoveCompletion for more information.
+           Note 1:  This command will not cause the robot to stop moving.
 
-           If the target specified is a boolean, it indicates if the target position is the opened (True, GRIPPER_OPEN)
+           Note 2:  This command will be executed at the beginning of the blending (or deceleration) period of
+                    the previous command in the motion queue.
+                    You can insert a Delay before moving the gripper to make sure that gripper move starts only
+                    once the robot has stopped moving.
+
+           Note 3:  The robot will not wait for gripper move to be completed before continuing with the next command
+                    in the motion queue.
+                    If you need to wait for the gripper move to be completed before continuing your program, do not
+                    post any request in the motion queue after MoveGripper, then call method WaitGripperMoveCompletion
+                    in your application to know when your application can continue sending other move commands.
+
+           If the target specified is a bool, it indicates if the target position is the opened (True, GRIPPER_OPEN)
            or closed (False, GRIPPER_CLOSE) position.
            Otherwise the target position indicates the opening of the gripper, in mm from the most closed position.
 
@@ -670,8 +761,8 @@ class Robot(_Robot):
 
         Parameters
         ----------
-        target : boolean or float
-            boolean type: Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
+        target : bool or float
+            bool type: Open or close the gripper (GRIPPER_OPEN or GRIPPER_CLOSE)
             float type: The gripper's target position, in mm from the most closed position.
 
         """
@@ -734,23 +825,58 @@ class Robot(_Robot):
         self._send_motion_command('SetGripperRange', [closePos, openPos])
 
     @disconnect_on_exception
-    def SetValveState(self, *args: list[int]):
+    def SetValveState(self, *args: Union[MxCmdValveState, int, str]):
         """Set the pneumatic module valve states.
-           Note that the robot may move while the valves are being opened/closed.
-           Using the Delay method may be appropriate to postpone subsequent move commands in the motion queue
-           if necessary.
+           Note 1:  This command will not cause the robot to stop moving.
+
+           Note 2:  This command will be executed at the beginning of the blending (or deceleration) period of
+                    the previous command in the motion queue.
+                    You can insert a Delay before changing the valves states to make sure that valves are changed
+                    once the robot has stopped moving.
 
         Parameters
         ----------
-        valve_1...valve_n : int
+        valve_1...valve_n :
             The desired state for valve:
-                - MxCmdValveState.MX_VALVE_STATE_STAY
-                - MxCmdValveState.MX_VALVE_STATE_CLOSE
-                - MxCmdValveState.MX_VALVE_STATE_OPEN
+                - MxCmdValveState.MX_VALVE_STATE_STAY (alternatively: -1, '*' or 'stay')
+                - MxCmdValveState.MX_VALVE_STATE_CLOSE (alternatively: 0 or 'close')
+                - MxCmdValveState.MX_VALVE_STATE_OPEN (alternatively: 1 or 'open')
             MPM500 pneumatic module has 2 valves.
 
         """
         self._send_motion_command('SetValveState', args)
+
+    @disconnect_on_exception
+    def SetOutputState(self, bank_id: MxIoBankId, *args: Union[MxDigitalIoState, int, str]):
+        """Set the digital output states for the specified IO bank.
+           Note 1:  This command will not cause the robot to stop moving.
+
+           Note 2:  This command will be executed at the beginning of the blending (or deceleration) period of
+                    the previous command in the motion queue.
+                    You can insert a Delay before changing the IO states to make sure that they change
+                    once the robot has stopped moving.
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to set output states for.
+        io_1...io_n : int
+            The desired IO state (the number of available outputs depends on the chosen bank id):
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_STAY (alternatively: -1, '*' or 'stay')
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_0 (alternatively: 0 or 'off')
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_1 (alternatively: 1 or 'on')
+
+        """
+        final_args = list(args)
+        final_args.insert(0, bank_id)
+        self._send_motion_command('SetOutputState', final_args)
+
+    @disconnect_on_exception
+    def SetOutputStateImmediate(self, bank_id: MxIoBankId, *args: Union[MxDigitalIoState, int, str]):
+        """Same as SetOutputState but without going through robot's motion queue (immediately applied)"""
+        final_args = list(args)
+        final_args.insert(0, bank_id)
+        self._send_motion_command('SetOutputStateImmediate', final_args)
 
     @disconnect_on_exception
     def WaitForAnyCheckpoint(self, timeout: float = None):
@@ -807,12 +933,15 @@ class Robot(_Robot):
 
         Parameters
         ----------
-        timeout : float, by default 15
+        timeout : float, by default 30
             Maximum time to spend waiting for the event (in seconds).
         """
         # Use appropriate default timeout of not specified
         if timeout is None:
-            timeout = 15.0
+            if robot_model_is_mg2(self.GetRobotInfo().robot_model):
+                timeout = 5.0
+            else:
+                timeout = 30.0
         self._robot_events.on_activated.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -837,7 +966,10 @@ class Robot(_Robot):
         """
         # Use appropriate default timeout of not specified
         if timeout is None:
-            timeout = 40.0
+            if robot_model_is_mg2(self.GetRobotInfo().robot_model):
+                timeout = 5.0
+            else:
+                timeout = 40.0
         self._robot_events.on_homed.wait(timeout=timeout)
 
     @disconnect_on_exception
@@ -897,6 +1029,44 @@ class Robot(_Robot):
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitIoSimEnabled(self, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, timeout: float = None):
+        """Pause program execution until the robot PSU IO simulation mode is enabled.
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId, MxIoBankId.MX_IO_BANK_ID_IO_MODULE
+            Id of the IO module to wait for.
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
+            self._robot_events.on_psu_io_sim_enabled.wait(timeout=timeout)
+        else:
+            self._robot_events.on_io_sim_enabled.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitIoSimDisabled(self, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, timeout: float = None):
+        """Pause program execution until the robot IO simulation mode is disabled.
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId, MxIoBankId.MX_IO_BANK_ID_IO_MODULE
+            Id of the IO module to wait for.
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
+            self._robot_events.on_psu_io_sim_disabled.wait(timeout=timeout)
+        else:
+            self._robot_events.on_io_sim_disabled.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitRecoveryMode(self, activated: bool, timeout: float = None):
@@ -1127,7 +1297,7 @@ class Robot(_Robot):
     def SendCustomCommand(self,
                           command: str,
                           expected_responses: list[int] = None,
-                          timeout: float = None) -> InterruptableEvent:
+                          timeout: float = None) -> InterruptableEvent | Message:
         """Send custom command to robot (a command that the robot may support but that this Python API does not
            provide an explicit function for).
 
@@ -1434,7 +1604,7 @@ class Robot(_Robot):
         ----------
         include_timestamp : bool
             If true, return a TimestampedData object, otherwise just return states.
-        synchronous_update: boolean
+        synchronous_update: bool
             True -> Synchronously get updated external tool status. False -> Get latest known status.
         timeout: float
             Timeout (in seconds) waiting for synchronous response from the robot.
@@ -1458,6 +1628,49 @@ class Robot(_Robot):
                 return copy.deepcopy(self._external_tool_status)
 
     @disconnect_on_exception
+    def GetRtIoStatus(self,
+                      bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
+                      include_timestamp: bool = False,
+                      synchronous_update: bool = False,
+                      timeout: float = None) -> IoStatus:
+        """Return a copy of the current IO module status
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to get output states for.
+        synchronous_update: bool
+            True -> Synchronously get updated IO module status. False -> Get latest known status.
+        timeout: float
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        TimestampedData or IoStatus
+            Object containing the current IO module status
+
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if synchronous_update:
+            self._send_sync_command(f'GetRtIoStatus({bank_id})', self._robot_events.on_output_state_updated, timeout)
+
+        with self._main_lock:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
+                if include_timestamp:
+                    return copy.deepcopy(self._robot_rt_data.rt_psu_io_status)
+                else:
+                    return copy.deepcopy(self._rt_psu_io_status)
+            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+                if include_timestamp:
+                    return copy.deepcopy(self._robot_rt_data.rt_io_module_status)
+                else:
+                    return copy.deepcopy(self._rt_io_module_status)
+            else:
+                raise MecademicException("Argument Error in Command : GetRtIoStatus")
+
+    @disconnect_on_exception
     def GetRtGripperState(self,
                           include_timestamp: bool = False,
                           synchronous_update: bool = False,
@@ -1468,7 +1681,7 @@ class Robot(_Robot):
         ----------
         include_timestamp : bool
             If true, return a TimestampedData object, otherwise just return states.
-        synchronous_update: boolean
+        synchronous_update: bool
             True -> Synchronously get updated gripper state. False -> Get latest known status.
         timeout: float
             Timeout (in seconds) waiting for synchronous response from the robot.
@@ -1502,7 +1715,7 @@ class Robot(_Robot):
         ----------
         include_timestamp : bool
             If true, return a TimestampedData object, otherwise just return states.
-        synchronous_update: boolean
+        synchronous_update: bool
             True -> Synchronously get updated valve states. False -> Get latest known status.
         timeout: float
             Timeout (in seconds) waiting for synchronous response from the robot.
@@ -1524,6 +1737,79 @@ class Robot(_Robot):
                 return copy.deepcopy(self._robot_rt_data.rt_valve_state)
             else:
                 return copy.deepcopy(self._valve_state)
+
+    @disconnect_on_exception
+    def GetRtOutputState(self,
+                         bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
+                         synchronous_update: bool = False,
+                         timeout: float = None) -> TimestampedData:
+        """Return a copy of the current digital outputs state
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to get output states for.
+        synchronous_update: bool
+            True -> Synchronously get updated states. False -> Get latest known status.
+        timeout: float
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        TimestampedData
+            Object containing the current digital output states for requested bank id.
+
+        """
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if synchronous_update:
+            self._send_sync_command(f'GetRtOutputState({bank_id})', self._robot_events.on_output_state_updated, timeout)
+
+        with self._main_lock:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
+                return copy.deepcopy(self._robot_rt_data.rt_psu_outputs)
+            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+                return copy.deepcopy(self._robot_rt_data.rt_io_module_outputs)
+            else:
+                return TimestampedData.zeros(0)
+
+    @disconnect_on_exception
+    def GetRtInputState(self,
+                        bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
+                        synchronous_update: bool = False,
+                        timeout: float = None) -> TimestampedData:
+        """Return a copy of the current digital inputs state
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to get input states for.
+        synchronous_update: bool
+            True -> Synchronously get updated states. False -> Get latest known status.
+        timeout: float
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        TimestampedData
+            Object containing the current digital input states for requested bank id.
+
+        """
+
+        # Use appropriate default timeout of not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if synchronous_update:
+            self._send_sync_command(f'GetRtInputState({bank_id})', self._robot_events.on_input_state_updated, timeout)
+
+        with self._main_lock:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
+                return copy.deepcopy(self._robot_rt_data.rt_psu_inputs)
+            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+                return copy.deepcopy(self._robot_rt_data.rt_io_module_inputs)
+            else:
+                return TimestampedData.zeros(0)
 
     @disconnect_on_exception
     def GetRtTargetJointPos(self,
@@ -1647,7 +1933,8 @@ class Robot(_Robot):
         ----------
         events : list of event IDs
             List of event IDs to enable.
-            Example: events=[MxRobotStatusCode.MX_ST_RT_TARGET_JOINT_POS, MxRobotStatusCode.MX_ST_RT_TARGET_CART_POS]
+            Example:
+          SetRealTimeMonitoring(MxRobotStatusCode.MX_ST_RT_TARGET_JOINT_POS, MxRobotStatusCode.MX_ST_RT_TARGET_CART_POS)
             enables the target joint positions and target end effector pose messages.
             Can also use events='all' to enable all.
 
@@ -1729,6 +2016,30 @@ class Robot(_Robot):
                 self.WaitExtToolSimDeactivated()
             else:
                 self.WaitExtToolSimActivated()
+
+    @disconnect_on_exception
+    def SetIoSim(self, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, enable: bool = True):
+        """Enable or disable IO simulation. This allows emulating the presence of an IO module and use the
+           corresponding APIs (ex: SetOutputState) without the module to be physically present.
+           This can also be used even if the physical module is present to test the APIs without actually applying the
+           changes on the physical module (to test the APIs without the robot moving)
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to enable or disable simulation mode for.
+        enable : bool
+            Enable or disable simulation mode.
+        """
+        with self._main_lock:
+            self._check_internal_states()
+            self._send_command('SetIoSim', [bank_id, 1 if enable else 0])
+
+        if self._enable_synchronous_mode:
+            if enable:
+                self.WaitIoSimEnabled(bank_id)
+            else:
+                self.WaitIoSimDisabled(bank_id)
 
     @disconnect_on_exception
     def SetRecoveryMode(self, activated: bool = True):
@@ -1910,7 +2221,10 @@ class Robot(_Robot):
                 - MX_TORQUE_LIMITS_DETECT_ALL or 0 or False : Always check if torque is within limits
                 - MX_TORQUE_LIMITS_DETECT_SKIP_ACCEL or 1 or True : Do not check if torque is within limits during acceleration
         """
-        severity_int = TORQUE_LIMIT_SEVERITIES[severity] if type(severity) == str else severity
+        if isinstance(severity, str):
+            severity_int = TORQUE_LIMIT_SEVERITIES[severity]
+        else:
+            severity_int = severity
         skip_acceleration_int = 1 if skip_acceleration else 0
         self._send_motion_command('SetTorqueLimitsCfg', [severity_int, skip_acceleration_int])
 
@@ -1993,7 +2307,7 @@ class Robot(_Robot):
 
         Parameters
         ----------
-        synchronous_update: boolean
+        synchronous_update: bool
             True -> Synchronously wait for the next data cycle to get updated data. False -> Get latest known data.
         timeout: float
             Timeout (in seconds) waiting for updated cyclic data from the robot. Only used for synchronous requests.
@@ -2016,7 +2330,7 @@ class Robot(_Robot):
 
         Parameters
         ----------
-        synchronous_update: boolean
+        synchronous_update: bool
             True -> Synchronously get updated robot status. False -> Get latest known status.
         timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
             Timeout (in seconds) waiting for synchronous response from the robot.
@@ -2053,7 +2367,8 @@ class Robot(_Robot):
         response = self._send_custom_command('GetGripperRange',
                                              expected_responses=[MxRobotStatusCode.MX_ST_GET_GRIPPER_RANGE],
                                              timeout=self.default_timeout)
-        positions = string_to_numbers(response.data)
+        if isinstance(response, Message):
+            positions = string_to_numbers(response.data)
         assert len(positions) == 2
         return positions[0], positions[1]
 
