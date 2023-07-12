@@ -1,10 +1,39 @@
+from __future__ import annotations
+
 import logging
 import platform
 import subprocess
 import time
 from enum import IntEnum
-from typing import Tuple, Union
-from xmlrpc.client import Boolean
+
+from .mx_robot_def import *
+
+
+def SetDefaultLogger(console_level=logging.INFO, filename: str = "", file_level=logging.INFO):
+    """Utility function that prepares a default console logger and optionally a file logger
+
+    Parameters
+    ----------
+    console_level : optional
+        Logging level to use on the console, by default logging.INFO
+    filename : str, optional
+        Log file name (path), by default ""
+    file_level : optional
+        Logging level to use in the file (if filename is not empty), by default logging.INFO
+    """
+    handlers: list[logging.StreamHandler | logging.FileHandler] = []
+    formatter = logging.Formatter(fmt='%(asctime)s.%(msecs)03d:[%(levelname)s]: %(message)s',
+                                  datefmt='%Y-%m-%d %H:%M:%S')
+    consoleHandler = logging.StreamHandler()
+    consoleHandler.setFormatter(formatter)
+    handlers.append(consoleHandler)
+
+    if filename != "":
+        fileHandler = logging.FileHandler(filename=filename)
+        fileHandler.setFormatter(formatter)
+        handlers.append(fileHandler)
+
+    logging.basicConfig(level=console_level, handlers=handlers)
 
 
 def string_to_numbers(input_string: str) -> list:
@@ -107,3 +136,26 @@ def _ping(ip_address: str) -> bool:
         if stdout.find(success_ping) != -1:
             return True
     return False
+
+
+def robot_model_is_meca500(robot_model: MxRobotModel):
+    """Tells if the specified robot model is a Meca500 robot (or any revision)"""
+    return robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or \
+        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2 or  \
+        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3 or \
+        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4
+
+
+def robot_model_is_mg2(robot_model: MxRobotModel):
+    """Tells if the specified robot model is a Mecademic 2nd generation robot (Mcs500, ...)"""
+    return robot_model == MxRobotModel.MX_ROBOT_MODEL_M1000_R1 or \
+        robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1
+
+
+def robot_model_support_eoat(robot_model: MxRobotModel):
+    """Tells if the specified robot model support eoat (Meca500, ...)"""
+
+    return robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or \
+        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2 or \
+        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3 or \
+        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4

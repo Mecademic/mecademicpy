@@ -1,7 +1,7 @@
-![Mecademic](https://github.com/Mecademic/mecademicpy/blob/main/docs/logo/mecademic_logo.jpg?raw=true  "Mecademic")
+![Mecademic](https://github.com/Mecademic/mecademicpy/blob/main/docs/logo/mecademic_logo.png?raw=true  "Mecademic")
 # Mecademic Python API
 
-A python module designed for robot products from Mecademic. The module offers tools that give access to the features of the Mecademic Robots such as MoveLin and MoveJoints available through the TCP/IP text interface. The module can be started from a terminal or a python application and controls the Mecademic products. 
+A python module designed for robot products from Mecademic. The module offers tools that give access to the features of the Mecademic Robots such as MoveLin and MoveJoints available through the TCP/IP text interface. The module can be started from a terminal or a python application and controls the Mecademic products.
 
 #### Supported Robots
 
@@ -13,7 +13,7 @@ A python module designed for robot products from Mecademic. The module offers to
 
 ## Prerequisites
 
-Please read the [user programming manual](https://mecademic.com/resources/documentation) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
+Please read the [user programming manual](https://www.mecademic.com/support/) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
 
 To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is required to use python version 3.7 or higher. We recommend using Python 3.9 since this is the version on which this module is actively tested. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
 
@@ -27,7 +27,7 @@ To download and install the package, the user can easily do so through pip. Pip 
 
 ```
 pip install mecademicpy
-``` 
+```
 
 ## Quick Start
 
@@ -42,7 +42,7 @@ robot.Connect(address='192.168.0.100')
 ```
 
 The `Connect` function will raise if connection with robot fails.
-This function is synchronous (awaits for success or timeout) even when using the `Robot` class in [asynchronous mode](#synchronous-vs.-asynchronous-mode). 
+This function is synchronous (awaits for success or timeout) even when using the `Robot` class in [asynchronous mode](#synchronous-vs.-asynchronous-mode).
 
 Before using the robot, it must be activated and homed. To do so, run the following functions:
 
@@ -51,9 +51,9 @@ robot.ActivateRobot()
 robot.Home()
 ```
 
-The robot should move slightly to perform its homing routine. We can also use `robot.WaitHomed()` or [synchronous mode](#synchronous-vs.-asynchronous-mode) to block execution until homing is done. 
+The robot should move slightly to perform its homing routine. We can also use `robot.WaitHomed()` or [synchronous mode](#synchronous-vs.-asynchronous-mode) to block execution until homing is done.
 
-Once homing is complete, the robot is now ready to perform operations. [The user programming manual](https://mecademic.com/resources/documentation) or the documentation in the module is sufficient to be able to make the Robot perform actions and control the robot. 
+Once homing is complete, the robot is now ready to perform operations. [The user programming manual](https://www.mecademic.com/support/) or the documentation in the module is sufficient to be able to make the Robot perform actions and control the robot.
 
 Here is an example of a simple motion to perform:
 
@@ -228,7 +228,7 @@ It is recommended to use `GetStatusRobot()` to learn about the current robot sta
 
 The `on_error` callback can also be used to manage robot errors.
 
-Improper use of the class can also cause exceptions to be raised. For example, calling `MoveJoints()` without any arguments will raise an exception. 
+Improper use of the class can also cause exceptions to be raised. For example, calling `MoveJoints()` without any arguments will raise an exception.
 
 If the user is waiting on an event or checkpoint that the `Robot` class later determines will never occur, the event will unblock and raise an exception. For example, if the user is waiting on a checkpoint (`WaitCheckpoint`), but calls `Disconnect()` or `ClearMotion()` before the checkpoint is received, the checkpoint will unblock and raise an exception. Events and checkpoints will also unblock with exception on robot error state.
 
@@ -236,11 +236,11 @@ The user should use python's built-in `try...except` blocks to handle appropriat
 
 ### Preserved State on Disconnection
 
-Once the robot is disconnected, not all states are immediately cleared. Therefore, it is possible to still get the last-known state of the robot. 
+Once the robot is disconnected, not all states are immediately cleared. Therefore, it is possible to still get the last-known state of the robot.
 
 ### Logging Data to File
 
-It is possible to continuously log the robot state to a file using the API either using the `StartLogging` and `EndLogging` functions or using the `FileLogger` context. 
+It is possible to continuously log the robot state to a file using the API either using the `StartLogging` and `EndLogging` functions or using the `FileLogger` context.
 
 An example usage of `StartLogging` and `EngLogging`:
 
@@ -277,7 +277,7 @@ The `FileLogger` context will automatically end logging after either completing 
 
 The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
 
-- `"TargetJointPos"` 
+- `"TargetJointPos"`
 - `"TargetCartPos"`
 - `"TargetJointVel"`
 - `"TargetCartVel"`
@@ -286,10 +286,10 @@ The user can select which fields to log using the `fields` parameter in `StartLo
 
 - `"JointPos"`
 - `"CartPos"`
-- `"JointVel"` 
-- `"JointTorq"` 
-- `"CartVel"` 
-- `"Conf"` 
+- `"JointVel"`
+- `"JointTorq"`
+- `"CartVel"`
+- `"Conf"`
 - `"ConfTurn"`
 
 - `"Accel"`
@@ -348,7 +348,7 @@ To get support, you can start an issue on the Mecademic github page, issues sect
 
 All packages in this repository are licensed under the MIT license.
 
-## Authors 
+## Authors
 
 * **Mecademic** - *Continuous work*
 

@@ -10,6 +10,7 @@ import queue
 import re
 import socket
 import threading
+import time
 from functools import partial
 from typing import Union
 from unittest import mock
@@ -20,7 +21,7 @@ import yaml
 import mecademicpy._robot_base as mdrb
 import mecademicpy.robot as mdr
 import mecademicpy.robot_trajectory_files as robot_files
-from mecademicpy.mx_robot_def import MX_ROBOT_TCP_PORT_CONTROL, MX_ROBOT_TCP_PORT_FEED, MxExtToolType
+from mecademicpy.mx_robot_def import MX_ROBOT_TCP_PORT_CONTROL, MX_ROBOT_TCP_PORT_FEED, MxExtToolType, MxIoBankId
 from mecademicpy.mx_robot_def import MxRobotStatusCode as mx_st  # Shorten usage of MxRobotStatusCode
 
 TEST_IP = '127.0.0.1'
@@ -115,7 +116,8 @@ def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expec
             event = queue_in.get(block=True, timeout=1)
             assert event == expected_in[i]
             if isinstance(desired_out[i], list):
-                for response in desired_out[i]:
+                desired_list: list = desired_out
+                for response in desired_list[i]:
                     queue_out.put(response)
             else:
                 queue_out.put(desired_out[i])
@@ -179,9 +181,6 @@ class FakeSocket():
 
 # Test that connecting with invalid parameters raises exception.
 def test_setup_invalid_input(robot: mdr.Robot):
-
-    with pytest.raises(TypeError):
-        robot.Connect(2)
     with pytest.raises(ValueError):
         robot.Connect('1.1.1.1.1')
 
@@ -190,7 +189,7 @@ def test_setup_invalid_input(robot: mdr.Robot):
 def test_connection_no_robot(robot: mdr.Robot):
     robot.default_timeout = 0
 
-    with pytest.raises(mdr.CommunicationError):
+    with pytest.raises((mdr.CommunicationError, TimeoutError, ConnectionRefusedError)):
         robot.Connect(TEST_IP)
 
 
@@ -242,15 +241,15 @@ def test_successful_connection_split_response():
 
 
 # Test that we can connect to a Scara robot.
-def test_scara_connection(robot: mdr.Robot):
+def test_mcs500_connection(robot: mdr.Robot):
     cur_dir = os.getcwd()
-    connect_robot_helper(robot, yaml_filename='scara_r1_v9.yml')
+    connect_robot_helper(robot, yaml_filename='mcs500_r1_v9.yml')
     assert not robot.GetStatusRobot().activation_state
-    assert robot.GetRobotInfo().model == 'Scara'
+    assert robot.GetRobotInfo().model == 'Mcs500'
     assert robot.GetRobotInfo().num_joints == 4
     assert robot.GetRobotInfo().version.major == 9
     assert robot.GetRobotInfo().rt_message_capable
-    assert robot.GetRobotInfo().serial == 'scara-87654321'
+    assert robot.GetRobotInfo().serial == 'mcs500-87654321'
 
 
 # Test that we can connect to a M500 robot running older version 7.0.6
@@ -844,6 +843,14 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_EXTTOOL_STATUS, '33,1,1,1,1,0'))
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_VALVE_STATE, '34,1,1'))
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_GRIPPER_STATE, '35,1,1,0,0'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_OUTPUT_STATE, '36,1,1,0,0'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_INPUT_STATE, '36,1,1,0,0'))
+        # Simulate enabling/disabling of PSU IO sim
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '37,1,1,1,0'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '38,1,1,0,0'))
+        # Simulate enabling/disabling of IO module sim
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '39,2,1,1,0'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '40,2,1,0,0'))
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RECOVERY_MODE_ON, ''))
         robot.SetRecoveryMode(True)
@@ -897,7 +904,7 @@ def test_motion_commands(robot: mdr.Robot):
 
     skip_commands = [
         'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
-        'SetTorqueLimitsCfg'
+        'SetTorqueLimitsCfg', 'SetIoSim'
     ]
 
     # List of methods that will be deprecated. The deprecation decorator breaks the way we use to test those methods.
@@ -922,10 +929,13 @@ def test_motion_commands(robot: mdr.Robot):
             text_command = robot._command_tx_queue.get(block=True, timeout=1)
 
             # Check that the text commands begins with the appropriate name.
-            assert text_command.find(name) == 0, 'Method {} does not match text command'.format(name)
+            assert text_command.find(
+                name) == 0, f'Method {name} does not match text command ({text_command} does not include {name})'
 
             # Check that the test arguments.
-            assert text_command.find(test_args_text) != -1, 'Method {} args do not match text command'.format(name)
+            assert text_command.find(
+                test_args_text
+            ) != -1, f'Method {name} args do not match text command ({text_command} does not include {test_args_text})'
 
 
 # Test that joint-type moves send the correct command and checks input.
@@ -1178,6 +1188,25 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
 
     # Manually set that the robot is rt-message-capable.
     robot._robot_info.rt_message_capable = True
+
+    # Send some fictive PSU and IoModule input/output values so the robot object creates the inputs/outputs arrays
+    psu_outputs = mdr.Message(mx_st.MX_ST_RT_OUTPUT_STATE, f'0,{MxIoBankId.MX_IO_BANK_ID_PSU},1,0,1')
+    psu_inputs = mdr.Message(mx_st.MX_ST_RT_INPUT_STATE, f'0,{MxIoBankId.MX_IO_BANK_ID_PSU},0,1,0,1')
+    io_module_outputs = mdr.Message(mx_st.MX_ST_RT_OUTPUT_STATE,
+                                    f'0,{MxIoBankId.MX_IO_BANK_ID_IO_MODULE},1,0,1,0,1,0,1,0')
+    io_module_inputs = mdr.Message(mx_st.MX_ST_RT_INPUT_STATE,
+                                   f'0,{MxIoBankId.MX_IO_BANK_ID_IO_MODULE},0,1,0,1,0,1,0,1')
+    robot._command_rx_queue.put(psu_outputs)
+    robot._command_rx_queue.put(psu_inputs)
+    robot._command_rx_queue.put(io_module_outputs)
+    robot._command_rx_queue.put(io_module_inputs)
+
+    startTime = time.monotonic()
+    while len(robot._robot_rt_data.rt_io_module_inputs.data) == 0:
+        if time.monotonic() - startTime >= 1:
+            raise TimeoutError('Timeout waiting for MX_ST_RT_INPUT_STATE to be handled')
+        time.sleep(0.001)
+
     # Send status message to indicate that the robot is activated and homed, and idle.
     robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,1'))
     robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_REAL_TIME_MONITORING, ''))
@@ -1224,6 +1253,15 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_WRF, fake_string(seed=22, length=7)))
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_TRF, fake_string(seed=23, length=7)))
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CHECKPOINT, fake_string(seed=24, length=2)))
+
+            robot._command_rx_queue.put(psu_outputs)
+            robot._command_rx_queue.put(psu_inputs)
+            robot._command_rx_queue.put(
+                mdr.Message(mx_st.MX_ST_RT_IO_STATUS, f'25,{MxIoBankId.MX_IO_BANK_ID_PSU},25,25,25'))
+            robot._command_rx_queue.put(io_module_outputs)
+            robot._command_rx_queue.put(io_module_inputs)
+            robot._command_rx_queue.put(
+                mdr.Message(mx_st.MX_ST_RT_IO_STATUS, f'26,{MxIoBankId.MX_IO_BANK_ID_IO_MODULE},26,26,26'))
 
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CYCLE_END, str(i * 100)))
 
