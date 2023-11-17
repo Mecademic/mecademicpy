@@ -5,7 +5,7 @@ A python module designed for robot products from Mecademic. The module offers to
 
 #### Supported Robots
 
- * Meca500 R2, R3
+ * Meca500, Mcs500
 
 #### Supported Firmware Versions
 
@@ -72,12 +72,6 @@ robot.DeactivateRobot()
 robot.Disconnect()
 ```
 
-If the robot encounters an error during operation, the robot will go into an error mode. In this mode, the module will block any command to the robot unless the error is reset. To properly reset errors on the robot, the following function must be run:
-
-```python
-robot.ResetError()
-```
-
 It is recommended to use `GetStatusRobot()` to learn about the current robot status before resuming operation.
 
 For complete and working examples, please refer to the `examples` folder.
@@ -95,16 +89,19 @@ import time
 robot = mdr.Robot()
 robot.Connect(address='192.168.0.100', enable_synchronous_mode=False)
 robot.ActivateAndHome()
+robot.WaitHomed()
 
 robot.MoveJoints(0, 0, 0, 0, 0, 0)
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
 
+# Print robot position while it's moving
 for _ in range(100):
     print(robot.GetJoints())
     time.sleep(0.05)
 
 robot.WaitIdle()
 robot.DeactivateRobot()
+robot.WaitDeactivated()
 robot.Disconnect()
 ```
 
@@ -158,21 +155,19 @@ Note that creating multiple checkpoints with the same ID is possible but not rec
 Checkpoints may also be set in an offline program, saved to robot memory. Use `ExpectExternalCheckpoint(n)` to receive these checkpoints while the robot is running the offline program. The call to `ExpectExternalCheckpoint(n)` should be made before the offline program is started, or otherwise must be guaranteed to occur before the robot can possibly send the checkpoint. For example, the following code will start an offline program and expect to receive a checkpoint from the program, and then print "`Received expected external checkpoint`":
 
 ```python
-robot.StartOfflineProgram(1)
 checkpoint_event = robot.ExpectExternalCheckpoint(5)
-checkpoint_event.wait(30)
-print("Received expected external checkpoint")
+robot.StartOfflineProgram(1)
+checkpoint_event.wait(timeout=30)
+print("Received expected checkpoint from running program")
 ```
 where offline program 1 is
 ```
-StartSaving(1)
 MoveJoints(100,0,0,0,0,0)
 MoveJoints(-100,0,0,0,0,0)
 SetCheckpoint(5)
 MoveJoints(0,-60,60,0,0,0)
 MoveJoints(0,0,0,0,0,0)
 SetOfflineProgramLoop(1)
-StopSaving
 ```
 
 If the robot motion command queue is cleared (using `ClearMotion()` for example), or the robot is disconnected, all pending checkpoints will be aborted, and all active `wait()` calls will raise an `InterruptException`.
@@ -246,7 +241,6 @@ An example usage of `StartLogging` and `EngLogging`:
 
 ```python
 robot.WaitIdle()
-robot.WaitEndOfCycle()
 robot.StartLogging(0.001)
 try:
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
@@ -258,7 +252,7 @@ finally:
     robot.EndLogging()
 ```
 
-Note that the user should wait for the robot to be idle before starting to log, and also wait for idle before ending the log. This is to ensure the log correctly captures the movements of interest. It is also recommended to wait for the end of a monitoring cycle before and after logging, as the logger will thus produce more consistently sized files.
+Note that the user should wait for the robot to be idle (WaitIdle) before starting to log, and also wait for idle before ending the log. This is to ensure the log correctly captures the movements of interest.
 
 It should also be noted that it is mandatory to give a monitoring interval, in seconds, to `StartLogging`, to specify at which rate data should be logged. In the example above, the monitoring interval is set at 0.001 seconds, or 1 ms. It is the minimum monitoring interval that can be set using `SetMonitoringInterval`, which is the robot command used by `StartLogging` to choose the monitoring interval.
 
@@ -266,7 +260,6 @@ The user can also use the `FileLogger` context:
 
 ```python
 robot.WaitIdle()
-robot.WaitEndOfCycle()
 with robot.FileLogger(0.001):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
@@ -291,9 +284,26 @@ The user can select which fields to log using the `fields` parameter in `StartLo
 - `"CartVel"`
 - `"Conf"`
 - `"ConfTurn"`
-
 - `"Accel"`
 
+- `"Wrf"`
+- `"Trf"`
+- `"Checkpoint"`
+
+- `"ExtToolStatus"`
+- `"ValveState"`
+- `"GripperState"`
+- `"GripperForce"`
+- `"GripperPos"`
+
+- `"IoModuleStatus"`
+- `"IoModuleOutputState"`
+- `"IoModuleInputState"`
+- `"SigGenStatus"`
+- `"SigGenOutputState"`
+- `"SigGenInputState"`
+- `"VacuumState"`
+- `"VacuumPressure"`
 
 These strings should be placed into the list given to the `fields` parameter.
 
@@ -301,7 +311,6 @@ The following example only logs the `"TargetJointPos"` and `"JointPos"`.
 
 ```python
 robot.WaitIdle()
-robot.WaitEndOfCycle()
 with robot.FileLogger(0.001, fields=['TargetJointPos', 'JointPos']):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
@@ -321,8 +330,7 @@ import mecademicpy.mx_robot_def as mdr_def
 # Connect, activate, and home robot...
 
 response_codes = [mdr_def.MX_ST_ERROR_RESET, mdr_def.MX_ST_NO_ERROR_RESET]
-response_event = robot.SendCustomCommand('ResetError', expected_responses=response_codes)
-response = response_event.wait(timeout=10)
+response = robot.SendCustomCommand('ResetError', expected_responses=response_codes, timeout=10)
 ```
 
 Although raw numerical response codes can also be used, it is recommended to use the named aliases provided in `mx_robot_def.py` for clarity.

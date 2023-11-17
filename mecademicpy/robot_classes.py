@@ -148,6 +148,8 @@ class RobotCallbacks:
             Function to be called when digital outputs changed.
         on_input_state_updated: function object
             Function to be called when digital inputs changed.
+        on_vacuum_state_updated: function object
+            Function to be called once vacuum state is updated.
         on_activated : function object
             Function to be called once activated.
         on_deactivated : function object
@@ -161,7 +163,7 @@ class RobotCallbacks:
         on_pstop2 : function object
             Function to be called if PStop2 is activated.
         on_pstop2_resettable : function object
-            Function to be called immediately after on_pstop2, only if the PStop2 condition can be reset
+            Function to be called when PStop2 condition can be reset
             (i.e. the power supply PStop2 signal is no more asserted)
         on_pstop2_reset : function object
             Function to be called if PStop2 is reset.
@@ -169,6 +171,9 @@ class RobotCallbacks:
             Function to be called if EStop is activated.
         on_estop_reset : function object
             Function to be called if EStop is reset.
+        on_estop_resettable : function object
+            Function to be called when EStop condition can be reset
+            (i.e. the power supply EStop signal is no more asserted)
         on_motion_paused : function object
             Function to be called once motion is paused.
         on_motion_cleared : function object
@@ -185,10 +190,6 @@ class RobotCallbacks:
             Function to be called once gripper sim mode is activated.
         on_deactivate_ext_tool_sim : function object
             Function to be called once gripper sim mode is deactivated.
-        on_psu_io_sim_enabled : function object
-            Function to be called once power supply Io simulation mode is enabled.
-        on_psu_io_sim_disabled : function object
-            Function to be called once power supply Io simulation mode is disabled.
         on_io_sim_enabled : function object
             Function to be called once IO simulation mode is enabled.
         on_io_sim_disabled : function object
@@ -224,6 +225,7 @@ class RobotCallbacks:
         self.on_valve_state_updated = None
         self.on_output_state_updated = None
         self.on_input_state_updated = None
+        self.on_vacuum_state_updated = None
 
         self.on_activated = None
         self.on_deactivated = None
@@ -236,6 +238,7 @@ class RobotCallbacks:
         self.on_pstop2_resettable = None
         self.on_pstop2_reset = None
         self.on_estop = None
+        self.on_estop_resettable = None
         self.on_estop_reset = None
 
         self.on_motion_paused = None
@@ -249,8 +252,6 @@ class RobotCallbacks:
 
         self.on_activate_ext_tool_sim = None
         self.on_deactivate_ext_tool_sim = None
-        self.on_psu_io_sim_enabled = None
-        self.on_psu_io_sim_disabled = None
         self.on_io_sim_enabled = None
         self.on_io_sim_disabled = None
 
@@ -588,7 +589,6 @@ class RobotInfo:
         self.gripper_pos_ctrl_capable = False
         self.ext_tool_version_capable = False
         self.ext_tool_version = RobotVersion(ext_tool_version)
-        self.psu_dongle_detected = False
 
         if self.model == 'Meca500':
             if self.revision == 1:
@@ -633,7 +633,9 @@ class RobotInfo:
             self.ext_tool_version_capable = True
 
     def __str__(self):
-        return f"Connected to {self.serial} ip:{self.ip_address}, {self.model} R{self.revision} v{self.version}"
+        safe_boot_str = " SAFE-BOOT" if self.is_safe_boot else ""
+        return (f"Connected to {self.ip_address}: "
+                f"{self.model} R{self.revision} {self.serial} v{self.version}{safe_boot_str}")
 
     def __repr__(self):
         return str(self)
@@ -678,6 +680,28 @@ class RobotInfo:
 
     def get_serial_digit(self) -> int:
         """Returns robot serial digits.
+           ie. M500-0123 -> 123 (for Meca500)
+            or
+           ie. 0123 -> 123 (for other)
+
+        Returns
+        -------
+        int
+            Returns robot serial digits
+        """
+        if self.robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4:
+            serial_digit = self._get_meca500_serial_digits()
+        elif self.robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3:
+            serial_digit = self._get_meca500_serial_digits()
+        elif self.robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2:
+            serial_digit = self._get_meca500_serial_digits()
+        else:
+            # This should cover mcs500 and all new future hardwares
+            serial_digit = int(self.serial)
+        return serial_digit
+
+    def _get_meca500_serial_digits(self) -> int:
+        """Returns robot serial digits.
            ie. M500-0123 -> 123
 
         Returns
@@ -690,8 +714,7 @@ class RobotInfo:
         if len(serial_split) != 2:
             raise ValueError(f'Invalid serial number string received: {self.serial}, expecting "M500-1234"')
 
-        serial_digit = int(serial_split[1])
-        return serial_digit
+        return int(serial_split[1])
 
 
 class UpdateProgress:
@@ -762,21 +785,29 @@ class TimestampedData:
             self.timestamp = 0
             self.data = TimestampedData.zeros(len(self.data)).data
 
-    def update_from_csv(self, input_string: str):
+    def update_from_csv(self, input_string: str, allowed_nb_val: list[int] = None):
         """Update from comma-separated string, only if timestamp is newer.
 
         Parameters
         ----------
         input_string : string
             Comma-separated string. First value is timestamp, rest is data.
+        allowed_nb_val : list[int]
+            Optional list of accepted number of values. If not provided, input_string must contain at least as many
+            values as current contents of self.data.
 
         """
         numbs = tools.string_to_numbers(input_string)
+        nb_values = len(numbs) - 1
 
-        if (len(numbs) - 1) < len(self.data):
-            raise ValueError('Cannot update TimestampedData with incompatible data.')
-        elif (len(numbs) - 1) > len(self.data):
-            numbs = numbs[0:len(self.data) + 1]
+        if allowed_nb_val is None:
+            if (nb_values) < len(self.data):
+                raise ValueError(f'Cannot update TimestampedData, too few values received ({nb_values}).')
+            elif (nb_values) > len(self.data):
+                numbs = numbs[0:len(self.data) + 1]
+        else:
+            if nb_values not in allowed_nb_val:
+                raise ValueError(f'Cannot update TimestampedData, incorrect number of values received ({nb_values}).')
 
         if numbs[0] >= self.timestamp:
             self.timestamp = numbs[0]
@@ -858,6 +889,9 @@ class RobotRtData:
 
     Attributes
     ----------
+    cycle_count : int
+        Number of real-time data updates received from the robot. The robot will send real-time data updates at
+        the interval defined by SetMonitoringInterval (16.6 milliseconds by default)
     rt_target_joint_pos : TimestampedData
         Controller desired joint positions in degrees [theta_1...6]. (GetRtTargetJointPos)
     rt_target_cart_pos : TimestampedData
@@ -905,19 +939,16 @@ class RobotRtData:
     rt_gripper_pos : TimestampedData. (GetRtValveState)
         Gripper position in mm. (GetRtGripperPos)
 
-    rt_psu_io_status : TimestampedData
-        Power supply's IO module status
-    rt_psu_outputs : TimestampedData
-        Power supply's digital outputs state [output[0], output[1], ...]. (GetRtOutputState)
-    rt_psu_inputs : TimestampedData
-        Power supply's digital inputs state [input[0], input[1], ...]. (GetRtInputState)
-
     rt_io_module_status : TimestampedData
-        IO module status
+        IO module status [bank_id, present, sim_mode, error_code]. (GetRtIoStatus(ioModule))
     rt_io_module_outputs : TimestampedData
         IO module's digital outputs state [output[0], output[1], ...]. (GetRtOutputState)
     rt_io_module_inputs : TimestampedData
         IO module's digital inputs state [input[0], input[1], ...]. (GetRtInputState)
+    rt_vacuum_state : TimestampedData
+        IO module's vacuum gripper state [vacuum_on, purge_on, holding_part]. (GetRtVacuumState)
+    rt_vacuum_pressure: TimestampedData
+        IO module's vacuum current pressure in kPa. (GetRtVacuumPressure)
 
     rt_wrf : TimestampedData
         Current definition of the WRF w.r.t. the BRF with timestamp. Cartesian data are in mm, Euler angles in degrees.
@@ -932,6 +963,7 @@ class RobotRtData:
     def __init__(self, num_joints: int):
         self._init_timestamped_data(num_joints)
         self.max_queue_size = 0
+        self.cycle_count = 0
 
     def _init_timestamped_data(self, num_joints: int):
         """Initialize timestamped data class members according to detected robot model (number of joints)"""
@@ -963,7 +995,7 @@ class RobotRtData:
         self.rt_accelerometer: dict[int, TimestampedData] = dict()  # 16000 = 1g
 
         self.rt_external_tool_status = TimestampedData.zeros(
-            5)  # microseconds timestamp, sim tool type, physical tool type, activated, homed, error
+            5)  # microseconds timestamp, sim tool type, physical tool type, homed, error, overload
         self.rt_valve_state = TimestampedData.zeros(
             MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
         self.rt_gripper_state = TimestampedData.zeros(
@@ -971,13 +1003,15 @@ class RobotRtData:
         self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
         self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
 
-        self.rt_psu_io_status = TimestampedData.zeros(4)
-        self.rt_psu_outputs = TimestampedData.zeros(0)
-        self.rt_psu_inputs = TimestampedData.zeros(0)
-
         self.rt_io_module_status = TimestampedData.zeros(4)
-        self.rt_io_module_outputs = TimestampedData.zeros(0)
-        self.rt_io_module_inputs = TimestampedData.zeros(0)
+        self.rt_io_module_outputs = TimestampedData.zeros(0)  # Resized later
+        self.rt_io_module_inputs = TimestampedData.zeros(0)  # Resized later
+        self.rt_vacuum_state = TimestampedData.zeros(3)  # microseconds timestamp, vacuum on/off, purge on/off, holding
+        self.rt_vacuum_pressure = TimestampedData.zeros(1)  # microseconds timestamp, vacuum pressure [kPa]
+
+        self.rt_sig_gen_status = TimestampedData.zeros(4)
+        self.rt_sig_gen_outputs = TimestampedData.zeros(0)  # Resized later
+        self.rt_sig_gen_inputs = TimestampedData.zeros(0)  # Resized later
 
         self.rt_wrf = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
         self.rt_trf = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
@@ -1062,10 +1096,16 @@ class RobotStatus:
         self.brakes_engaged = False
 
     def __str__(self) -> str:
-        return f"Activated: {self.activation_state}, homed: {self.homing_state}, sim: {self.simulation_mode}, " \
-               f"recovery mode: {self.recovery_mode}, error: {self.error_status}, pstop2 state: {self.pstop2State}, " \
-               f"estop state: {str(self.estopState)}, pause motion: {str(self.pause_motion_status)}, " \
-               f"EOB: {self.end_of_block_status}, brakes engaged: {self.brakes_engaged}"
+        return (f"Activated: {self.activation_state}, "
+                f"homed: {self.homing_state}, "
+                f"sim: {self.simulation_mode}, "
+                f"recovery mode: {self.recovery_mode}, "
+                f"error: {self.error_status}, "
+                f"pstop2 state: {self.pstop2State}, "
+                f"estop state: {str(self.estopState)}, "
+                f"pause motion: {str(self.pause_motion_status)}, "
+                f"EOB: {self.end_of_block_status}, "
+                f"brakes engaged: {self.brakes_engaged}")
 
 
 class GripperStatus:
@@ -1097,6 +1137,48 @@ class GripperStatus:
         self.target_pos_reached = False
         self.error_status = False
         self.overload_error = False
+
+
+class NetworkConfig:
+    """Class for storing the Mecademic robot's network configuration.
+
+    Attributes
+    ----------
+    name : str
+        Robot name for DHCP requests
+    dhcp : bool
+        DHCP mode enabled for automatic IP assignment by DHCP server
+    ip : str
+        IPv4 address (ex: '192.168.0.100')
+    mask : str
+        Network mask (ex: '255.255.255.0')
+    gateway : str
+        Gateway IP address (ex: '192.168.0.1')
+    mac : str
+        Robot read-only MAC address (ex: '20:B0:F7:06:E4:80')
+
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.name = ''
+        self.dhcp = False
+        self.ip = '192.168.0.100'
+        self.mask = '255.255.255.0'
+        self.gateway = ''
+        self.mac = ''
+
+    def __str__(self) -> str:
+        return (f"Name: {self.name}, "
+                f"DHCP: {self.dhcp}, "
+                f"ip: {self.ip}, "
+                f"mask: {self.mask}, "
+                f"gateway: {self.gateway}, "
+                f"mac: {self.mac}")
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
 class ExtToolStatus:
@@ -1135,8 +1217,11 @@ class ExtToolStatus:
         self.comm_err_warning = False
 
     def __str__(self) -> str:
-        return f"Sim tool type: {self.sim_tool_type}, Physical tool type: {self.physical_tool_type}, " \
-               f"homed: {self.homing_state}, error: {self.error_status}, overload: {self.overload_error}"
+        return (f"Sim tool type: {self.sim_tool_type}, "
+                f"Physical tool type: {self.physical_tool_type}, "
+                f"homed: {self.homing_state}, "
+                f"error: {self.error_status}, "
+                f"overload: {self.overload_error}")
 
     def __repr__(self) -> str:
         return str(self)
@@ -1211,8 +1296,7 @@ class IoStatus:
     ----------
     bank_id : int
         Type of this IO module.
-        1: MxIoBankId.MX_IO_BANK_ID_PSU
-        2: MxIoBankId.MX_IO_BANK_ID_IO_MODULE
+        1: MxIoBankId.MX_IO_BANK_ID_IO_MODULE
     present : bool
         True if an IO module of this type is present on the robot.
     nb_inputs : int
@@ -1240,9 +1324,12 @@ class IoStatus:
         self.timestamp = 0
 
     def __str__(self) -> str:
-        return f"BankId: {self.bank_id}, Physically present: {self.present}, " \
-               f"Digital inputs: {self.nb_inputs}, Digital outputs: {self.nb_outputs}, " \
-               f"Simulation mode: {self.sim_mode}, error: {self.error}"
+        return (f"BankId: {self.bank_id}, "
+                f"Physically present: {self.present}, "
+                f"Digital inputs: {self.nb_inputs}, "
+                f"Digital outputs: {self.nb_outputs}, "
+                f"Simulation mode: {self.sim_mode}, "
+                f"error: {self.error}")
 
     def __repr__(self) -> str:
         return str(self)
@@ -1290,8 +1377,43 @@ class GripperState:
         self.opened = False
 
     def __str__(self):
-        return f'holding={self.holding_part} pos_reached={self.target_pos_reached} ' \
-               f'closed={self.closed} opened={self.opened}'
+        return (f'holding={self.holding_part}, '
+                f'pos_reached={self.target_pos_reached}, '
+                f'closed={self.closed}, '
+                f'opened={self.opened}')
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+class VacuumState:
+    """Class for storing the Mecademic robot's IO module vacuum state.
+
+    Attributes
+    ----------
+    vacuum_on : bool
+        True if the vacuum is currently 'on' (trying to pick or holding part).
+    purge_on: bool
+        True if currently pushing air to release part (see SetVacuumPurgeDuration).
+    holding_part : bool
+        True if currently holding part (based on configured pressure thresholds, see SetVacuumThreshold ).
+    timestamp : int
+        Monotonic timestamp associated with data (in microseconds since robot last reboot)
+        This timestamp is stamped by the robot so it is not affected by host/network jitter
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.vacuum_on = False
+        self.purge_on = False
+        self.holding_part = False
+        self.timestamp = 0
+
+    def __str__(self) -> str:
+        return (f"Vacuum: {'on' if self.vacuum_on else 'off'}, "
+                f"Purge: {'on' if self.purge_on else 'off'}, "
+                f"Holding part: {self.holding_part}")
 
     def __repr__(self) -> str:
         return str(self)

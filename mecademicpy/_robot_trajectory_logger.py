@@ -39,12 +39,14 @@ robot_rt_data_to_real_time_monit = {
     'rt_gripper_state': (mx_st.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
     'rt_gripper_force': (mx_st.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),
     'rt_gripper_pos': (mx_st.MX_ST_RT_GRIPPER_POS, 'GripperPos'),
-    'rt_psu_io_status': (mx_st.MX_ST_RT_IO_STATUS, 'PsuIoModuleStatus'),
-    'rt_psu_outputs': (mx_st.MX_ST_RT_OUTPUT_STATE, 'PsuOutputState'),
-    'rt_psu_inputs': (mx_st.MX_ST_RT_INPUT_STATE, 'PsuInputState'),
     'rt_io_module_status': (mx_st.MX_ST_RT_IO_STATUS, 'IoModuleStatus'),
     'rt_io_module_outputs': (mx_st.MX_ST_RT_OUTPUT_STATE, 'IoModuleOutputState'),
     'rt_io_module_inputs': (mx_st.MX_ST_RT_INPUT_STATE, 'IoModuleInputState'),
+    'rt_sig_gen_status': (mx_st.MX_ST_RT_IO_STATUS, 'SigGenStatus'),
+    'rt_sig_gen_outputs': (mx_st.MX_ST_RT_OUTPUT_STATE, 'SigGenOutputState'),
+    'rt_sig_gen_inputs': (mx_st.MX_ST_RT_INPUT_STATE, 'SigGenInputState'),
+    'rt_vacuum_state': (mx_st.MX_ST_RT_VACUUM_STATE, 'VacuumState'),
+    'rt_vacuum_pressure': (mx_st.MX_ST_RT_VACUUM_PRESSURE, 'VacuumPressure'),
     '': (mx_st.MX_ST_RT_CYCLE_END, 'CycleEnd')  # Should not be used, handled by Robot class when it uses the logger
 }
 
@@ -193,7 +195,7 @@ class _RobotTrajectoryLogger:
         Parameters
         ----------
         prefix : str
-            IO bank prefix (ex: 'psu' or 'ioModule')
+            IO bank prefix (ex: 'ioModule')
         type : str
             IO type ('Input' or 'Output')
         count : int
@@ -253,18 +255,12 @@ class _RobotTrajectoryLogger:
                 self.expanded_fields.extend(assemble_with_prefix(value, ['%']))
             elif key.endswith('rt_gripper_pos'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['mm']))
-            elif key.endswith('rt_psu_io_status'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['BankId', 'Present', 'SimMode', 'Error']))
             elif key.endswith('rt_io_module_status'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['BankId', 'Present', 'SimMode', 'Error']))
-            elif key.endswith('rt_psu_outputs'):
-                nb_outputs = len(robot_rt_data.rt_psu_outputs.data)
-                if nb_outputs != 0:
-                    self.expanded_fields.extend(self._build_io_fields('Psu', 'Output', nb_outputs))
-            elif key.endswith('rt_psu_inputs'):
-                nb_inputs = len(robot_rt_data.rt_psu_inputs.data)
-                if nb_inputs != 0:
-                    self.expanded_fields.extend(self._build_io_fields('Psu', 'Input', nb_inputs))
+            elif key.endswith('rt_vacuum_state'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['VacuumOn', 'PurgeOn', 'Holding']))
+            elif key.endswith('rt_vacuum_pressure'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['kPa']))
             elif key.endswith('rt_io_module_outputs'):
                 nb_outputs = len(robot_rt_data.rt_io_module_outputs.data)
                 if nb_outputs != 0:
@@ -273,6 +269,16 @@ class _RobotTrajectoryLogger:
                 nb_inputs = len(robot_rt_data.rt_io_module_inputs.data)
                 if nb_inputs != 0:
                     self.expanded_fields.extend(self._build_io_fields('IoModule', 'Input', nb_inputs))
+            elif key.endswith('rt_sig_gen_status'):
+                self.expanded_fields.extend(assemble_with_prefix(value, ['BankId', 'Present', 'SimMode', 'Error']))
+            elif key.endswith('rt_sig_gen_outputs'):
+                nb_outputs = len(robot_rt_data.rt_sig_gen_outputs.data)
+                if nb_outputs != 0:
+                    self.expanded_fields.extend(self._build_io_fields('SigGen', 'Output', nb_outputs))
+            elif key.endswith('rt_sig_gen_inputs'):
+                nb_inputs = len(robot_rt_data.rt_sig_gen_inputs.data)
+                if nb_inputs != 0:
+                    self.expanded_fields.extend(self._build_io_fields('SigGen', 'Input', nb_inputs))
             else:
                 raise ValueError(f'Missing formatting for field: {key}')
 
