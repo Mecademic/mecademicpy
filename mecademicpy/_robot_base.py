@@ -65,7 +65,9 @@ class _RobotEvents:
         Set if robot is disconnected.
     on_status_updated : event
         Set if robot status is updated.
-     on_status_gripper_updated : event
+    on_network_config_updated : event
+        Set if robot network configuration is updated.
+    on_status_gripper_updated : event
         Set if gripper status is updated.
     on_external_tool_status_updated: event
         Set if external tool status has been updated.
@@ -77,6 +79,16 @@ class _RobotEvents:
         Set if digital outputs state has been updated.
     on_input_state_updated: event
         Set if digital inputs state has been updated.
+    on_vacuum_state_updated: event
+        Set if IO expansion module's vacuum module state has been updated.
+    on_holding_part: event
+        Set if gripper or IO expansion's vacuum gripper is holding a part.
+    on_released_part: event
+        Set if gripper or IO expansion's vacuum gripper is not holding a part.
+    on_vacuum_purge_done: event
+        Set when the vacuum gripper is not purging.
+    on_io_status_updated: event
+        Set if IO expansion module's status has been updated.
     on_activated : event
         Set if robot is activated.
     on_deactivated : event
@@ -90,13 +102,15 @@ class _RobotEvents:
     on_pstop2 : event
         Set if robot receives pstop2.
     on_pstop2_resettable : event
-        Set if pstop2 becomes resettable.
+        Set if pstop2 is resettable.
     on_pstop2_reset : event
         Set if pstop2 is reset.
     on_estop : event
         Set if robot receives estop.
     on_estop_reset : event
         Set if estop is reset.
+    on_estop_resettable : event
+        Set if estop is resettable.
     on_motion_paused : event
         Set if robot motion is paused.
     on_motion_resumed : event
@@ -111,10 +125,6 @@ class _RobotEvents:
         Set if robot is in gripper sim mode.
     on_deactivate_ext_tool_sim : event
         Set if robot is not in gripper sim mode.
-    on_psu_io_sim_enabled : event
-        Set if robot psu is not in IO sim mode.
-    on_psu_io_sim_disabled : event
-        Set if robot psu is in IO sim mode.
     on_io_sim_enabled : event
         Set if robot IO module is not in sim mode.
     on_io_sim_disabled : event
@@ -147,13 +157,19 @@ class _RobotEvents:
         self.on_disconnected = InterruptableEvent()
 
         self.on_status_updated = InterruptableEvent()
-        self.on_status_gripper_updated = InterruptableEvent()
+        self.on_network_config_updated = InterruptableEvent()
 
+        self.on_status_gripper_updated = InterruptableEvent()
         self.on_external_tool_status_updated = InterruptableEvent()
         self.on_gripper_state_updated = InterruptableEvent()
         self.on_valve_state_updated = InterruptableEvent()
         self.on_output_state_updated = InterruptableEvent()
         self.on_input_state_updated = InterruptableEvent()
+        self.on_vacuum_state_updated = InterruptableEvent()
+        self.on_holding_part = InterruptableEvent()
+        self.on_released_part = InterruptableEvent()
+        self.on_vacuum_purge_done = InterruptableEvent()
+        self.on_io_status_updated = InterruptableEvent()
 
         self.on_activated = InterruptableEvent()
         self.on_deactivated = InterruptableEvent()
@@ -167,6 +183,7 @@ class _RobotEvents:
         self.on_pstop2_reset = InterruptableEvent()
         self.on_estop = InterruptableEvent()
         self.on_estop_reset = InterruptableEvent()
+        self.on_estop_resettable = InterruptableEvent()
 
         self.on_motion_paused = InterruptableEvent()
         self.on_motion_resumed = InterruptableEvent()
@@ -178,8 +195,6 @@ class _RobotEvents:
         self.on_activate_ext_tool_sim = InterruptableEvent()
         self.on_deactivate_ext_tool_sim = InterruptableEvent()
 
-        self.on_psu_io_sim_enabled = InterruptableEvent()
-        self.on_psu_io_sim_disabled = InterruptableEvent()
         self.on_io_sim_enabled = InterruptableEvent()
         self.on_io_sim_disabled = InterruptableEvent()
 
@@ -204,16 +219,23 @@ class _RobotEvents:
         self.on_pstop2_reset.set()
         self.on_pstop2_resettable.set()
         self.on_estop_reset.set()
+        self.on_estop_resettable.set()
         self.on_motion_resumed.set()
         self.on_deactivate_sim.set()
 
         self.on_status_updated.set()
+        self.on_network_config_updated.set()
         self.on_status_gripper_updated.set()
         self.on_external_tool_status_updated.set()
         self.on_gripper_state_updated.set()
         self.on_valve_state_updated.set()
         self.on_output_state_updated.set()
         self.on_input_state_updated.set()
+        self.on_vacuum_state_updated.set()
+        self.on_holding_part.set()
+        self.on_released_part.set()
+        self.on_vacuum_purge_done.set()
+        self.on_io_status_updated.set()
 
         self.on_joints_updated.set()
         self.on_pose_updated.set()
@@ -243,6 +265,7 @@ class _RobotEvents:
                 'on_connected',  # Don't abort a wait for "on_connected" (should be done by now anyways)
                 'on_deactivated',  # Don't abort waiting for "on_deactivated". WaitDeactivated is can be used in error
                 'on_status_updated',  # Don't abort a wait for "on_status_updated", that's what we're doing!
+                'on_network_config_updated',  # Don't abort a wait for "on_network_config_updated", available in error
                 'on_error_reset',  # Don't abort a wait for "on_error_reset" because we got an error
                 'on_end_of_cycle',  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
                 'on_activate_recovery_mode',  # Don't abort wait for "on_activate_recovery_mode", available in error
@@ -250,6 +273,8 @@ class _RobotEvents:
                 'on_estop_reset',  # The EStop state may still change while in error
                 'on_pstop2_resettable',  # The "PStop2 resettable" state may still change while in error
                 'on_pstop2_reset',  # The PStop2 state may still change while in error
+                'on_estop_resettable',  # The "EStop resettable" state may still change while in error
+                'on_estop_reset',  # The EStop state may still change while in error
             ],
             message=message)
 
@@ -375,10 +400,14 @@ class _Robot:
          because otherwise it's not possible to know if the move has completed, or not yet started)
     _valve_state: ValveState object
         Stores most current pneumatic valve state
-    _rt_psu_io_status: IoStatus object
+    _psu_io_status: IoStatus object
         Stores most current PSU IO module status
-    _rt_io_module_status: IoStatus object
+    _io_module_status: IoStatus object
         Stores most current IO module status
+    _vacuum_state: IoStatus object
+        Stores most current IO module's vacuum gripper state
+    _sig_gen_status: IoStatus object
+        Stores most current signal generator status
     _fw_update_status: Firmware update status
         Stores most current firmware update status reported by the robot
     _robot_events : RobotEvents object
@@ -480,7 +509,7 @@ class _Robot:
             # self.UnregisterCallbacks()
 
         self._address = None
-        self._custom_port = None
+        self._port = None
 
         self._command_socket = None
         self._monitor_socket = None
@@ -498,6 +527,8 @@ class _Robot:
         self._callback_queue = _CallbackQueue(self._robot_callbacks)
         self._callback_thread = None
 
+        self._network_config = NetworkConfig()
+
         self._robot_info = RobotInfo()
         self._robot_rt_data = None
         self._robot_rt_data_stable = None
@@ -509,8 +540,10 @@ class _Robot:
         self._gripper_state = GripperState()
         self._gripper_state_before_last_move = GripperState()
         self._valve_state = ValveState()
-        self._rt_psu_io_status = IoStatus()
-        self._rt_io_module_status = IoStatus()
+        self._psu_io_status = IoStatus()
+        self._io_module_status = IoStatus()
+        self._vacuum_state = VacuumState()
+        self._sig_gen_status = IoStatus()
         self._robot_events = _RobotEvents()
         self._reset_fw_update_status()
 
@@ -532,7 +565,10 @@ class _Robot:
         self._tmp_rt_joint_pos = None
         self._tmp_rt_cart_pos = None
 
+        self._is_sync = InterruptableEvent()
+        self._is_sync.set()
         self._tx_sync = 0
+        self._tx_sync_pending = 0
         self._rx_sync = 0
 
         self._captured_trajectory = None
@@ -676,12 +712,14 @@ class _Robot:
         """
         logger.debug(f'Attempting to connect to {address}:{port}')
 
-        loop_timeout_ms = 100
+        loop_timeout = socket_timeout / 10
+        if loop_timeout < 0.1:
+            loop_timeout = 0.1
         start_time = time.monotonic()
         while True:
             # Create socket and attempt connection.
             new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            new_socket.settimeout(loop_timeout_ms / 1000)
+            new_socket.settimeout(loop_timeout)
             try:
                 new_socket.connect((address, port))
                 break
@@ -689,14 +727,17 @@ class _Robot:
                 if (time.monotonic() - start_time) < socket_timeout:
                     logger.debug(f'Timeout connecting to {address}:{port}, retrying now.')
                 else:
-                    raise TimeoutError(f'Unable to connect to {address}:{port}, exception: {exception}')
+                    raise TimeoutError(
+                        f'Unable to connect to {address}:{port} after {socket_timeout}s, exception: {exception}')
             except ConnectionRefusedError as exception:
                 if (time.monotonic() - start_time) < socket_timeout:
-                    logger.debug(f'Connection refused to {address}:{port}, retrying in {loop_timeout_ms}ms.')
-                    time.sleep(loop_timeout_ms / 1000.0)
+                    logger.debug(f'Connection refused to {address}:{port}, retrying in {loop_timeout} second.')
+                    time.sleep(loop_timeout)
                 else:
                     raise ConnectionRefusedError(f'Unable to connect to {address}:{port}, exception: {exception}')
 
+        # Set final socket timeout
+        new_socket.settimeout(socket_timeout)
         return new_socket
 
     def _handle_callbacks(self, polling=False):
@@ -797,32 +838,30 @@ class _Robot:
                 if self.IsConnected():
                     return  # Still connected -> Do nothing
 
-                self._custom_port = None
-
                 # Check that the ip address is valid and set address.
                 if not isinstance(address, str):
                     raise TypeError(f'Invalid IP address ({address}).')
-
-                # Check if user has specified a custom port to connect to
-                addr_port = address.split(':')
-                mode_str = "monitoring mode" if monitor_mode else "control mode"
-                if len(addr_port) > 1:
-                    self._custom_port = int(addr_port[1])
-                    address = addr_port[0]
-                    if self._fw_update_reboot_timestamp == 0:  # Don't print this trace when reconnecting during firmware update
-                        self.logger.info(f"Connecting to robot {address}:{self._custom_port} ({mode_str})")
-                else:
-                    if self._fw_update_reboot_timestamp == 0:  # Don't print this trace when reconnecting during firmware update
-                        self.logger.info(f"Connecting to robot: {address} ({mode_str})")
-
-                ipaddress.ip_address(address)
-                self._address = address
 
                 self._enable_synchronous_mode = enable_synchronous_mode
                 self._disconnect_on_exception = disconnect_on_exception
 
                 self._offline_mode = offline_mode
                 self._monitor_mode = monitor_mode
+
+                # Check if user has specified a custom port to connect to
+                addr_port = address.split(':')
+                mode_str = "monitoring mode" if self._monitor_mode else "control mode"
+                if len(addr_port) > 1:
+                    self._port = int(addr_port[1])
+                    address = addr_port[0]
+                else:
+                    self._port = MX_ROBOT_TCP_PORT_FEED if self._monitor_mode else MX_ROBOT_TCP_PORT_CONTROL
+
+                if self._fw_update_reboot_timestamp == 0:  # Don't print this trace when reconnecting during firmware update
+                    self.logger.info(f"Connecting to robot {address}:{self._port} ({mode_str})")
+
+                ipaddress.ip_address(address)
+                self._address = address
 
                 self._first_robot_status_received = False
                 self._using_legacy_json_api = False
@@ -841,16 +880,23 @@ class _Robot:
                 self._robot_events.on_pstop2_reset.set()
                 self._robot_events.on_pstop2_resettable.set()
                 self._robot_events.on_estop_reset.set()
+                self._robot_events.on_estop_resettable.set()
                 self._robot_events.on_motion_resumed.set()
                 self._set_brakes_engaged(True)
 
                 self._robot_events.on_status_updated.set()
+                self._robot_events.on_network_config_updated.set()
                 self._robot_events.on_status_gripper_updated.set()
                 self._robot_events.on_external_tool_status_updated.set()
                 self._robot_events.on_gripper_state_updated.set()
                 self._robot_events.on_valve_state_updated.set()
                 self._robot_events.on_output_state_updated.set()
                 self._robot_events.on_input_state_updated.set()
+                self._robot_events.on_vacuum_state_updated.set()
+                self._robot_events.on_holding_part.set()
+                self._robot_events.on_released_part.set()
+                self._robot_events.on_vacuum_purge_done.set()
+                self._robot_events.on_io_status_updated.set()
 
                 self._robot_events.on_joints_updated.set()
                 self._robot_events.on_pose_updated.set()
@@ -926,6 +972,8 @@ class _Robot:
 
             # Now that we're connected, let's update _robot_info with the connected Ip address
             self._robot_info.ip_address = address
+
+            self.logger.info(f'{self._robot_info}')  # Note: This will print "Connected to..."
 
             if self._robot_info.version.major < 8:
                 self.logger.warning('Python API not supported for firmware under version 8')
@@ -1009,14 +1057,14 @@ class _Robot:
             Object containing the current robot status
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
             if self._using_legacy_json_api:
                 with self._main_lock:
                     self._send_command('GetMotionStatus')
-            self._send_sync_command('GetStatusRobot', self._robot_events.on_status_updated, timeout)
+            self._send_sync_command('GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
 
         with self._main_lock:
             return copy.deepcopy(self._robot_status)
@@ -1077,11 +1125,11 @@ class _Robot:
             Object containing the current gripper status
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
-            self._send_sync_command('GetStatusGripper', self._robot_events.on_status_gripper_updated, timeout)
+            self._send_sync_command('GetStatusGripper', None, self._robot_events.on_status_gripper_updated, timeout)
 
         with self._main_lock:
             return copy.deepcopy(self._gripper_status)
@@ -1183,6 +1231,88 @@ class _Robot:
             self.logger.warning(f'WaitGripperMoveCompletion: Timeout reached')
             raise TimeoutException('Timeout while waiting for gripper to complete movement.')
 
+    def IsDesiredIoState(self, bank_id: MxIoBankId, is_input: bool, *args: Union[MxDigitalIoState, int, str]) -> bool:
+        """See IsDesiredOutputState / IsDesiredInputState
+        """
+        expected_states = list(args)
+        is_desired_state = True
+        with self._main_lock:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+                curr_state = self._robot_rt_data.rt_io_module_inputs if is_input else self._robot_rt_data.rt_io_module_outputs
+            elif bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+                curr_state = self._robot_rt_data.rt_sig_gen_inputs if is_input else self._robot_rt_data.rt_sig_gen_outputs
+            else:
+                is_desired_state = False
+                curr_state = None
+            if curr_state is not None:
+                idx = 0
+                while idx < len(expected_states) and idx < len(curr_state.data):
+                    desired = expected_states[idx]
+                    if (desired == 0 or desired == MxDigitalIoState.MX_DIGITAL_IO_STATE_0
+                            or str(desired).lower() == 'off'):
+                        if curr_state.data[idx] != 0:
+                            is_desired_state = False
+                            break
+                    elif (desired == 1 or desired == MxDigitalIoState.MX_DIGITAL_IO_STATE_1
+                          or str(desired).lower() == 'on'):
+                        if curr_state.data[idx] != 1:
+                            is_desired_state = False
+                            break
+                    idx = idx + 1
+        return is_desired_state
+
+    @disconnect_on_exception
+    def WaitIOState(self,
+                    bank_id: MxIoBankId,
+                    is_input: bool,
+                    *args: Union[MxDigitalIoState, int, str],
+                    timeout: float = None):
+        """See WaitOutputState/WaitInputState
+        """
+        expected_states = list(args)
+        if timeout is None:
+            timeout = self.default_timeout
+
+        start_wait = time.monotonic()
+        event = self._robot_events.on_input_state_updated if is_input else self._robot_events.on_output_state_updated
+        while not self.IsDesiredIoState(bank_id, is_input, *expected_states):
+            try:
+                event.wait(timeout=0.01)
+            except TimeoutException as e:
+                # Check final timeout
+                elapsed_ms = time.monotonic() - start_wait
+                if elapsed_ms > timeout:
+                    raise e
+            event.clear()
+
+    def VacuumGripReleaseImmediate(self, release: bool):
+        """See VacuumGrip_Immediate/VacuumRelease_Immediate"""
+        expected_vacuum_on = False if release else True
+        if self._enable_synchronous_mode and self._vacuum_state.vacuum_on == expected_vacuum_on:
+            # Already desired state (and sync mode).
+            # In sync mode we send one command at the time so we're sure that no state change is pending. So if already
+            # in desired state we don't need to send the command. We actually DON'T want to send the command because
+            # there would be no state change reported by on_vacuum_state_updated and this would timeout
+            return
+        else:
+            if release:
+                self._send_immediate_command('VacuumRelease_Immediate', None,
+                                             self._robot_events.on_vacuum_state_updated)
+            else:
+                self._send_immediate_command('VacuumGrip_Immediate', None, self._robot_events.on_vacuum_state_updated)
+            if self._enable_synchronous_mode:
+                # Wait until reached desired state (or timeout)
+                start_wait = time.monotonic()
+                while self._vacuum_state.vacuum_on != expected_vacuum_on:
+                    try:
+                        self._robot_events.on_vacuum_state_updated.wait(timeout=self.default_timeout)
+                    except TimeoutException as e:
+                        # Check final timeout
+                        elapsed_ms = time.monotonic() - start_wait
+                        if elapsed_ms > self.default_timeout:
+                            raise e
+                    self._robot_events.on_vacuum_state_updated.clear()
+
     @disconnect_on_exception
     def GetRobotInfo(self) -> RobotInfo:
         """Return a copy of the known robot information.
@@ -1198,22 +1328,18 @@ class _Robot:
 
     UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
 
-    def UpdateRobot(self,
-                    firmware: Union[str, pathlib.Path],
-                    address: Optional[str] = None,
-                    timeout: float = UPDATE_TIMEOUT):
+    def UpdateRobot(self, firmware: Union[str, pathlib.Path], timeout: float = UPDATE_TIMEOUT):
         """See documentation in equivalent function in robot.py"""
+        if not self.IsConnected():
+            raise InvalidStateError('Not connected to the robot. Please call "Connect" before calling "UpdateRobot".')
         try:
-            self._update_robot(firmware, address, timeout)
+            self._update_robot(firmware, timeout)
         except Exception as e:
             raise
         finally:
             self._reset_fw_update_status()
 
-    def _update_robot(self,
-                      firmware: Union[str, pathlib.Path],
-                      address: Optional[str] = None,
-                      timeout: float = UPDATE_TIMEOUT):
+    def _update_robot(self, firmware: Union[str, pathlib.Path], timeout: float = UPDATE_TIMEOUT):
         """See documentation of UpdateRobot in robot.py"""
 
         if isinstance(firmware, pathlib.Path):
@@ -1226,14 +1352,8 @@ class _Robot:
 
         firmware_file_version = RobotVersion(firmware_file.name)
 
-        # Validates robot IP address is available to script
-        if address is None and not self.IsConnected():
-            raise ArgumentError(None, f"address parameter can't be None and not connected to a robot.")
-        if address is None:
-            address = self._address
-        elif self._address and address != self._address:
-            raise ArgumentError(None,
-                                f"Trying to update robot at IP {address} but currently connected to {self._address}")
+        address = self._address
+        address_port = f'{address}:{self._port}'
 
         # Making sure we can send command to robot
         if not self.IsConnected():
@@ -1261,6 +1381,8 @@ class _Robot:
             current_synchronous_mode = False
         else:
             current_synchronous_mode = self._enable_synchronous_mode
+
+        initial_disconnect_on_exception = self._disconnect_on_exception
         self.Disconnect()
 
         if not use_legacy_update:
@@ -1328,7 +1450,10 @@ class _Robot:
             # Try to ping the robot until it's responding (or until default timeout)
             ping_robot(address)
             # Now that robot responds to ping, wait until it accepts new connections
-            self.Connect(address, timeout=60, enable_synchronous_mode=current_synchronous_mode)
+            self.Connect(address_port,
+                         timeout=60,
+                         enable_synchronous_mode=current_synchronous_mode,
+                         disconnect_on_exception=initial_disconnect_on_exception)
         else:
             end_time = time.monotonic() + 30
             while True:
@@ -1338,7 +1463,10 @@ class _Robot:
                     # Reconnect in control mode
                     # (shorter timeout here, we know we're already connected so it should not be long)
                     self.Disconnect()
-                    self.Connect(address, timeout=10, enable_synchronous_mode=current_synchronous_mode)
+                    self.Connect(address_port,
+                                 timeout=10,
+                                 enable_synchronous_mode=current_synchronous_mode,
+                                 disconnect_on_exception=initial_disconnect_on_exception)
                     break
                 except Exception as e:
                     error_message = str(e)
@@ -1355,8 +1483,7 @@ class _Robot:
             expected_version = firmware_file_version.short_version
 
         if not str(current_version) in expected_version:
-            error_msg = f"Fail to install robot properly. current version {current_version}, " \
-                        f"expecting: {expected_version}"
+            error_msg = f"Fail to install robot properly. current version {current_version}, " f"expecting: {expected_version}"
             self.logger.error(error_msg)
             raise AssertionError(error_msg)
 
@@ -1648,7 +1775,7 @@ class _Robot:
         ----------
         command : string
             Command name to send to the Mecademic robot.
-        arg_list : list or str
+        args : list or str
             List of arguments the command requires.
 
         """
@@ -1686,12 +1813,13 @@ class _Robot:
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_deactivated.wait(timeout=timeout)
 
-    def _send_sync_command(self, command: str, event: InterruptableEvent, timeout: float):
+    def _send_sync_command(self, command: str, args: Optional[Union[str, list, tuple]],
+                           event: Optional[InterruptableEvent], timeout: float):
         """Send a command and wait for corresponding response
            (this function handles well-known commands which have their corresponding 'wait' event in this class,
             use _send_custom_command to perform synchronous operations on other commands)
@@ -1700,6 +1828,8 @@ class _Robot:
         ----------
         command : string
             Name of the command to send (example: GetStatusGripper)
+        args : list or str
+            List of arguments the command requires.
         event : InterruptableEvent
             Event that will be set (unblocked) once the corresponding response is received
         timeout : float
@@ -1716,13 +1846,19 @@ class _Robot:
             if self._robot_info.rt_on_ctrl_port_capable:
                 # Send a "SyncCmdQueue" request so we know when we get the response to this get (and not an earlier one)
                 self._tx_sync += 1
+                self._tx_sync_pending = self._tx_sync
+                self._is_sync.clear()
                 self._send_command('SyncCmdQueue', f'{self._tx_sync}')
-            if event.is_set():
+            if event is not None and event.is_set():
                 event.clear()
-            self._send_command(command)
+            self._send_command(command, args)
 
         # Wait until response is received (this will throw TimeoutException if appropriate)
-        event.wait(timeout=timeout)
+        if event is not None:
+            event.wait(timeout=timeout)
+        else:
+            # No specific event to await for. Just await until we're sync
+            self._is_sync.wait(timeout=timeout)
 
     def _send_custom_command(self,
                              command: str,
@@ -1789,12 +1925,8 @@ class _Robot:
         if self._command_socket is not None:
             raise InvalidStateError('Cannot connect since existing command socket exists.')
 
-        if self._custom_port:
-            port = self._custom_port
-        else:
-            port = MX_ROBOT_TCP_PORT_CONTROL
-        self._command_socket = self._connect_socket(self.logger, self._address, port, timeout)
-        self.logger.info(f'Connected to {self._address}:{port} (control mode)')
+        self._command_socket = self._connect_socket(self.logger, self._address, self._port, timeout)
+        self.logger.debug(f'Connected to {self._address}:{self._port} (control mode)')
 
         if self._command_socket is None:
             raise CommunicationError('Command socket could not be created. Is the IP address correct?')
@@ -1825,12 +1957,9 @@ class _Robot:
         if self._monitor_socket is not None:
             raise InvalidStateError('Cannot connect since existing monitor socket exists.')
 
-        if self._custom_port:
-            port = self._custom_port
-        else:
-            port = MX_ROBOT_TCP_PORT_FEED
+        port = self._port if self._monitor_mode else MX_ROBOT_TCP_PORT_FEED
         self._monitor_socket = self._connect_socket(self.logger, self._address, port, timeout)
-        self.logger.info(f'Connected to {self._address}:{port} (monitoring mode)')
+        self.logger.debug(f'Connected to {self._address}:{port} (monitoring mode)')
 
         if self._monitor_socket is None:
             raise CommunicationError('Monitor socket could not be created. Is the IP address correct?')
@@ -1883,7 +2012,6 @@ class _Robot:
             # We will not be able to deduce robot version. Assume some 8.x version
             self._robot_info = RobotInfo(model='Meca500', revision=3, version='8.0.0.0-unknown-version')
         else:
-            self.logger.error('Connection error: {}'.format(response))
             raise CommunicationError('Connection error: {}'.format(response))
 
         self._robot_rt_data = RobotRtData(self._robot_info.num_joints)
@@ -1963,13 +2091,15 @@ class _Robot:
                 try:
                     self._command_socket.shutdown(socket.SHUT_RDWR)
                 except Exception as e:
-                    self.logger.error('Error shutting down command socket. ' + str(e))
+                    #self.logger.error('Error shutting down command socket. ' + str(e))
+                    pass
 
             if self._monitor_socket is not None:
                 try:
                     self._monitor_socket.shutdown(socket.SHUT_RDWR)
                 except Exception as e:
-                    self.logger.error('Error shutting down monitor socket. ' + str(e))
+                    #self.logger.error('Error shutting down monitor socket. ' + str(e))
+                    pass
 
             # Join threads which wait on a socket.
             if self._command_rx_thread is not None:
@@ -2057,7 +2187,7 @@ class _Robot:
 
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
-    def _send_motion_command(self, command: str, arg_list=None):
+    def _send_motion_command(self, command: str, args: Union[str, list, tuple] = None):
         """Send generic motion command with support for synchronous mode and locking.
 
         Parameters
@@ -2070,12 +2200,30 @@ class _Robot:
         """
         with self._main_lock:
             self._check_internal_states()
-            self._send_command(command, arg_list)
+            self._send_command(command, args)
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
 
         if self._enable_synchronous_mode:
             checkpoint.wait()
+
+    def _send_immediate_command(self, command: str, args: Optional[Union[str, list, tuple]],
+                                event: Optional[InterruptableEvent]):
+        """Send generic 'immediate' command with support for synchronous mode and locking.
+
+        Parameters
+        ----------
+        command : string
+            The command to send.
+        args : list
+            List of arguments to be sent.
+
+        """
+        if self._enable_synchronous_mode:
+            self._send_sync_command(command, args, event, timeout=self.default_timeout)
+        else:
+            with self._main_lock:
+                self._send_command(command, args)
 
     def _monitor_handler(self):
         """Handle messages from the monitoring port of the robot.
@@ -2280,6 +2428,7 @@ class _Robot:
             elif response.id == mx_st.MX_ST_GET_POSE:
                 self._tmp_rt_cart_pos = string_to_numbers(response.data)
             elif response.id == mx_st.MX_ST_RT_CYCLE_END:
+                self._robot_rt_data.cycle_count += 1
                 if not self._robot_info.rt_message_capable:
                     self._robot_info.rt_message_capable = True
                 timestamp = int(response.data)
@@ -2363,6 +2512,12 @@ class _Robot:
         elif response.id == mx_st.MX_ST_RT_INPUT_STATE:
             self._handle_input_state(response)
 
+        elif response.id == mx_st.MX_ST_RT_VACUUM_STATE:
+            self._handle_vacuum_state(response)
+
+        elif response.id == mx_st.MX_ST_RT_VACUUM_PRESSURE:
+            self._handle_vacuum_pressure(response)
+
         elif response.id == mx_st.MX_ST_EXTTOOL_SIM:
             if not str(response.data).isdigit():
                 # Legacy response without the tool type argument
@@ -2383,8 +2538,8 @@ class _Robot:
         elif response.id == mx_st.MX_ST_PSTOP2:
             self._robot_status.pstop2State = self._parse_response_int(response)[0]
             if self._robot_status.pstop2State == MxStopState.MX_STOP_STATE_ACTIVE:
-                self._robot_events.on_pstop2_reset.clear()
                 self._robot_events.on_pstop2.set()
+                self._robot_events.on_pstop2_reset.clear()
                 self._robot_events.on_pstop2_resettable.clear()
                 self._callback_queue.put('on_pstop2')
                 # Invalidate checkpoints and appropriate interruptable events
@@ -2392,23 +2547,40 @@ class _Robot:
                 self._invalidate_checkpoints(message)
                 self._invalidate_interruptable_events_on_clear_motion(message)
             elif self._robot_status.pstop2State == MxStopState.MX_STOP_STATE_RESETTABLE:
+                self._robot_events.on_pstop2.set()
+                self._robot_events.on_pstop2_reset.clear()
                 self._robot_events.on_pstop2_resettable.set()
                 self._callback_queue.put('on_pstop2_resettable')
             else:
                 self._robot_events.on_pstop2.clear()
                 self._robot_events.on_pstop2_reset.set()
+                self._robot_events.on_pstop2_resettable.set()
                 self._callback_queue.put('on_pstop2_reset')
 
         elif response.id == mx_st.MX_ST_ESTOP:
             self._robot_status.estopState = self._parse_response_int(response)[0]
-            if self._robot_status.estopState != MxStopState.MX_STOP_STATE_RESET:
-                self._robot_events.on_estop_reset.clear()
+
+            if self._robot_status.estopState == MxStopState.MX_STOP_STATE_ACTIVE:
                 self._robot_events.on_estop.set()
+                self._robot_events.on_estop_reset.clear()
+                self._robot_events.on_estop_resettable.clear()
                 self._callback_queue.put('on_estop')
+            elif self._robot_status.estopState == MxStopState.MX_STOP_STATE_RESETTABLE:
+                self._robot_events.on_estop.set()
+                self._robot_events.on_estop_reset.clear()
+                self._robot_events.on_estop_resettable.set()
+                self._callback_queue.put('on_estop_resettable')
             else:
                 self._robot_events.on_estop.clear()
                 self._robot_events.on_estop_reset.set()
+                self._robot_events.on_estop_resettable.set()
                 self._callback_queue.put('on_estop_reset')
+
+        elif response.id == mx_st.MX_ST_TORQUE_LIMIT_STATUS:
+            torque_exceeded = self._parse_response_int(response)[0]
+            if torque_exceeded:
+                self.logger.info(
+                    f'Torque limit exceeded. Current torque: {args_to_string(self._robot_rt_data.rt_joint_torq.data)}')
 
         elif response.id == mx_st.MX_ST_RT_TARGET_JOINT_POS:
             self._robot_rt_data.rt_target_joint_pos.update_from_csv(response.data)
@@ -2416,14 +2588,14 @@ class _Robot:
                 self._robot_events.on_joints_updated.set()
 
         elif response.id == mx_st.MX_ST_RT_TARGET_CART_POS:
-            self._robot_rt_data.rt_target_cart_pos.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_cart_pos.update_from_csv(response.data, allowed_nb_val=[4, 6])
             if self._is_in_sync():
                 self._robot_events.on_pose_updated.set()
 
         elif response.id == mx_st.MX_ST_RT_TARGET_JOINT_VEL:
             self._robot_rt_data.rt_target_joint_vel.update_from_csv(response.data)
         elif response.id == mx_st.MX_ST_RT_TARGET_CART_VEL:
-            self._robot_rt_data.rt_target_cart_vel.update_from_csv(response.data)
+            self._robot_rt_data.rt_target_cart_vel.update_from_csv(response.data, allowed_nb_val=[4, 6])
 
         elif response.id == mx_st.MX_ST_RT_TARGET_JOINT_TORQ:
             self._robot_rt_data.rt_target_joint_torq.update_from_csv(response.data)
@@ -2436,13 +2608,13 @@ class _Robot:
         elif response.id == mx_st.MX_ST_RT_JOINT_POS:
             self._robot_rt_data.rt_joint_pos.update_from_csv(response.data)
         elif response.id == mx_st.MX_ST_RT_CART_POS:
-            self._robot_rt_data.rt_cart_pos.update_from_csv(response.data)
+            self._robot_rt_data.rt_cart_pos.update_from_csv(response.data, allowed_nb_val=[4, 6])
         elif response.id == mx_st.MX_ST_RT_JOINT_VEL:
             self._robot_rt_data.rt_joint_vel.update_from_csv(response.data)
         elif response.id == mx_st.MX_ST_RT_JOINT_TORQ:
             self._robot_rt_data.rt_joint_torq.update_from_csv(response.data)
         elif response.id == mx_st.MX_ST_RT_CART_VEL:
-            self._robot_rt_data.rt_cart_vel.update_from_csv(response.data)
+            self._robot_rt_data.rt_cart_vel.update_from_csv(response.data, allowed_nb_val=[4, 6])
 
         elif response.id == mx_st.MX_ST_RT_CONF:
             self._robot_rt_data.rt_conf.update_from_csv(response.data)
@@ -2464,10 +2636,10 @@ class _Robot:
             self._robot_rt_data.rt_abs_joint_pos.update_from_csv(response.data)
 
         elif response.id == mx_st.MX_ST_RT_WRF:
-            self._robot_rt_data.rt_wrf.update_from_csv(response.data)
+            self._robot_rt_data.rt_wrf.update_from_csv(response.data, allowed_nb_val=[4, 6])
 
         elif response.id == mx_st.MX_ST_RT_TRF:
-            self._robot_rt_data.rt_trf.update_from_csv(response.data)
+            self._robot_rt_data.rt_trf.update_from_csv(response.data, allowed_nb_val=[4, 6])
 
         elif response.id == mx_st.MX_ST_RT_CHECKPOINT:
             self._robot_rt_data.rt_checkpoint.update_from_csv(response.data)
@@ -2482,14 +2654,14 @@ class _Robot:
         elif response.id == mx_st.MX_ST_GET_REAL_TIME_MONITORING:
             self._handle_get_realtime_monitoring_response(response)
 
-        elif response.id == mx_st.MX_ST_PSU_DONGLE_STATUS:
-            self._handle_psu_dongle_status(response)
-
         elif response.id == mx_st.MX_ST_FW_UPDATE_PROGRESS:
             self._handle_fw_update_progress(response)
 
         elif response.id == mx_st.MX_ST_SYNC_CMD_QUEUE:
             self._handle_sync_response(response)
+
+        elif response.id == mx_st.MX_ST_GET_NETWORK_CONFIG:
+            self._handle_get_network_config_response(response)
 
     def _parse_response_bool(self, response: Message) -> list[bool]:
         """ Parse standard robot response, returns array of boolean values
@@ -2849,6 +3021,26 @@ class _Robot:
             self._robot_events.on_external_tool_status_updated.set()
             self._callback_queue.put('on_external_tool_status_updated')
 
+    def _handle_get_network_config_response(self, response: Message):
+
+        assert response.id == mx_st.MX_ST_GET_NETWORK_CONFIG
+        if response.jsonData:
+            # JSON format.
+            jsonData = response.jsonData[MX_JSON_KEY_DATA]
+
+            self._network_config.dhcp = False
+            if jsonData[MX_JSON_KEY_NETWORK_CONFIG_DHCP] == 'true':
+                self._network_config.dhcp = True
+
+            self._network_config.ip = jsonData[MX_JSON_KEY_NETWORK_CONFIG_IP]
+            self._network_config.mask = jsonData[MX_JSON_KEY_NETWORK_CONFIG_MASK]
+            self._network_config.gateway = jsonData[MX_JSON_KEY_NETWORK_CONFIG_GATEWAY]
+            self._network_config.mac = jsonData[MX_JSON_KEY_NETWORK_CONFIG_MAC]
+            self._network_config.name = jsonData[MX_JSON_KEY_NETWORK_CONFIG_ROBOT_NAME]
+
+        if self._is_in_sync():
+            self._robot_events.on_network_config_updated.set()
+
     def _handle_gripper_state_response(self, response: Message):
         """Parse gripper state response and update status fields and events.
 
@@ -2871,6 +3063,12 @@ class _Robot:
         if self._is_in_sync():
             self._robot_events.on_gripper_state_updated.set()
             self._callback_queue.put('on_gripper_state_updated')
+            if self._gripper_state.holding_part:
+                self._robot_events.on_holding_part.set()
+                self._robot_events.on_released_part.clear()
+            else:
+                self._robot_events.on_holding_part.clear()
+                self._robot_events.on_released_part.set()
 
     def _handle_valve_state_response(self, response: Message):
         """Parse pneumatic valve state response and update status fields and events.
@@ -2912,10 +3110,10 @@ class _Robot:
 
         new_io_status = IoStatus()
         new_io_status_ts = TimestampedData.zeros(4)
-        if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-            new_io_status = self._rt_psu_io_status
-        elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
-            new_io_status = self._rt_io_module_status
+        if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+            new_io_status = self._io_module_status
+        elif bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+            new_io_status = self._sig_gen_status
         else:
             return
         new_io_status.bank_id = bank_id
@@ -2954,25 +3152,16 @@ class _Robot:
             # Note: nb_inputs and nb_outputs is updated by _handle_input_state / _handle_output_state
 
         # Store back into our context
-        if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-            self._rt_psu_io_status = new_io_status
-            self._robot_rt_data.rt_psu_io_status = new_io_status_ts
-        elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
-            self._rt_io_module_status = new_io_status
+        if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+            self._io_module_status = new_io_status
             self._robot_rt_data.rt_io_module_status = new_io_status_ts
+        elif bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+            self._sig_gen_status = new_io_status
+            self._robot_rt_data.rt_sig_gen_status = new_io_status_ts
 
         # Update events/callbacks
         if not self._first_robot_status_received or prev_sim_mode != new_io_status.sim_mode:
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-                if new_io_status.sim_mode:
-                    self._robot_events.on_psu_io_sim_enabled.set()
-                    self._robot_events.on_psu_io_sim_disabled.clear()
-                    self._callback_queue.put('on_psu_io_sim_enabled')
-                else:
-                    self._robot_events.on_psu_io_sim_enabled.clear()
-                    self._robot_events.on_psu_io_sim_disabled.set()
-                    self._callback_queue.put('on_psu_io_sim_disabled')
-            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
                 if new_io_status.sim_mode:
                     self._robot_events.on_io_sim_enabled.set()
                     self._robot_events.on_io_sim_disabled.clear()
@@ -2981,6 +3170,9 @@ class _Robot:
                     self._robot_events.on_io_sim_enabled.clear()
                     self._robot_events.on_io_sim_disabled.set()
                     self._callback_queue.put('on_io_sim_disabled')
+
+        if self._is_in_sync():
+            self._robot_events.on_io_status_updated.set()
 
     def _handle_output_state(self, response: Message):
         """Parse digital output state and update status fields and events.
@@ -2997,14 +3189,14 @@ class _Robot:
         if len(values) > 1:
             timestamp = values[0]
             bank_id = values[1]
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-                changed = True
-                self._robot_rt_data.rt_psu_outputs.update_from_data(timestamp, values[2:])
-                self._rt_psu_io_status.nb_outputs = len(self._robot_rt_data.rt_psu_outputs.data)
-            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
                 changed = True
                 self._robot_rt_data.rt_io_module_outputs.update_from_data(timestamp, values[2:])
-                self._rt_io_module_status.nb_outputs = len(self._robot_rt_data.rt_io_module_outputs.data)
+                self._io_module_status.nb_outputs = len(self._robot_rt_data.rt_io_module_outputs.data)
+            elif bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+                changed = True
+                self._robot_rt_data.rt_sig_gen_outputs.update_from_data(timestamp, values[2:])
+                self._sig_gen_status.nb_outputs = len(self._robot_rt_data.rt_sig_gen_outputs.data)
 
         if changed and self._is_in_sync():
             self._robot_events.on_output_state_updated.set()
@@ -3025,18 +3217,62 @@ class _Robot:
         if len(values) > 1:
             timestamp = values[0]
             bank_id = values[1]
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-                changed = True
-                self._robot_rt_data.rt_psu_inputs.update_from_data(timestamp, values[2:])
-                self._rt_psu_io_status.nb_inputs = len(self._robot_rt_data.rt_psu_inputs.data)
-            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
                 changed = True
                 self._robot_rt_data.rt_io_module_inputs.update_from_data(timestamp, values[2:])
-                self._rt_io_module_status.nb_inputs = len(self._robot_rt_data.rt_io_module_inputs.data)
+                self._io_module_status.nb_inputs = len(self._robot_rt_data.rt_io_module_inputs.data)
+            elif bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+                changed = True
+                self._robot_rt_data.rt_sig_gen_inputs.update_from_data(timestamp, values[2:])
+                self._sig_gen_status.nb_inputs = len(self._robot_rt_data.rt_sig_gen_inputs.data)
 
         if changed and self._is_in_sync():
             self._robot_events.on_input_state_updated.set()
             self._callback_queue.put('on_input_state_updated')
+
+    def _handle_vacuum_state(self, response: Message):
+        """Parse vacuum state and update status fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            Vacuum grip state to parse and handle.
+
+        """
+        assert response.id == mx_st.MX_ST_RT_VACUUM_STATE
+        self._robot_rt_data.rt_vacuum_state.update_from_csv(response.data)
+
+        self._vacuum_state.bank_id = MxIoBankId.MX_IO_BANK_ID_IO_MODULE  #todo, this member doesn't exists
+        self._vacuum_state.timestamp = self._robot_rt_data.rt_vacuum_state.timestamp
+        self._vacuum_state.vacuum_on = self._robot_rt_data.rt_vacuum_state.data[0]
+        self._vacuum_state.purge_on = self._robot_rt_data.rt_vacuum_state.data[1]
+        self._vacuum_state.holding_part = self._robot_rt_data.rt_vacuum_state.data[2]
+
+        if self._is_in_sync():
+            self._robot_events.on_vacuum_state_updated.set()
+            self._callback_queue.put('on_vacuum_state_updated')
+            if self._vacuum_state.holding_part:
+                self._robot_events.on_holding_part.set()
+                self._robot_events.on_released_part.clear()
+            elif not self._vacuum_state.purge_on:
+                self._robot_events.on_holding_part.clear()
+                self._robot_events.on_released_part.set()
+            if self._vacuum_state.purge_on:
+                self._robot_events.on_vacuum_purge_done.clear()
+            else:
+                self._robot_events.on_vacuum_purge_done.set()
+
+    def _handle_vacuum_pressure(self, response: Message):
+        """Parse vacuum pressure and update fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            Vacuum pressure to parse and handle.
+
+        """
+        assert response.id == mx_st.MX_ST_RT_VACUUM_PRESSURE
+        self._robot_rt_data.rt_vacuum_pressure.update_from_csv(response.data)
 
     def _handle_checkpoint_response(self, response: Message):
         """Handle the checkpoint message from the robot, set the appropriate events, etc.
@@ -3097,6 +3333,18 @@ class _Robot:
             self._robot_rt_data.rt_target_conf_turn.enabled = True
             self._robot_rt_data.rt_wrf.enabled = True
             self._robot_rt_data.rt_trf.enabled = True
+        if self._robot_info.version.is_at_least(9, 2):
+            self._robot_rt_data.rt_external_tool_status.enabled = True
+            self._robot_rt_data.rt_valve_state.enabled = True
+            self._robot_rt_data.rt_gripper_state.enabled = True
+        if self._robot_info.version.is_at_least(9, 4):
+            self._robot_rt_data.rt_io_module_status.enabled = True
+            self._robot_rt_data.rt_io_module_outputs.enabled = True
+            self._robot_rt_data.rt_io_module_inputs.enabled = True
+            self._robot_rt_data.rt_vacuum_state.enabled = True
+            self._robot_rt_data.rt_sig_gen_status.enabled = True
+            self._robot_rt_data.rt_sig_gen_outputs.enabled = True
+            self._robot_rt_data.rt_sig_gen_inputs.enabled = True
 
         # Parse the response to identify which are "enabled"
         enabled_event_ids = self._parse_response_int(response)
@@ -3150,10 +3398,17 @@ class _Robot:
                 self._robot_rt_data.rt_gripper_pos.enabled = True
             if event_id == mx_st.MX_ST_RT_IO_STATUS:
                 self._robot_rt_data.rt_io_module_status.enabled = True
+                self._robot_rt_data.rt_sig_gen_status.enabled = True
             if event_id == mx_st.MX_ST_RT_OUTPUT_STATE:
                 self._robot_rt_data.rt_io_module_outputs.enabled = True
+                self._robot_rt_data.rt_sig_gen_outputs.enabled = True
             if event_id == mx_st.MX_ST_RT_INPUT_STATE:
                 self._robot_rt_data.rt_io_module_inputs.enabled = True
+                self._robot_rt_data.rt_sig_gen_inputs.enabled = True
+            if event_id == mx_st.MX_ST_RT_VACUUM_STATE:
+                self._robot_rt_data.rt_vacuum_state.enabled = True
+            if event_id == mx_st.MX_ST_RT_VACUUM_PRESSURE:
+                self._robot_rt_data.rt_vacuum_pressure.enabled = True
 
         # Make sure to clear values that we should no more received
         self._robot_rt_data._clear_if_disabled()
@@ -3219,22 +3474,6 @@ class _Robot:
                 reboot_pct = 100 if reboot_done else 0
                 self._print_fw_update_status(reboot_pct)
 
-    def _handle_psu_dongle_status(self, event: Message):
-        """Parse power-supply dongle status
-
-        Parameters
-        ----------
-        event : Message object
-            The event message to parse.
-
-        """
-        assert event.id == mx_st.MX_ST_PSU_DONGLE_STATUS
-        if event.jsonData:
-            jsonData = event.jsonData[MX_JSON_KEY_DATA]
-
-            # Parse JSON message
-            self._robot_info.psu_dongle_detected = jsonData[MX_JSON_KEY_PSU_DONGLE_DETECTED]
-
     def _handle_sync_response(self, response: Message):
         """Parse robot response to "SyncCmdQueue" request
            This class uses the "SyncCmdQueue" request/response to ensure synchronous "Get" operations have received the
@@ -3248,7 +3487,11 @@ class _Robot:
         """
         assert response.id == mx_st.MX_ST_SYNC_CMD_QUEUE
 
-        self._rx_sync = string_to_numbers(response.data)[0]
+        if self._tx_sync_pending:
+            self._rx_sync = string_to_numbers(response.data)[0]
+            if self._is_in_sync():
+                self._tx_sync_pending = 0
+                self._is_sync.set()
 
     def _is_in_sync(self) -> bool:
         """Tells if we're in sync with the latest "get" operation (i.e. we've received the response to the most recent

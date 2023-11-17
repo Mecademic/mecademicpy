@@ -76,7 +76,7 @@ def args_to_string(arg_list: list) -> str:
     return ','.join([x for x in str_arglist])
 
 
-def ping_robot(ip_address: str, timeout: int = 90):
+def ping_robot(ip_address: str, timeout: int = 90, count: int = 1):
     """Ping the specified IP address, retrying until timeout
 
     Parameters
@@ -85,6 +85,8 @@ def ping_robot(ip_address: str, timeout: int = 90):
         IP address to ping
     timeout : int, optional
         Maximum time to retry ping if no response, by default 90
+    count : int, optional
+        Number of successful ping to perform before returning
 
     Raises
     ------
@@ -92,17 +94,21 @@ def ping_robot(ip_address: str, timeout: int = 90):
         Error raised when no reply from specified IP address after specified timeout
     """
     logger = logging.getLogger(__name__)
-    logger.info(f"Attempting to ping {ip_address} for {timeout} seconds")
+    logger.info(f'Attempting to ping {ip_address} for {timeout} seconds')
     timeout_time = time.monotonic() + timeout
+    ping_success = 0
     while True:
         if _ping(ip_address):
-            break
+            ping_success += 1
+            logger.info(f'Ping {ip_address} successfully')
+            if ping_success >= count:
+                break
         if time.monotonic() > timeout_time:
-            error_msg = f"Timeout while waiting to ping robot: {ip_address}"
+            error_msg = f'Timeout while waiting to ping robot: {ip_address}'
             logger.error(error_msg)
             raise TimeoutError(error_msg)
 
-    logger.info(f"Successfully ping {ip_address}")
+    logger.info(f'Successfully ping {ip_address}')
 
 
 def _ping(ip_address: str) -> bool:
@@ -140,22 +146,17 @@ def _ping(ip_address: str) -> bool:
 
 def robot_model_is_meca500(robot_model: MxRobotModel):
     """Tells if the specified robot model is a Meca500 robot (or any revision)"""
-    return robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or \
-        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2 or  \
-        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3 or \
-        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4
+    return (robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2
+            or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4)
 
 
 def robot_model_is_mg2(robot_model: MxRobotModel):
     """Tells if the specified robot model is a Mecademic 2nd generation robot (Mcs500, ...)"""
-    return robot_model == MxRobotModel.MX_ROBOT_MODEL_M1000_R1 or \
-        robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1
+    return (robot_model == MxRobotModel.MX_ROBOT_MODEL_M1000_R1 or robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1)
 
 
 def robot_model_support_eoat(robot_model: MxRobotModel):
     """Tells if the specified robot model support eoat (Meca500, ...)"""
 
-    return robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or \
-        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2 or \
-        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3 or \
-        robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4
+    return (robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2
+            or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4)

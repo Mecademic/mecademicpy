@@ -28,6 +28,9 @@ MX_RECOVERY_MODE_MAX_JOINT_ACC_PCT = 40.0
 MX_RECOVERY_MODE_MAX_CART_LIN_VEL_MM_PER_SEC = 20.0
 MX_RECOVERY_MODE_MAX_CART_ANG_VEL_DEG_PER_SEC = 30.0
 MX_RECOVERY_MODE_MAX_CART_ACC_PCT = 40.0
+MX_MOVE_JUMP_DEFAULT_HEIGHT_MM = 10
+MX_MOVE_JUMP_DEFAULT_APPROACH_VEL_MM_SEC = 10
+MX_MOVE_JUMP_DEFAULT_APPROACH_DIST_MM = 2
 MX_EIP_MAJOR_VERSION = 2
 MX_EIP_MINOR_VERSION = 3
 MX_PNET_MAJOR_VERSION = 1
@@ -78,10 +81,10 @@ class MxTorqueLimitsMode(IntEnum):
 
 class MxIoBankId(IntEnum):
     MX_IO_BANK_ID_UNDEFINED = 0,
-    MX_IO_BANK_ID_PSU = 1,  # IO pins from Power supply.
-    MX_IO_BANK_ID_IO_MODULE = 2,  # IOs from the IO expansion module.
-MX_IO_BANK_NAME_PSU = "PSU"  # \ref MX_IO_BANK_ID_PSU
+    MX_IO_BANK_ID_IO_MODULE = 1,  # IOs from the IO expansion module. API string: 'IoModule'
+    MX_IO_BANK_ID_SIG_GEN = 99,  # IOs from the test signal generator module. API string: 'SigGen'
 MX_IO_BANK_NAME_IO_MODULE = "IoModule"  # \ref MX_IO_BANK_ID_IO_MODULE
+MX_IO_BANK_NAME_SIG_GEN = "SigGen"  # \ref MX_IO_BANK_ID_SIG_GEN
 
 
 class MxDigitalIoState(IntEnum):
@@ -147,6 +150,18 @@ class MxMotionCmdType(IntEnum):
     MX_MOTION_CMD_TYPE_SETOUTPUTSTATE = 34,  # Set digital output states (through motion queue)
     MX_MOTION_CMD_TYPE_SETOUTPUTSTATE_IMMEDIATE = 35,  # Set digital output states (immediate, bypass motion queue)
     MX_MOTION_CMD_TYPE_SETIOSIM = 36,  # Set (or clear) IO simulation mode
+    MX_MOTION_CMD_TYPE_VACUMMGRIP = 37,  # Apply vacuum in order to attempt to grip part
+    MX_MOTION_CMD_TYPE_VACUMMGRIP_IMMEDIATE = 38,  # Same as above but immediate, bypass motion queue
+    MX_MOTION_CMD_TYPE_VACUMMRELEASE = 39,  # Same as above but immediate, bypass motion queue
+    MX_MOTION_CMD_TYPE_VACUMMRELEASE_IMMEDIATE = 40,  # Same as above but immediate, bypass motion queue
+    MX_MOTION_CMD_TYPE_SETVACUUMTHRESHOLD = 41,  # Set vacuum threshold configuration
+    MX_MOTION_CMD_TYPE_SETVACUUMTHRESHOLD_IMMEDIATE = 42,  # Set vacuum threshold configuration
+    MX_MOTION_CMD_TYPE_SETVACUUMPURGEDURATION = 43,  # Set vacuum purge duration
+    MX_MOTION_CMD_TYPE_SETVACUUMPURGEDURATION_IMMEDIATE = 44,  # Same as above but immediate, bypass motion queue
+    MX_MOTION_CMD_TYPE_MOVEJUMP = 45,  # Similar to MovePose with addition of start/end jump
+    MX_MOTION_CMD_TYPE_SET_MOVEJUMP_HEIGHT = 46,  # Configure the height of MoveJump
+    MX_MOTION_CMD_TYPE_SET_MOVEJUMP_APPROACH_VEL = 47,  # Configure the final approach velocity of MoveJump
+    MX_MOTION_CMD_TYPE_SET_TIME_SCALING = 48,  # Set program execution time scaling
     MX_MOTION_CMD_TYPE_START_OFFLINE_PROGRAM = 100,  # Start an offline program with specified id
     MX_MOTION_CMD_TYPE_SETDBG = 1000,  # Enable debug options on the robot. For Mecademic use only.
     MX_MOTION_CMD_TYPE_MG2BUSDBG = 1001,  # Send custom command on Mg2 bus. For Mecademic use only.
@@ -157,7 +172,6 @@ class MxEip_DynamicType(IntEnum):
     MX_EIP_DYNAMIC_CFG_FW_VERSION = 1,
     MX_EIP_DYNAMIC_CFG_PRODUCT_TYPE = 2,
     MX_EIP_DYNAMIC_CFG_ROBOT_SERIAL = 3,
-    MX_EIP_DYNAMIC_CFG_JOINT_OFFSET = 4,
     MX_EIP_DYNAMIC_CFG_ROBOT_DH_MODEL_1 = 5,
     MX_EIP_DYNAMIC_CFG_ROBOT_DH_MODEL_2 = 6,
     MX_EIP_DYNAMIC_CFG_ROBOT_DH_MODEL_3 = 7,
@@ -174,14 +188,15 @@ class MxEip_DynamicType(IntEnum):
     MX_EIP_DYNAMIC_CFG_WORKSPACE_LIMITS = 18,
     MX_EIP_DYNAMIC_CFG_TOOL_SPHERE = 19,
     MX_EIP_DYNAMIC_CFG_CALIBRATION = 30,
-    MX_EIP_DYNAMIC_CFG_BRF_OFFSET = 31,
-    MX_EIP_DYNAMIC_CFG_FRF_OFFSET = 35,
     MX_EIP_DYNAMIC_MQ_CONF = 20,
     MX_EIP_DYNAMIC_MQ_PARAMS = 21,
     MX_EIP_DYNAMIC_MQ_VEL_ACCEL = 22,
     MX_EIP_DYNAMIC_MQ_GRIPPER_CFG = 23,
     MX_EIP_DYNAMIC_MQ_TORQUE_LIMITS_CFG = 24,
     MX_EIP_DYNAMIC_MQ_TORQUE_LIMITS = 25,
+    MX_EIP_DYNAMIC_MQ_VACUUM_GRIP_CFG = 26,
+    MX_EIP_DYNAMIC_MQ_MOVEJUMP_HEIGHT = 27,
+    MX_EIP_DYNAMIC_MQ_MOVEJUMP_APPROACH_VEL = 28,
     MX_EIP_DYNAMIC_RT_TARGET_JOINT_POS = 30,  # Present in basic PDOs already
     MX_EIP_DYNAMIC_RT_TARGET_CART_POS = 31,  # Present in basic PDOs already
     MX_EIP_DYNAMIC_RT_TARGET_JOINT_VEL = 32,
@@ -199,8 +214,9 @@ class MxEip_DynamicType(IntEnum):
     MX_EIP_DYNAMIC_RT_TRF = 51,  # Present in basic PDOs already
     MX_EIP_DYNAMIC_RT_EXTTOOL_STATUS = 52,
     MX_EIP_DYNAMIC_RT_GRIPPER_VALVE_STATE = 53,
-    MX_EIP_DYNAMIC_RT_PSU_IO_STATE = 71,  # Digital outputs and inputs from the Mcs500 PSU
     MX_EIP_DYNAMIC_RT_IO_MODULE_IO_STATE = 72,  # Digital outputs and inputs from the Mcs500 IO module
+    MX_EIP_DYNAMIC_RT_VACUUM_GRIP_STATE = 73,  # Vacuum gripper state from the Mcs500 IO module
+    MX_EIP_DYNAMIC_RT_SIG_GEN_IO_STATE = 78,  # Digital outputs and inputs from the Mcs500 signal generator
     MX_EIP_DYNAMIC_INTERNAL_SET_DBG = 0x08000000,
     MX_EIP_DYNAMIC_FORCE_32_BITS = 0xFFFFFFFF,
 MX_EIP_DYNAMIC_INTERNAL_MASK = 0x0FFFFFFF
@@ -240,6 +256,7 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_NO_VBOX = 1041,  # No pneumatic module is connected.
     MX_ST_EXT_TOOL_SIM_MUST_DEACTIVATED = 1042,  # Switching external tool type is only possible when the robot
     MX_ST_INVALID_BANK_ID = 1043,  # The specified IO bank is not present on this robot.
+    MX_ST_NO_VACUUM_MODULE_ID = 1044,  # No Vacuum module present on this robot.
     MX_ST_OFFLINE_PROGRAM_LIST_ERR = 1500,  # Failed "ListPrograms" API command
     MX_ST_OFFLINE_PROGRAM_LOAD_ERR = 1501,  # Failed "LoadProgram" API command
     MX_ST_OFFLINE_PROGRAM_SAVE_ERR = 1502,  # Failed "SaveProgram" API command
@@ -255,7 +272,7 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_BRAKES_ON = 2010,  # All brakes are now set.
     MX_ST_GET_WRF = 2013,  # Response to GetWrf
     MX_ST_GET_TRF = 2014,  # Response to GetTrf
-    MX_ST_GET_TIME_SCALING = 2015,  # Response to GetTimeScaling
+    MX_ST_TIME_SCALING = 2015,  # Response to GetTimeScaling and monitoring event when it changes
     MX_ST_GET_JOINTS = 2026,  # "GetJoints" response (current joint angles in degrees).
     MX_ST_GET_POSE = 2027,  # "GetPose" response (current position in mm, Euler angles in degrees).
     MX_ST_GET_AUTO_CONF = 2028,
@@ -281,6 +298,7 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_OFFLINE_START = 2063,  # Offline program started to run.
     MX_ST_OFFLINE_LOOP_ON = 2064,  # Offline program loop is enabled.
     MX_ST_OFFLINE_LOOP_OFF = 2065,  # Offline program loop is disabled.
+    MX_ST_MASTERING_ALREADY_DONE = 2072,  # Mastering already done. Special op needed to override it.
     MX_ST_GET_STATUS_GRIPPER = 2079,  # "GetStatusGripper" response (see pdf doc for response fields meaning).
     MX_ST_GET_CMD_PENDING_COUNT = 2080,  # Number of pending commands in the queue.
     MX_ST_GET_FW_VERSION = 2081,  # The firmware version running on the robot.
@@ -304,7 +322,7 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_GET_MODEL_VEL_LIMITS = 2108,  # "GetModelVelLimits" response (in JSON)
     MX_ST_GET_CMD_DEF = 2109,  # "GetCmdDef" response (in JSON)
     MX_ST_GET_ROBOT_KIN_MODEL = 2110,  # "GetRobotKinModel" response
-    MX_ST_GET_ROBOT_DH_MODEL = 2111,  # "GetRobotDhMOdel" response
+    MX_ST_GET_CALIBRATION_DH_MODEL = 2111,  # "GetCalibrationDhModel" response
     MX_ST_GET_JOINT_OFFSET = 2112,  # "GetJointOffset" response
     MX_ST_GET_MODEL_JOINT_LIMITS = 2113,  # "GetModelJointLimits" response
     MX_ST_GET_TEST_BENCH_MODE = 2114,  # "GetTestBenchMode" response
@@ -312,10 +330,16 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_GET_MONITORING_INTERVAL = 2116,  # "GetMonitoringInterval" response
     MX_ST_GET_REAL_TIME_MONITORING = 2117,  # "GetRealTimeMonitoring" response
     MX_ST_GET_NETWORK_OPTIONS = 2119,  # "GetNetworkOptions" response
-    MX_ST_GET_BRF_OFFSET = 2120,  # "GetBrfOffset" response
-    MX_ST_GET_FRF_OFFSET = 2121,  # "GetFrfOffset" response
+    MX_ST_GET_CALIBRATION_BRF_OFFSET = 2120,  # "GetCalibrationBrfOffset" response
+    MX_ST_GET_CALIBRATION_FRF_OFFSET = 2121,  # "GetCalibrationFrfOffset" response
     MX_ST_GET_ROBOT_CALIBRATED = 2122,  # "GetRobotCalibrated" response
+    MX_ST_GET_CALIBRATION_KMOTOR_RATIO = 2123,  # "GetCalibrationKMotorRatio" response
+    MX_ST_GET_CALIBRATION_Q23456_RATIO = 2124,  # "GetCalibrationQ23456Ratio" response
+    MX_ST_GET_CALIBRATION_STIFFNESS_RATIO = 2125,  # "GetCalibrationStiffnessRatio" response
+    MX_ST_GET_CALIBRATION_BACKLASH = 2126,  # "GetCalibrationBacklash" response
+    MX_ST_GET_STATION_ALIAS = 2130,  # "GetStationAlias" response
     MX_ST_GET_RTC = 2140,  # "GetRtc" response
+    MX_ST_GET_ROBOT_STATS = 2141,  # GetRobotStats response
     MX_ST_GET_BLENDING = 2150,  # "GetBlending" response
     MX_ST_GET_VEL_TIMEOUT = 2151,  # "GetVelTimeout" response
     MX_ST_GET_JOINT_VEL = 2152,  # "GetJointVel" response
@@ -338,6 +362,10 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_GET_JOINT_VEL_LIMIT = 2169,  # "GetJointVelLimit" response
     MX_ST_SET_CALIBRATION_CFG = 2170,  # "SetCalibrationCfg" response
     MX_ST_GET_CALIBRATION_CFG = 2171,  # "GetCalibrationCfg" response
+    MX_ST_GET_VACUUM_THRESHOLD = 2172,  # "GetVacuumThreshold" response
+    MX_ST_GET_VACUUM_PURGE_DURATION = 2173,  # "GetVacuumPurgeDuration" response
+    MX_ST_GET_MOVEJUMP_HEIGHT = 2174,  # "GetMoveJumpHeight" response
+    MX_ST_GET_MOVEJUMP_APPROACH_VEL = 2175,  # "GetMoveJumpApproachVel" response
     MX_ST_RT_TARGET_JOINT_POS = 2200,  # Timestamp + joint positions in degrees
     MX_ST_RT_TARGET_CART_POS = 2201,  # Timestamp + Cartesian position (in mm, Euler angles in degrees).
     MX_ST_RT_TARGET_JOINT_VEL = 2202,  # Timestamp + joint velocity in degrees per second
@@ -367,9 +395,12 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_RT_IO_STATUS = 2330,  # Timestamp + IO module status
     MX_ST_RT_OUTPUT_STATE = 2340,  # Timestamp + bankId + output states
     MX_ST_RT_INPUT_STATE = 2341,  # Timestamp + bankId + input states
+    MX_ST_RT_VACUUM_STATE = 2342,  # Timestamp + vacuum on/off, purge on/off, holding part
+    MX_ST_RT_VACUUM_PRESSURE = 2343,  # Timestamp + vacuum pressure in kPa
     MX_ST_RT_DEBUG_MG2_SAFE_MCU = 2400,  # Safe MCU debug status.
     MX_ST_RT_DEBUG_MG2_DRIVES = 2401,  # Drives debug status.
     MX_ST_RT_DEBUG_MG2_PSU = 2402,  # PSU debug status.
+    MX_ST_RT_DEBUG_MG2_IO_MODULE = 2403,  # Io module debug status.
     MX_ST_OFFLINE_PROGRAM_LIST = 2500,  # Response to "ListPrograms" API command
     MX_ST_OFFLINE_PROGRAM_LOAD = 2501,  # Response to "LoadProgram" API command
     MX_ST_OFFLINE_PROGRAM_SAVE = 2502,  # Response to "SaveProgram" API command
@@ -391,7 +422,6 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_OFFLINE_LOOP = 3018,  # The offline program is being restarted (looped).
     MX_ST_OFFLINE_INVALID = 3020,  # The offline program is invalid and can't be played
     MX_ST_DEV_MODE = 3021,  # The robot is running in developer mode (non official binary)
-    MX_ST_PSU_DONGLE_STATUS = 3022,  # Power-supply USB debug dongle status (sent only when detected)
     MX_ST_ERROR_GRIPPER = 3025,  # The gripper reported an error.
     MX_ST_MAINTENANCE_CHECK = 3026,  # A hardware problem was detected. Contact Mecademic support.
     MX_ST_INTERNAL_ERROR = 3027,  # Unknown internal error occurred.
@@ -414,6 +444,7 @@ class MxRobotStatusCode(IntEnum):
     MX_ST_EXT_PORT_COMM_ERR = 3044,  # Abnormal communication error with external port.
     MX_ST_COLLISION_STOP = 3045,  # Robot has decelerated due to imminent collision.
     MX_ST_PSU_ERROR = 3046,  # Robot power supply has non-resettable error.
+    MX_ST_FAILED_TO_MOUNT_EMMC_SD = 3047,  # Robot (uBoot) fails to mount emmc or sd card
     MX_ST_ESTOP = 3070,  # The EStop condition raised
     MX_ST_INVALID = 0xFFFFFFFF,
 MX_ST_EXTTOOL_SIM_OFF = 2048
@@ -429,6 +460,12 @@ class MxRobotState(IntEnum):
     MX_ROBOT_STATE_MASTERING = 6,
     MX_ROBOT_STATE_RUN = 7,
     MX_ROBOT_STATE_DEACTIVATING = 9,
+
+
+class MxJointCalibrationMethod(IntEnum):
+    MX_JOINT_CALIB_METHOD_DH_PARAMS = 0,  # Apply joint-space calibration as Theta offset in DH params
+    MX_JOINT_CALIB_METHOD_DRIVE_DATA = 1,  # Apply joint-space calibration during communication with drives
+    MX_JOINT_CALIB_METHOD_DRIVE_DATA_RT = 2,  # Apply during comm with drives, and adjust using real-time data
 MX_JSON_KEY_CODE = "code"  # Key for the status/command code in JSON message
 MX_JSON_KEY_DATA = "data"  # Key for the status/command data in JSON message
 MX_JSON_KEY_TIMESTAMP_US = "timestampUs"  # Robot timestamp in microseconds
@@ -481,7 +518,14 @@ MX_JSON_KEY_NETWORK_CONFIG_IP = "ip"  # string: The IPv4 address of the robot
 MX_JSON_KEY_NETWORK_CONFIG_MASK = "mask"  # string: The netmask
 MX_JSON_KEY_NETWORK_CONFIG_GATEWAY = "gateway"  # string: The gateway address
 MX_JSON_KEY_NETWORK_CONFIG_MAC = "mac"  # string: The robot's MAC address
-MX_JSON_KEY_PSU_DONGLE_DETECTED = "detected"  # bool: True if dongle was detected and updated successfully
+MX_JSON_KEY_STATS_MG2_BUS_MASTER_SAFE_MCU = "masterSafeMcuBus"
+MX_JSON_KEY_STATS_MG2_BUS_SLAVE_SAFE_MCU = "slaveSafeMcuBus"
+MX_JSON_KEY_STATS_MG2_BUS_IO_MODULE = "ioModuleBus"
+MX_JSON_KEY_STATS_MG2_BUS_NB_SENT_FRAMES = "nbSentFrames"
+MX_JSON_KEY_STATS_MG2_BUS_NB_RECEIVED_FRAMES = "nbReceivedFrames"
+MX_JSON_KEY_STATS_MG2_BUS_NB_TX_TIMEOUT = "nbTxTimeout"
+MX_JSON_KEY_STATS_MG2_BUS_NB_RX_TIMEOUT = "nbRxTimeout"
+MX_JSON_KEY_STATS_MG2_BUS_NB_CRC_ERRORS = "nbCrcErrors"
 MX_FW_UPDATE_UPLOAD_URL = "/fw-update"
 MX_GET_LOGS_URL = "/get-logs"
 MX_FW_UPDATE_STATUS_EXTRACTING = "Extracting files from firmware package..."
@@ -516,6 +560,7 @@ MX_CMD_TAG_PGM = "Program"
 MX_CMD_TAG_GET = "Get"
 MX_CMD_TAG_PERMANENT = "Permanent"
 MX_CMD_TAG_TEMPORARY = "Temporary"
+MX_CMD_TAG_IMMEDIATE = "Immediate"
 MX_CMD_TAG_SIM = "Simulation"
 MX_CMD_TAG_BRAKES = "Brakes"
 MX_CMD_TAG_GRIPPER = "Gripper"
@@ -619,6 +664,8 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_EXT_TOOL_SIM_MUST_DEACTIVATED, "MX_ST_EXT_TOOL_SIM_MUST_DEACTIVATED", is_error=True, is_resettable=True),
     int(MxRobotStatusCode.MX_ST_INVALID_BANK_ID):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_INVALID_BANK_ID, "MX_ST_INVALID_BANK_ID", is_error=True, is_resettable=True),
+    int(MxRobotStatusCode.MX_ST_NO_VACUUM_MODULE_ID):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_NO_VACUUM_MODULE_ID, "MX_ST_NO_VACUUM_MODULE_ID", is_error=True, is_resettable=True),
     int(MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_LIST_ERR):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_LIST_ERR, "MX_ST_OFFLINE_PROGRAM_LIST_ERR", is_error=True, is_resettable=True),
     int(MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_LOAD_ERR):
@@ -639,8 +686,8 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_NO_ERROR_RESET, "MX_ST_NO_ERROR_RESET", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_STATUS_ROBOT):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_STATUS_ROBOT, "MX_ST_GET_STATUS_ROBOT", is_error=False, is_resettable=False),
-    int(MxRobotStatusCode.MX_ST_GET_TIME_SCALING):
-    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_TIME_SCALING, "MX_ST_GET_TIME_SCALING", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_TIME_SCALING):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_TIME_SCALING, "MX_ST_TIME_SCALING", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_BRAKES_OFF):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_BRAKES_OFF, "MX_ST_BRAKES_OFF", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_MASTER_DONE):
@@ -695,6 +742,8 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_OFFLINE_LOOP_ON, "MX_ST_OFFLINE_LOOP_ON", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_OFFLINE_LOOP_OFF):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_OFFLINE_LOOP_OFF, "MX_ST_OFFLINE_LOOP_OFF", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_MASTERING_ALREADY_DONE):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_MASTERING_ALREADY_DONE, "MX_ST_MASTERING_ALREADY_DONE", is_error=True, is_resettable=True),
     int(MxRobotStatusCode.MX_ST_GET_STATUS_GRIPPER):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_STATUS_GRIPPER, "MX_ST_GET_STATUS_GRIPPER", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_CMD_PENDING_COUNT):
@@ -739,6 +788,10 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_TOOL_SPHERE, "MX_ST_GET_TOOL_SPHERE", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_CALIBRATION_CFG):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CALIBRATION_CFG, "MX_ST_GET_CALIBRATION_CFG", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_VACUUM_THRESHOLD):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_VACUUM_THRESHOLD, "MX_ST_GET_VACUUM_THRESHOLD", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_VACUUM_PURGE_DURATION):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_VACUUM_PURGE_DURATION, "MX_ST_GET_VACUUM_PURGE_DURATION", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_JOINT_LIMITS_CFG):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_JOINT_LIMITS_CFG, "MX_ST_GET_JOINT_LIMITS_CFG", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_ROBOT_NAME):
@@ -749,8 +802,8 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CMD_DEF, "MX_ST_GET_CMD_DEF", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_ROBOT_KIN_MODEL):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_ROBOT_KIN_MODEL, "MX_ST_GET_ROBOT_KIN_MODEL", is_error=False, is_resettable=False),
-    int(MxRobotStatusCode.MX_ST_GET_ROBOT_DH_MODEL):
-    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_ROBOT_DH_MODEL, "MX_ST_GET_ROBOT_DH_MODEL", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_CALIBRATION_DH_MODEL):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CALIBRATION_DH_MODEL, "MX_ST_GET_CALIBRATION_DH_MODEL", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_JOINT_OFFSET):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_JOINT_OFFSET, "MX_ST_GET_JOINT_OFFSET", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_MODEL_JOINT_LIMITS):
@@ -765,14 +818,24 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_REAL_TIME_MONITORING, "MX_ST_GET_REAL_TIME_MONITORING", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_NETWORK_OPTIONS):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_NETWORK_OPTIONS, "MX_ST_GET_NETWORK_OPTIONS", is_error=False, is_resettable=False),
-    int(MxRobotStatusCode.MX_ST_GET_BRF_OFFSET):
-    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_BRF_OFFSET, "MX_ST_GET_BRF_OFFSET", is_error=False, is_resettable=False),
-    int(MxRobotStatusCode.MX_ST_GET_FRF_OFFSET):
-    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_FRF_OFFSET, "MX_ST_GET_FRF_OFFSET", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_CALIBRATION_BRF_OFFSET):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CALIBRATION_BRF_OFFSET, "MX_ST_GET_CALIBRATION_BRF_OFFSET", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_CALIBRATION_FRF_OFFSET):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CALIBRATION_FRF_OFFSET, "MX_ST_GET_CALIBRATION_FRF_OFFSET", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_ROBOT_CALIBRATED):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_ROBOT_CALIBRATED, "MX_ST_GET_ROBOT_CALIBRATED", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_CALIBRATION_KMOTOR_RATIO):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CALIBRATION_KMOTOR_RATIO, "MX_ST_GET_CALIBRATION_KMOTOR_RATIO", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_CALIBRATION_Q23456_RATIO):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CALIBRATION_Q23456_RATIO, "MX_ST_GET_CALIBRATION_Q23456_RATIO", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_CALIBRATION_STIFFNESS_RATIO):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CALIBRATION_STIFFNESS_RATIO, "MX_ST_GET_CALIBRATION_STIFFNESS_RATIO", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_CALIBRATION_BACKLASH):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CALIBRATION_BACKLASH, "MX_ST_GET_CALIBRATION_BACKLASH", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_RTC):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_RTC, "MX_ST_GET_RTC", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_ROBOT_STATS):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_ROBOT_STATS, "MX_ST_GET_ROBOT_STATS", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_BLENDING):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_BLENDING, "MX_ST_GET_BLENDING", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_VEL_TIMEOUT):
@@ -789,6 +852,10 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CART_ANG_VEL, "MX_ST_GET_CART_ANG_VEL", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_CART_ACC):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CART_ACC, "MX_ST_GET_CART_ACC", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_MOVEJUMP_HEIGHT):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_MOVEJUMP_HEIGHT, "MX_ST_GET_MOVEJUMP_HEIGHT", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_GET_MOVEJUMP_APPROACH_VEL):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_MOVEJUMP_APPROACH_VEL, "MX_ST_GET_MOVEJUMP_APPROACH_VEL", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_CHECKPOINT):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_GET_CHECKPOINT, "MX_ST_GET_CHECKPOINT", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_GET_GRIPPER_FORCE):
@@ -851,6 +918,10 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_RT_OUTPUT_STATE, "MX_ST_RT_OUTPUT_STATE", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_RT_INPUT_STATE):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_RT_INPUT_STATE, "MX_ST_RT_INPUT_STATE", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_RT_VACUUM_STATE):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_RT_VACUUM_STATE, "MX_ST_RT_VACUUM_STATE", is_error=False, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_RT_VACUUM_PRESSURE):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_RT_VACUUM_PRESSURE, "MX_ST_RT_VACUUM_PRESSURE", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_RT_CHECKPOINT):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_RT_CHECKPOINT, "MX_ST_RT_CHECKPOINT", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_RT_WRF):
@@ -903,8 +974,6 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_OFFLINE_LOOP, "MX_ST_OFFLINE_LOOP", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_DEV_MODE):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_DEV_MODE, "MX_ST_DEV_MODE", is_error=False, is_resettable=False),
-    int(MxRobotStatusCode.MX_ST_PSU_DONGLE_STATUS):
-    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_PSU_DONGLE_STATUS, "MX_ST_PSU_DONGLE_STATUS", is_error=False, is_resettable=False),
     int(MxRobotStatusCode.MX_ST_OFFLINE_INVALID):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_OFFLINE_INVALID, "MX_ST_OFFLINE_INVALID", is_error=True, is_resettable=True),
     int(MxRobotStatusCode.MX_ST_ERROR_GRIPPER):
@@ -953,6 +1022,8 @@ robot_status_code_info = {
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_EXT_TOOL_COMM_ERR, "MX_ST_EXT_TOOL_COMM_ERR", is_error=True, is_resettable=True),
     int(MxRobotStatusCode.MX_ST_PSU_ERROR):
     RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_PSU_ERROR, "MX_ST_PSU_ERROR", is_error=True, is_resettable=False),
+    int(MxRobotStatusCode.MX_ST_FAILED_TO_MOUNT_EMMC_SD):
+    RobotStatusCodeInfo(MxRobotStatusCode.MX_ST_FAILED_TO_MOUNT_EMMC_SD, "MX_ST_FAILED_TO_MOUNT_EMMC_SD", is_error=True, is_resettable=False),
 }
 #
 # C constants from file mx_exttool_def.h
