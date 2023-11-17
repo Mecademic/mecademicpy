@@ -201,8 +201,10 @@ class Robot(_Robot):
             Desired joint angles in degrees.
 
         """
-        if len(args) != self._robot_info.num_joints:
-            raise ValueError('Incorrect number of joints sent to command.')
+        expect_count = self._robot_info.num_joints
+        if len(args) != expect_count:
+            raise ValueError(
+                f'MoveJoints: Incorrect number of joints sent {len(args)}, command. expecting: {expect_count}.')
 
         self._send_motion_command('MoveJoints', args)
 
@@ -216,8 +218,10 @@ class Robot(_Robot):
             Desired joint angles offsets in degrees.
 
         """
-        if len(args) != self._robot_info.num_joints:
-            raise ValueError('Incorrect number of joints sent to command.')
+        expect_count = self._robot_info.num_joints
+        if len(args) != expect_count:
+            raise ValueError(
+                f'MoveJointsRel: Incorrect number of joints sent {len(args)}, command. expecting: {expect_count}.')
 
         self._send_motion_command('MoveJointsRel', args)
 
@@ -231,8 +235,10 @@ class Robot(_Robot):
             Desired joint velocities in degrees per second.
 
         """
-        if len(args) != self._robot_info.num_joints:
-            raise ValueError('Incorrect number of joints sent to command.')
+        expect_count = self._robot_info.num_joints
+        if len(args) != expect_count:
+            raise ValueError(
+                f'MoveJointsVel: Incorrect number of joints sent {len(args)}, command. expecting: {expect_count}.')
 
         self._send_motion_command('MoveJointsVel', args)
 
@@ -254,6 +260,28 @@ class Robot(_Robot):
         """
         [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MovePose', [x, y, z, alpha, beta, gamma])
+
+    @disconnect_on_exception
+    def MoveJump(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
+        """Move robot's tool to desired position but performing an arch of specified height between start and end positions.
+        This command is similar to MovePose (i.e. using quickest non-linear path).
+        The jump height parameters are configured using SetMoveJumpHeight and SetMoveJumpApproachVel.
+        This command is very useful for 'pick-and-place' applications.
+
+        Parameters
+        ----------
+        x, y, z : float
+            Desired end effector coordinates in mm.
+        alpha, beta, gamma
+            Desired end effector orientation in degrees.
+            On 4-axes robots (like Mcs500), alpha and beta values are not used and can be omitted.
+            Examples for 4-axes robots:
+                - MoveJump(200, 10, 100, 45)
+                - MoveJump(200, 10, 100, gamma=45)
+
+        """
+        [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
+        self._send_motion_command('MoveJump', [x, y, z, alpha, beta, gamma])
 
     @disconnect_on_exception
     def MoveLin(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
@@ -563,6 +591,68 @@ class Robot(_Robot):
         self._send_motion_command('SetJointVelLimit', [p])
 
     @disconnect_on_exception
+    def SetMoveJumpHeight(self,
+                          startHeight: float = MX_MOVE_JUMP_DEFAULT_HEIGHT_MM,
+                          endHeight: float = MX_MOVE_JUMP_DEFAULT_HEIGHT_MM,
+                          minHeight: float = 0,
+                          maxHeight: float = 102):
+        """Set height parameters for the MoveJump command (in mm).
+        Height parameters control how high the robot moves vertically at start, middle and end.
+        Height values provided can be positive or negative (relative to WRF's Z axis).
+        Space between minimum and maximum allows the robot flexibility to choose the optimal path.
+        An error is raised if joint limits prevent the robot from respecting minimum heights.
+
+        Parameters
+        ----------
+        startHeight : float
+            Height (in mm) to move from start position before starting lateral move, relative to starting position.
+        endHeight : float
+            Height (in mm) to reach after lateral move, before moving down to end position, relative to end position.
+        minHeight : float
+            Minimum height (in mm) to reach while performing the lateral move, applied to both,
+            start and end of the jump, relative to start/end position respectively.
+        maxHeight : float
+            Maximum height (in mm) allowed along the whole MoveJump path, applied to both,
+            start and end of the jump, relative to start/end position respectively.
+            The robot may not reach that height if optimal path does not need to go that high.
+
+        """
+        self._send_motion_command('SetMoveJumpHeight', [startHeight, endHeight, minHeight, maxHeight])
+
+    @disconnect_on_exception
+    def SetMoveJumpApproachVel(self,
+                               startVel: float = MX_MOVE_JUMP_DEFAULT_APPROACH_VEL_MM_SEC,
+                               startDist: float = MX_MOVE_JUMP_DEFAULT_APPROACH_DIST_MM,
+                               endVel: float = MX_MOVE_JUMP_DEFAULT_APPROACH_VEL_MM_SEC,
+                               endDist: float = MX_MOVE_JUMP_DEFAULT_APPROACH_DIST_MM):
+        """Set the maximum allowed velocity (and length) of the start and end approach of a MoveJump.
+        This allows the robot to move slower than configured joint velocity for some distance from
+        start and end points, during the 'vertical' portion of the MoveJump.
+        This is a velocity limit i.e. it will have an effect only if slower than current JointVel.
+
+        Parameters
+        ----------
+        startVel : float
+            Maximum velocity (in mm/s) allowed near start positions
+            (as a velocity limit i.e. it will have an effect only if slower than current joint velocity).
+            Use 0 for 'unlimited'.
+        startDist : float
+            Approach distance (in mm) from start position, i.e. the portion of vertical move where
+            the StartVel limit is applied.
+            Automatically limited to jump height (SetMoveJumpHeight).
+        endVel : float
+            Maximum velocity (in mm/s) allowed near end position
+            (as a velocity limit i.e. it will have an effect only if slower than current joint velocity).
+            Use 0 for 'unlimited'.
+        endDist : float
+            Approach distance (in mm) from end position, i.e. the portion of vertical move where
+            the EndVel limit is applied.
+            Automatically limited to jump height (SetMoveJumpHeight).
+
+        """
+        self._send_motion_command('SetMoveJumpApproachVel', [startVel, startDist, endVel, endDist])
+
+    @disconnect_on_exception
     def SetTrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Set the TRF (tool reference frame) Cartesian position.
 
@@ -672,8 +762,9 @@ class Robot(_Robot):
         """Wait for the gripper move to complete.
            Note that any move command in the motion queue following a gripper command will start executing at the same
            time the gripper starts moving.
-           If you wish to wait for the gripper to finish moving first, DO NOT send motion commands to the robot after
-           your gripper command, then call WaitGripperMoveCompletion, and finally post following motion commands.
+           If you wish to wait for the gripper to finish moving first,
+           DO NOT send motion commands to the robot after your gripper command.
+           Instead, call WaitGripperMoveCompletion, and then resume post following motion commands.
 
         Parameters
         ----------
@@ -695,8 +786,9 @@ class Robot(_Robot):
            Note 3:  The robot will not wait for gripper move to be completed before continuing with the next command
                     in the motion queue.
                     If you need to wait for the gripper move to be completed before continuing your program, do not
-                    post any request in the motion queue after MoveGripper, then call method WaitGripperMoveCompletion
-                    in your application to know when your application can continue sending other move commands.
+                    post any request in the motion queue after MoveGripper,
+                    then call method WaitGripperMoveCompletion or WaitHoldingPart in your application
+                    to know when your application can continue sending other move commands.
 
         """
         self._gripper_state_before_last_move = copy.deepcopy(self._gripper_state)
@@ -722,8 +814,9 @@ class Robot(_Robot):
            Note 3:  The robot will not wait for gripper move to be completed before continuing with the next command
                     in the motion queue.
                     If you need to wait for the gripper move to be completed before continuing your program, do not
-                    post any request in the motion queue after MoveGripper, then call method WaitGripperMoveCompletion
-                    in your application to know when your application can continue sending other move commands.
+                    post any request in the motion queue after MoveGripper,
+                    then call method WaitGripperMoveCompletion or WaitHoldingPart in your application
+                    to know when your application can continue sending other move commands.
 
         """
         self._gripper_state_before_last_move = copy.deepcopy(self._gripper_state)
@@ -749,8 +842,9 @@ class Robot(_Robot):
            Note 3:  The robot will not wait for gripper move to be completed before continuing with the next command
                     in the motion queue.
                     If you need to wait for the gripper move to be completed before continuing your program, do not
-                    post any request in the motion queue after MoveGripper, then call method WaitGripperMoveCompletion
-                    in your application to know when your application can continue sending other move commands.
+                    post any request in the motion queue after MoveGripper,
+                    then call method WaitGripperMoveCompletion or WaitHoldingPart in your application
+                    to know when your application can continue sending other move commands.
 
            If the target specified is a bool, it indicates if the target position is the opened (True, GRIPPER_OPEN)
            or closed (False, GRIPPER_CLOSE) position.
@@ -805,7 +899,7 @@ class Robot(_Robot):
         self._send_motion_command('SetGripperVel', [p])
 
     @disconnect_on_exception
-    def SetGripperRange(self, closePos: float, openPos):
+    def SetGripperRange(self, closePos: float, openPos: float):
         """Set the gripper's range that will be used when calling GripperClose and GripperOpen.
            This function is useful for example to set a smaller (and thus quicker) movement range when it is not
            required to fully open the gripper to release objects. This is especially apparent on long-stroke grippers.
@@ -847,8 +941,150 @@ class Robot(_Robot):
         self._send_motion_command('SetValveState', args)
 
     @disconnect_on_exception
-    def SetOutputState(self, bank_id: MxIoBankId, *args: Union[MxDigitalIoState, int, str]):
-        """Set the digital output states for the specified IO bank.
+    def VacuumGrip(self):
+        """Start applying vacuum to grip a part with the IO module's vacuum gripper (motion queue command).
+           Note 1:  This command will not cause the robot to stop moving.
+
+           Note 2:  This command will be executed at the beginning of the blending (or deceleration) period of
+                    the previous command in the motion queue.
+                    You can insert a Delay before calling VacuumGrip to make sure that vacuum is applied only
+                    once the robot has stopped moving.
+
+           Note 3:  The robot will NOT wait until robot is confirmed holding part before starting to execute the next
+                    command in the motion queue.
+                    If you need to wait for holding part confirmation before continuing your program, do not
+                    post any request in the motion queue after VacuumGrip, then call method WaitHoldingPart
+                    in your application and finally post following move commands to the robot.
+        """
+        self._send_motion_command('VacuumGrip')
+
+    @disconnect_on_exception
+    def VacuumGrip_Immediate(self):
+        """Same as VacuumGrip but without going through robot's motion queue (immediately applied)"""
+        self.VacuumGripReleaseImmediate(False)
+
+    @disconnect_on_exception
+    def VacuumRelease(self):
+        """Release part held by the IO module's vacuum gripper (motion queue command).
+           Note 1:  This command will not cause the robot to stop moving.
+
+           Note 2:  This command will be executed at the beginning of the blending (or deceleration) period of
+                    the previous command in the motion queue.
+                    You can insert a Delay before calling VacuumRelease to make sure that part is released only
+                    once the robot has stopped moving.
+
+           Note 3:  The robot will NOT wait until robot is confirmed released part before starting to execute the next
+                    command in the motion queue.
+                    If you need to wait for released part confirmation before continuing your program, do not
+                    post any request in the motion queue after VacuumRelease, then call method WaitReleasedPart
+                    in your application and finally post following move commands to the robot.
+        """
+        self._send_motion_command('VacuumRelease')
+
+    @disconnect_on_exception
+    def VacuumRelease_Immediate(self):
+        """Same as VacuumRelease but without going through robot's motion queue (immediately applied)"""
+        self.VacuumGripReleaseImmediate(True)
+
+    @disconnect_on_exception
+    def WaitHoldingPart(self, timeout: Optional[float] = None):
+        """Wait for the gripper (or vacuum gripper) to confirm it's holding part.
+           Note that any move command in the motion queue following a gripper command will start executing at the same
+           time the gripper starts moving or VacuumGrip is called.
+           If you wish to wait for holding part confirmation before continuing moving the robot then
+           DO NOT send motion commands to the robot after your gripper (or vacuum gripper) command.
+           Instead, call WaitHoldingPart, and then resume post following motion commands.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the holding part confirmation (in seconds).
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_holding_part.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitReleasedPart(self, timeout: Optional[float] = None):
+        """Wait for the gripper (or vacuum gripper) to confirm it has released part.
+           Note that any move command in the motion queue following a gripper command will start executing at the same
+           time the gripper starts moving or VacuumRelease is called.
+           If you wish to wait for released part confirmation before continuing moving the robot then
+           DO NOT send motion commands to the robot after your gripper (or vacuum gripper) command.
+           Instead, call WaitReleasedPart, and then resume post following motion commands.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the released part confirmation (in seconds).
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_released_part.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitPurgeDone(self, timeout: Optional[float] = None):
+        """Wait for the vacuum gripper purge to be done after releasing part.
+
+        Parameters
+        ----------
+        timeout : float
+            Maximum time to spend waiting for the vacuum purge done confirmation (in seconds).
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_vacuum_purge_done.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def SetVacuumThreshold(self, hold_threshold: float, release_threshold: float):
+        """Set vacuum pressure level thresholds for considering holding or releasing a part (motion queue command).
+           Part is considered held once the vacuum level reaches the 'hold threshold'.
+           Part is considered released once the vacuum pressure passes the 'release threshold' (i.e. closer to zero Kpa than 'release threshold').
+           The 'Hold threshold' must thus be under (more negative Kpa) than the 'release threshold'.
+           Use values (0,0) to reset to default values.
+
+        Parameters
+        ----------
+        hold_threshold : float
+            Vacuum pressure threshold to consider holding part in kPa.
+        openPos : float
+            Vacuum pressure threshold to consider part released in kPa.
+
+        """
+        self._send_motion_command('SetVacuumThreshold', [hold_threshold, release_threshold])
+
+    @disconnect_on_exception
+    def SetVacuumThreshold_Immediate(self, hold_threshold: float, release_threshold: float):
+        """Same as SetVacuumThreshold but without going through robot's motion queue (immediately applied)"""
+        self._send_immediate_command('SetVacuumThreshold_Immediate', [hold_threshold, release_threshold], None)
+
+    @disconnect_on_exception
+    def SetVacuumPurgeDuration(self, duration: float):
+        """Set duration (in seconds) of the positive air pressure applied when VacuumRelease is called
+           (motion queue command).
+           This positive air pressure period helps ejecting the held part.
+           Use value -1 to restore default purge duration'.
+
+        Parameters
+        ----------
+        duration : float
+            Duration (in seconds) of the vacuum purge.
+
+        """
+        self._send_motion_command('SetVacuumPurgeDuration', [duration])
+
+    @disconnect_on_exception
+    def SetVacuumPurgeDuration_Immediate(self, duration: float):
+        """Same as SetVacuumPurgeDuration but without going through robot's motion queue (immediately applied)"""
+        self._send_immediate_command('SetVacuumPurgeDuration_Immediate', [duration], None)
+
+    @disconnect_on_exception
+    @disconnect_on_exception
+    def SetOutputState(self, bank_id: MxIoBankId, *output_states: Union[MxDigitalIoState, int, str]):
+        """Set the digital output states for the specified IO bank (motion queue command).
            Note 1:  This command will not cause the robot to stop moving.
 
            Note 2:  This command will be executed at the beginning of the blending (or deceleration) period of
@@ -860,23 +1096,37 @@ class Robot(_Robot):
         ----------
         bank_id : MxIoBankId
             The IO bank Id to set output states for.
-        io_1...io_n : int
+        output_states_1...output_states_n : MxDigitalIoState, int, str
             The desired IO state (the number of available outputs depends on the chosen bank id):
                 - MxDigitalIoState.MX_DIGITAL_IO_STATE_STAY (alternatively: -1, '*' or 'stay')
                 - MxDigitalIoState.MX_DIGITAL_IO_STATE_0 (alternatively: 0 or 'off')
                 - MxDigitalIoState.MX_DIGITAL_IO_STATE_1 (alternatively: 1 or 'on')
-
         """
-        final_args = list(args)
+        final_args = list(output_states)
         final_args.insert(0, bank_id)
         self._send_motion_command('SetOutputState', final_args)
 
     @disconnect_on_exception
-    def SetOutputStateImmediate(self, bank_id: MxIoBankId, *args: Union[MxDigitalIoState, int, str]):
+    def SetOutputState_Immediate(self, bank_id: MxIoBankId, *output_states: Union[MxDigitalIoState, int, str]):
         """Same as SetOutputState but without going through robot's motion queue (immediately applied)"""
-        final_args = list(args)
-        final_args.insert(0, bank_id)
-        self._send_motion_command('SetOutputStateImmediate', final_args)
+        send_now = True
+        desired_state = list(output_states)
+        if self._enable_synchronous_mode:
+            if self.IsDesiredOutputState(bank_id, *desired_state):
+                # Already desired state (and sync mode).
+                # In sync mode we send one command at the time so we're sure that no state change is pending. So if already
+                # in desired state we don't need to send the command. We actually DON'T want to send the command because
+                # there would be no state change reported by on_vacuum_state_updated and this would timeout
+                send_now = False
+
+        if send_now:
+            final_args = copy.deepcopy(desired_state)
+            final_args.insert(0, bank_id)
+            self._send_immediate_command('SetOutputState_Immediate', final_args,
+                                         self._robot_events.on_output_state_updated)
+            if self._enable_synchronous_mode:
+                # Wait until reached desired state (or timeout)
+                self.WaitOutputState(bank_id, *desired_state, self.default_timeout)
 
     @disconnect_on_exception
     def WaitForAnyCheckpoint(self, timeout: float = None):
@@ -907,7 +1157,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_connected.wait(timeout=timeout)
@@ -922,10 +1172,23 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
-        self._robot_events.on_disconnected.wait(timeout=timeout)
+        start_time = time.monotonic()
+        while True:
+            try:
+                # Wait with short timeout, then check if connected again
+                if self.IsConnected():
+                    self._robot_events.on_disconnected.wait(timeout=0.1)
+                else:
+                    break
+            except TimeoutException as e:
+                if time.monotonic() - start_time > timeout:
+                    raise e
+                pass
+            except Exception as e:
+                raise e
 
     @disconnect_on_exception
     def WaitActivated(self, timeout: float = None):
@@ -936,7 +1199,7 @@ class Robot(_Robot):
         timeout : float, by default 30
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             if robot_model_is_mg2(self.GetRobotInfo().robot_model):
                 timeout = 5.0
@@ -964,7 +1227,7 @@ class Robot(_Robot):
         timeout : float, by default 40
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             if robot_model_is_mg2(self.GetRobotInfo().robot_model):
                 timeout = 5.0
@@ -982,7 +1245,7 @@ class Robot(_Robot):
             Maximum time to spend waiting for the event (in seconds).
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_activate_sim.wait(timeout=timeout)
@@ -996,7 +1259,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_deactivate_sim.wait(timeout=timeout)
@@ -1011,7 +1274,7 @@ class Robot(_Robot):
             Maximum time to spend waiting for the event (in seconds).
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_activate_ext_tool_sim.wait(timeout=timeout)
@@ -1025,7 +1288,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_deactivate_ext_tool_sim.wait(timeout=timeout)
@@ -1041,13 +1304,11 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
-        if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-            self._robot_events.on_psu_io_sim_enabled.wait(timeout=timeout)
-        else:
-            self._robot_events.on_io_sim_enabled.wait(timeout=timeout)
+
+        self._robot_events.on_io_sim_enabled.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitIoSimDisabled(self, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, timeout: float = None):
@@ -1060,13 +1321,99 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
-        if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-            self._robot_events.on_psu_io_sim_disabled.wait(timeout=timeout)
-        else:
-            self._robot_events.on_io_sim_disabled.wait(timeout=timeout)
+
+        self._robot_events.on_io_sim_disabled.wait(timeout=timeout)
+
+    def IsDesiredOutputState(self, bank_id: MxIoBankId, *expected_states: Union[MxDigitalIoState, int, str]) -> bool:
+        """Tells if the current digital output states matches the desired state.
+           Note that, here, a desired state of '*', 'stay' or -1 is interpreted as "don't compare".
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to validate output states for.
+        expected_states : Union[MxDigitalIoState, int, str]
+            The desired IO state (the number of available outputs depends on the chosen bank id):
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_STAY (alternatively: -1, '*' or 'stay') -> Will not be compared
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_0 (alternatively: 0 or 'off')
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_1 (alternatively: 1 or 'on')
+
+        Return
+        ------
+        True if current output states match desired state.
+        """
+        return self.IsDesiredIoState(bank_id, False, *expected_states)
+
+    def WaitOutputState(self,
+                        bank_id: MxIoBankId,
+                        *expected_states: Union[MxDigitalIoState, int, str],
+                        timeout: float = None):
+        """Wait until the current digital output states matches the desired state.
+           Note that, here, a desired state of '*', 'stay' or -1 is interpreted as "don't compare".
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to wait output states for.
+        expected_states : Union[MxDigitalIoState, int, str]
+            The desired IO state (the number of available outputs depends on the chosen bank id):
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_STAY (alternatively: -1, '*' or 'stay') -> Will not be compared
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_0 (alternatively: 0 or 'off')
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_1 (alternatively: 1 or 'on')
+
+        Raises
+        ------
+        TimeoutException
+            If timeout was reached before the digital outputs state is as desired.
+        """
+        return self.WaitIOState(bank_id, False, *expected_states, timeout)
+
+    def IsDesiredInputState(self, bank_id: MxIoBankId, *expected_states: Union[MxDigitalIoState, int, str]) -> bool:
+        """Tells if the current digital input states matches the desired state.
+           Note that, here, a desired state of '*', 'stay' or -1 is interpreted as "don't compare".
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to validate input states for.
+        expected_states : Union[MxDigitalIoState, int, str]
+            The desired IO state (the number of available inputs depends on the chosen bank id):
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_STAY (alternatively: -1, '*' or 'stay') -> Will not be compared
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_0 (alternatively: 0 or 'off')
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_1 (alternatively: 1 or 'on')
+
+        Return
+        ------
+        True if current input states match desired state.
+        """
+        return self.IsDesiredIoState(bank_id, True, *expected_states)
+
+    def WaitInputState(self,
+                       bank_id: MxIoBankId,
+                       *expected_states: Union[MxDigitalIoState, int, str],
+                       timeout: float = None):
+        """Wait until the current digital input states matches the desired state.
+           Note that, here, a desired state of '*', 'stay' or -1 is interpreted as "don't compare".
+
+        Parameters
+        ----------
+        bank_id : MxIoBankId
+            The IO bank Id to wait input states for.
+        expected_states : Union[MxDigitalIoState, int, str]
+            The desired IO state (the number of available inputs depends on the chosen bank id):
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_STAY (alternatively: -1, '*' or 'stay') -> Will not be compared
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_0 (alternatively: 0 or 'off')
+                - MxDigitalIoState.MX_DIGITAL_IO_STATE_1 (alternatively: 1 or 'on')
+
+        Raises
+        ------
+        TimeoutException
+            If timeout was reached before the digital inputs state is as desired.
+        """
+        return self.WaitIOState(bank_id, True, *expected_states, timeout)
 
     @disconnect_on_exception
     def WaitRecoveryMode(self, activated: bool, timeout: float = None):
@@ -1079,7 +1426,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if activated:
@@ -1107,7 +1454,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_error_reset.wait(timeout=timeout)
@@ -1121,7 +1468,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_pstop2_reset.wait(timeout=timeout)
@@ -1135,7 +1482,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_pstop2_resettable.wait(timeout=timeout)
@@ -1149,10 +1496,24 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_estop_reset.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitEstopResettable(self, timeout: float = None):
+        """Pause program execution until the robot Estop condition can be reset (or has been reset).
+
+        Parameters
+        ----------
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_estop_resettable.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitMotionResumed(self, timeout: float = None):
@@ -1163,7 +1524,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_motion_resumed.wait(timeout=timeout)
@@ -1177,7 +1538,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_motion_paused.wait(timeout=timeout)
@@ -1191,7 +1552,7 @@ class Robot(_Robot):
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time to spend waiting for the event (in seconds).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_motion_cleared.wait(timeout=timeout)
@@ -1208,19 +1569,23 @@ class Robot(_Robot):
         if self._robot_events.on_end_of_cycle.is_set():
             self._robot_events.on_end_of_cycle.clear()
 
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = 2
         self._robot_events.on_end_of_cycle.wait(timeout=timeout)
 
     @disconnect_on_exception
-    def WaitIdle(self, timeout: float = None):
+    def WaitIdle(self, timeout: float = None, wait_rt_data=False):
         """Pause program execution until robot is idle.
 
         Parameters
         ----------
         timeout : float
             Maximum time to spend waiting for the event (in seconds).
+        wait_rt_data : bool
+            After the robot is idle (end of block), also wait until next cyclic real-time data is received from the robot.
+            This ensures that, when the WaitIdle function exits, the real-time data is up-to-date
+            (position, velocity (should be 0 here), etc)
         """
         with self._main_lock:
             # Can't wait if robot is in error (already "idle")
@@ -1238,6 +1603,8 @@ class Robot(_Robot):
             remaining_timeout = None
 
         self._robot_events.on_end_of_block.wait(timeout=remaining_timeout)
+        if wait_rt_data:
+            self.WaitEndOfCycle()
 
     @disconnect_on_exception
     def ResetError(self):
@@ -1264,10 +1631,14 @@ class Robot(_Robot):
         """Attempt to reset robot PStop2."""
         with self._main_lock:
             self._check_internal_states()
-            self._send_command('ResetPStop2')
+            if self._robot_info.version.is_at_least(9, 2):
+                self._send_command('ResetPStop2')
+            else:
+                # Use legacy command name on older robots
+                self._send_command('ResetPStop')
 
         if self._enable_synchronous_mode:
-            # Use appropriate default timeout of not specified
+            # Use appropriate default timeout if not specified
             if timeout is None:
                 timeout = 2
             self._robot_events.on_pstop2_reset.wait(timeout)
@@ -1414,7 +1785,7 @@ class Robot(_Robot):
                 ...
             }
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
 
@@ -1471,7 +1842,7 @@ class Robot(_Robot):
                 "code":{"// Program code"}
             }
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
 
@@ -1526,7 +1897,7 @@ class Robot(_Robot):
         InterruptException
             If the robot returns an error (exception message will describe the error).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
 
@@ -1577,7 +1948,7 @@ class Robot(_Robot):
         InterruptException
             If the robot returns an error (exception message will describe the error).
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
 
@@ -1615,17 +1986,44 @@ class Robot(_Robot):
             Object containing the current external tool status
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
-            self._send_sync_command('GetRtExtToolStatus', self._robot_events.on_external_tool_status_updated, timeout)
+            self._send_sync_command('GetRtExtToolStatus', None, self._robot_events.on_external_tool_status_updated,
+                                    timeout)
 
         with self._main_lock:
             if include_timestamp:
                 return copy.deepcopy(self._robot_rt_data.rt_external_tool_status)
             else:
                 return copy.deepcopy(self._external_tool_status)
+
+    @disconnect_on_exception
+    def GetNetworkConfig(self, synchronous_update: bool = False, timeout: float = None) -> NetworkConfig:
+        """Return robot's current network configuration
+
+        Parameters
+        ----------
+        synchronous_update: bool
+            True -> Synchronously get updated network config. False -> Get latest known network configuration.
+        timeout: float
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        NetworkConfig
+            Object containing the current network config
+
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if synchronous_update:
+            self._send_sync_command('GetNetworkConfig', None, self._robot_events.on_network_config_updated, timeout)
+
+        with self._main_lock:
+            return copy.deepcopy(self._network_config)
 
     @disconnect_on_exception
     def GetRtIoStatus(self,
@@ -1650,23 +2048,23 @@ class Robot(_Robot):
             Object containing the current IO module status
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
-            self._send_sync_command(f'GetRtIoStatus({bank_id})', self._robot_events.on_output_state_updated, timeout)
+            self._send_sync_command(f'GetRtIoStatus({bank_id})', None, self._robot_events.on_io_status_updated, timeout)
 
         with self._main_lock:
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-                if include_timestamp:
-                    return copy.deepcopy(self._robot_rt_data.rt_psu_io_status)
-                else:
-                    return copy.deepcopy(self._rt_psu_io_status)
-            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
                 if include_timestamp:
                     return copy.deepcopy(self._robot_rt_data.rt_io_module_status)
                 else:
-                    return copy.deepcopy(self._rt_io_module_status)
+                    return copy.deepcopy(self._io_module_status)
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+                if include_timestamp:
+                    return copy.deepcopy(self._robot_rt_data.rt_sig_gen_status)
+                else:
+                    return copy.deepcopy(self._sig_gen_status)
             else:
                 raise MecademicException("Argument Error in Command : GetRtIoStatus")
 
@@ -1692,11 +2090,11 @@ class Robot(_Robot):
             Object containing the current gripper state
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
-            self._send_sync_command('GetRtGripperState', self._robot_events.on_gripper_state_updated, timeout)
+            self._send_sync_command('GetRtGripperState', None, self._robot_events.on_gripper_state_updated, timeout)
 
         with self._main_lock:
             if include_timestamp:
@@ -1726,11 +2124,11 @@ class Robot(_Robot):
             Object containing the current valve state
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
-            self._send_sync_command('GetRtValveState', self._robot_events.on_valve_state_updated, timeout)
+            self._send_sync_command('GetRtValveState', None, self._robot_events.on_valve_state_updated, timeout)
 
         with self._main_lock:
             if include_timestamp:
@@ -1760,17 +2158,18 @@ class Robot(_Robot):
             Object containing the current digital output states for requested bank id.
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
-            self._send_sync_command(f'GetRtOutputState({bank_id})', self._robot_events.on_output_state_updated, timeout)
+            self._send_sync_command(f'GetRtOutputState({bank_id})', None, self._robot_events.on_output_state_updated,
+                                    timeout)
 
         with self._main_lock:
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-                return copy.deepcopy(self._robot_rt_data.rt_psu_outputs)
-            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
                 return copy.deepcopy(self._robot_rt_data.rt_io_module_outputs)
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+                return copy.deepcopy(self._robot_rt_data.rt_sig_gen_outputs)
             else:
                 return TimestampedData.zeros(0)
 
@@ -1797,19 +2196,54 @@ class Robot(_Robot):
 
         """
 
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
-            self._send_sync_command(f'GetRtInputState({bank_id})', self._robot_events.on_input_state_updated, timeout)
+            self._send_sync_command(f'GetRtInputState({bank_id})', None, self._robot_events.on_input_state_updated,
+                                    timeout)
 
         with self._main_lock:
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_PSU:
-                return copy.deepcopy(self._robot_rt_data.rt_psu_inputs)
-            elif bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
                 return copy.deepcopy(self._robot_rt_data.rt_io_module_inputs)
+            if bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+                return copy.deepcopy(self._robot_rt_data.rt_sig_gen_inputs)
             else:
                 return TimestampedData.zeros(0)
+
+    @disconnect_on_exception
+    def GetRtVacuumState(self,
+                         include_timestamp: bool = False,
+                         synchronous_update: bool = False,
+                         timeout: float = None) -> VacuumState:
+        """Return a copy of the current vacuum gripper state
+
+        Parameters
+        ----------
+        include_timestamp : bool
+            If true, return a TimestampedData object, otherwise return VacuumState.
+        synchronous_update: bool
+            True -> Synchronously get updated states. False -> Get latest known status.
+        timeout: float
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        TimestampedData
+            Object containing the current Vacuum grip state: [vacuum on/off, purge on/off,  holding part]
+
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if synchronous_update:
+            self._send_sync_command(f'GetRtVacuumState()', None, self._robot_events.on_vacuum_state_updated, timeout)
+
+        with self._main_lock:
+            if include_timestamp:
+                return copy.deepcopy(self._robot_rt_data.rt_vacuum_state)
+            else:
+                return copy.deepcopy(self._vacuum_state)
 
     @disconnect_on_exception
     def GetRtTargetJointPos(self,
@@ -1833,15 +2267,15 @@ class Robot(_Robot):
             Returns joint positions in degrees.
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
             if self._robot_info.rt_message_capable:
-                self._send_sync_command('GetRtTargetJointPos', self._robot_events.on_joints_updated, timeout)
+                self._send_sync_command('GetRtTargetJointPos', None, self._robot_events.on_joints_updated, timeout)
             else:
                 # This robot does not have GetRtTargetJointPos, use legacy GetJoints (but won't get timestamp)
-                self._send_sync_command('GetJoints', self._robot_events.on_joints_updated, timeout)
+                self._send_sync_command('GetJoints', None, self._robot_events.on_joints_updated, timeout)
 
             # Wait until response is received (this will throw TimeoutException if appropriate)
             self._robot_events.on_joints_updated.wait(timeout=timeout)
@@ -1857,7 +2291,7 @@ class Robot(_Robot):
 
     def GetJoints(self, synchronous_update: bool = False, timeout: float = None):
         """Legacy command. Please use GetRtTargetJointPos instead."""
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         return self.GetRtTargetJointPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
@@ -1884,15 +2318,15 @@ class Robot(_Robot):
             Returns end-effector pose [x, y, z, alpha, beta, gamma].
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
             if self._robot_info.rt_message_capable:
-                self._send_sync_command('GetRtTargetCartPos', self._robot_events.on_pose_updated, timeout)
+                self._send_sync_command('GetRtTargetCartPos', None, self._robot_events.on_pose_updated, timeout)
             else:
                 # This robot does not have GetRtTargetCartPos, use legacy GetPose (but won't get timestamp)
-                self._send_sync_command('GetPose', self._robot_events.on_pose_updated, timeout)
+                self._send_sync_command('GetPose', None, self._robot_events.on_pose_updated, timeout)
 
         with self._main_lock:
             if include_timestamp:
@@ -1905,7 +2339,7 @@ class Robot(_Robot):
 
     def GetPose(self, synchronous_update: bool = False, timeout: float = None) -> TimestampedData:
         """Legacy command. Please use GetRtTargetCartPos instead."""
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         return self.GetRtTargetCartPos(include_timestamp=False, synchronous_update=synchronous_update, timeout=timeout)
@@ -2240,8 +2674,10 @@ class Robot(_Robot):
             Desired torque limit in percent.
 
         """
-        if len(args) != self._robot_info.num_joints:
-            raise ValueError('Incorrect number of joints sent to command.')
+        expect_count = self._robot_info.num_joints
+        if len(args) != expect_count:
+            raise ValueError(
+                f'SetTorqueLimits: Incorrect number of joints sent {len(args)}, command. expecting: {expect_count}.')
 
         self._send_motion_command('SetTorqueLimits', args)
 
@@ -2360,7 +2796,7 @@ class Robot(_Robot):
             detected during homing.
 
         """
-        # Use appropriate default timeout of not specified
+        # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
 
@@ -2546,7 +2982,7 @@ class Robot(_Robot):
 
     UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
 
-    def UpdateRobot(self, firmware: Union[str, pathlib.Path], address: Optional[str] = None, timeout=UPDATE_TIMEOUT):
+    def UpdateRobot(self, firmware: Union[str, pathlib.Path], timeout=UPDATE_TIMEOUT):
         """
         Install a new firmware and verifies robot version afterward.
 
@@ -2555,8 +2991,8 @@ class Robot(_Robot):
         firmware: pathlib object or string
             Path of robot firmware file
 
-        address: string
-            Robot IP address (optional if already connected)
+        timeout: int
+            time in second allowed to update the robot (default: 15 minutes)
 
         """
-        return super().UpdateRobot(firmware, address, timeout)
+        return super().UpdateRobot(firmware, timeout)

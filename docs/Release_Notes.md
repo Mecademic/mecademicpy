@@ -10,10 +10,23 @@ Copyright &copy; 2023 by Mecademic Inc.
 
 ---
 
+## Version 2.0.0 (November 2023)
+
+**Features**
+- Update API to support Mcs500 and its Mvk01 vacuum and IO module
+- Update API to support new features from robot firmware 10.0
+  - MoveJump API (MoveJump and related jump configuration methods)
+- Better usage of user-defined socket timeout (from "Connect" method)
+
+**Migration Guide**
+The method "UpdateRobot" has been modified.
+- The "ip_address" parameter has been removed.
+- It is now mandatory to call method "Connect" before calling "UpdateRobot"
+
 ## Version 1.4.0 (July 2023)
 
 **Features**
-- Update API to support Mcs500
+- Update API to support Mcs500 (Beta)
 - Update API to support new features from robot firmware 9.3 and 9.4-alpha
 
 ## Version 1.3.0 (November 2022)

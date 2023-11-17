@@ -42,15 +42,16 @@ if __name__ == "__main__":
     if not pathlib.Path(args.firmware_file_path).is_file():
         raise FileNotFoundError(f'Firmware file {args.firmware_file_path} was not found')
 
-    # (use "with" block to ensure proper disconnection at end of block)
-    with mdr.Robot() as robot:
-        try:
-            print(f'Starting to install firmware file {args.firmware_file_path} on robot {args.robot_ip}')
-            # Start the firmware update
-            robot.Connect(args.robot_ip)
-            robot.UpdateRobot(args.firmware_file_path)
-            print(f'Successfully installed firmware file {args.firmware_file_path} on robot {args.robot_ip}')
-        except Exception as e:
-            # Print error if firmware update failed
-            print(f'Update failed: {e}')
-            exit(-1)
+    for loop in range(10000):
+        # (use "with" block to ensure proper disconnection at end of block)
+        with mdr.Robot() as robot:
+            try:
+                print(f'Starting to install firmware file {args.firmware_file_path} on robot {args.robot_ip}')
+                # Start the firmware update
+                robot.Connect(args.robot_ip)
+                robot.UpdateRobot(args.firmware_file_path)
+                print(f'Successfully installed firmware file {args.firmware_file_path} on robot {args.robot_ip}')
+            except Exception as e:
+                # Print error if firmware update failed
+                print(f'Update failed: {e}')
+                exit(-1)
