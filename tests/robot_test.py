@@ -827,6 +827,7 @@ def test_callbacks(robot: mdr.Robot):
 
         # Robot estop triggered.
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_ESTOP, '1'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_ESTOP, '2'))
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_ESTOP, '0'))
         robot.ResetError()
 
@@ -845,12 +846,11 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_GRIPPER_STATE, '35,1,1,0,0'))
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_OUTPUT_STATE, '36,1,1,0,0'))
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_INPUT_STATE, '36,1,1,0,0'))
-        # Simulate enabling/disabling of PSU IO sim
-        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '37,1,1,1,0'))
-        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '38,1,1,0,0'))
         # Simulate enabling/disabling of IO module sim
-        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '39,2,1,1,0'))
-        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '40,2,1,0,0'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '39,1,1,1,0'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_IO_STATUS, '40,1,1,0,0'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_VACUUM_STATE, '41,1,1,0'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_VACUUM_PRESSURE, '42,-1'))
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RECOVERY_MODE_ON, ''))
         robot.SetRecoveryMode(True)
@@ -904,7 +904,7 @@ def test_motion_commands(robot: mdr.Robot):
 
     skip_commands = [
         'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
-        'SetTorqueLimitsCfg', 'SetIoSim'
+        'SetTorqueLimitsCfg', 'SetIoSim', 'SetOutputState', 'SetOutputStateImmediate'
     ]
 
     # List of methods that will be deprecated. The deprecation decorator breaks the way we use to test those methods.
@@ -1189,22 +1189,32 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
     # Manually set that the robot is rt-message-capable.
     robot._robot_info.rt_message_capable = True
 
-    # Send some fictive PSU and IoModule input/output values so the robot object creates the inputs/outputs arrays
-    psu_outputs = mdr.Message(mx_st.MX_ST_RT_OUTPUT_STATE, f'0,{MxIoBankId.MX_IO_BANK_ID_PSU},1,0,1')
-    psu_inputs = mdr.Message(mx_st.MX_ST_RT_INPUT_STATE, f'0,{MxIoBankId.MX_IO_BANK_ID_PSU},0,1,0,1')
+    # Send some fictive IoModule input/output values so the robot object creates the inputs/outputs arrays
     io_module_outputs = mdr.Message(mx_st.MX_ST_RT_OUTPUT_STATE,
                                     f'0,{MxIoBankId.MX_IO_BANK_ID_IO_MODULE},1,0,1,0,1,0,1,0')
     io_module_inputs = mdr.Message(mx_st.MX_ST_RT_INPUT_STATE,
                                    f'0,{MxIoBankId.MX_IO_BANK_ID_IO_MODULE},0,1,0,1,0,1,0,1')
-    robot._command_rx_queue.put(psu_outputs)
-    robot._command_rx_queue.put(psu_inputs)
     robot._command_rx_queue.put(io_module_outputs)
     robot._command_rx_queue.put(io_module_inputs)
 
     startTime = time.monotonic()
     while len(robot._robot_rt_data.rt_io_module_inputs.data) == 0:
         if time.monotonic() - startTime >= 1:
-            raise TimeoutError('Timeout waiting for MX_ST_RT_INPUT_STATE to be handled')
+            raise TimeoutError('Timeout waiting for MX_ST_RT_INPUT_STATE to be handled for io_module')
+        time.sleep(0.001)
+
+    # Send some fictive signal generator input/output values so the robot object creates the inputs/outputs arrays
+    sig_gen_outputs = mdr.Message(mx_st.MX_ST_RT_OUTPUT_STATE,
+                                  f'0,{MxIoBankId.MX_IO_BANK_ID_SIG_GEN},1,0,1,0,1,0,1,0, 1,1,0,0,1,1,0,0,1')
+    sig_gen_inputs = mdr.Message(mx_st.MX_ST_RT_INPUT_STATE,
+                                 f'0,{MxIoBankId.MX_IO_BANK_ID_SIG_GEN},0,1,0,1,0,1,0,1, 1,1,0')
+    robot._command_rx_queue.put(sig_gen_outputs)
+    robot._command_rx_queue.put(sig_gen_inputs)
+
+    startTime = time.monotonic()
+    while len(robot._robot_rt_data.rt_sig_gen_inputs.data) == 0:
+        if time.monotonic() - startTime >= 1:
+            raise TimeoutError('Timeout waiting for MX_ST_RT_INPUT_STATE to be handled for sig_gen')
         time.sleep(0.001)
 
     # Send status message to indicate that the robot is activated and homed, and idle.
@@ -1254,14 +1264,17 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_TRF, fake_string(seed=23, length=7)))
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CHECKPOINT, fake_string(seed=24, length=2)))
 
-            robot._command_rx_queue.put(psu_outputs)
-            robot._command_rx_queue.put(psu_inputs)
-            robot._command_rx_queue.put(
-                mdr.Message(mx_st.MX_ST_RT_IO_STATUS, f'25,{MxIoBankId.MX_IO_BANK_ID_PSU},25,25,25'))
             robot._command_rx_queue.put(io_module_outputs)
             robot._command_rx_queue.put(io_module_inputs)
             robot._command_rx_queue.put(
                 mdr.Message(mx_st.MX_ST_RT_IO_STATUS, f'26,{MxIoBankId.MX_IO_BANK_ID_IO_MODULE},26,26,26'))
+            robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_VACUUM_STATE, fake_string(seed=27, length=4)))
+            robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_VACUUM_PRESSURE, fake_string(seed=28, length=2)))
+
+            robot._command_rx_queue.put(sig_gen_outputs)
+            robot._command_rx_queue.put(sig_gen_inputs)
+            robot._command_rx_queue.put(
+                mdr.Message(mx_st.MX_ST_RT_IO_STATUS, f'29,{MxIoBankId.MX_IO_BANK_ID_SIG_GEN},29,29,29'))
 
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CYCLE_END, str(i * 100)))
 
