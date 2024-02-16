@@ -674,9 +674,9 @@ def test_events(robot: mdr.Robot):
 
     robot.ClearMotion()
     robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_CLEAR_MOTION, ''))
+    robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,0'))
     robot.WaitMotionCleared(timeout=1)
 
-    robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,0'))
     robot._robot_events.on_end_of_block.wait(timeout=1)
 
     # Robot enters error state.
@@ -825,10 +825,16 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_PSTOP2, '0'))
         robot.ResetPStop2()
 
+        # Robot PStop1 triggered.
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_PSTOP1, '1'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_PSTOP1, '2'))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_PSTOP1, '0'))
+
         # Robot estop triggered.
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_ESTOP, '1'))
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_ESTOP, '2'))
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_ESTOP, '0'))
+
         robot.ResetError()
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '1,1,1,0,0,0,0'))
@@ -1275,6 +1281,8 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
             robot._command_rx_queue.put(sig_gen_inputs)
             robot._command_rx_queue.put(
                 mdr.Message(mx_st.MX_ST_RT_IO_STATUS, f'29,{MxIoBankId.MX_IO_BANK_ID_SIG_GEN},29,29,29'))
+            robot._command_rx_queue.put(
+                mdr.Message(mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING, fake_string(seed=30, length=2)))
 
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CYCLE_END, str(i * 100)))
 

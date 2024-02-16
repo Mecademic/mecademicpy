@@ -20,7 +20,6 @@ with mdr.Robot() as robot:
     # CHECK THAT IP ADDRESS IS CORRECT! #
     try:
         robot.Connect(address='192.168.0.100')
-        logger.info('Connected to robot')
     except mdr.CommunicationError as e:
         logger.info(f'Robot failed to connect. Is the IP address correct? {e}')
         raise e
@@ -36,19 +35,30 @@ with mdr.Robot() as robot:
         logger.info('Robot is homed and ready.')
 
         # Send motion commands to have the robot draw out a square.
-        robot.MovePose(200, 0, 300, 0, 90, 0)
-        robot.MovePose(200, 100, 300, 0, 90, 0)
-        robot.MovePose(200, 100, 100, 0, 90, 0)
-        robot.MovePose(200, -100, 100, 0, 90, 0)
-        robot.MovePose(200, -100, 300, 0, 90, 0)
-        robot.MovePose(200, 0, 300, 0, 90, 0)
+        if tools.robot_model_is_meca500(robot.GetRobotInfo().robot_model):
+            robot.MovePose(200, 0, 300, 0, 90, 0)
+            robot.MovePose(200, 100, 300, 0, 90, 0)
+            robot.MovePose(200, 100, 100, 0, 90, 0)
+            robot.MovePose(200, -100, 100, 0, 90, 0)
+            robot.MovePose(200, -100, 300, 0, 90, 0)
+            robot.MovePose(200, 0, 300, 0, 90, 0)
+        elif robot.GetRobotInfo().robot_model == mdr.MxRobotModel.MX_ROBOT_MODEL_MCS500_R1:
+            robot.MovePose(190, 0, 50, 0)
+            robot.MovePose(100, 0, 50, 0)
+            robot.MovePose(100, 90, 50, 0)
+            robot.MovePose(190, 90, 50, 0)
+            robot.MovePose(190, 0, 50, 0)
+        else:
+            raise mdr.MecademicException(
+                f'This example script does not support this robot model ({robot.GetRobotInfo().robot_model})')
         logger.info('Commands for drawing a square sent. Robot should now be moving.')
 
         # Insert a delay in robot's motion queue between drawing square and moving back
         robot.Delay(1)
 
-        # Return the robot to folded position.
-        robot.MoveJoints(0, -60, 60, 0, 0, 0)
+        if tools.robot_model_is_meca500(robot.GetRobotInfo().robot_model):
+            # Return the robot to folded position.
+            robot.MoveJoints(0, -60, 60, 0, 0, 0)
 
         # Wait until checkpoint is reached. Without this wait, the script would immediately
         # reach the DeactivateRobot and Disconnect command, which stops the motion.

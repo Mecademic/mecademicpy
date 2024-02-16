@@ -99,18 +99,12 @@ class _RobotEvents:
         Set if robot is in error.
     on_error_reset : event
         Set if robot error has been reset.
-    on_pstop2 : event
-        Set if robot receives pstop2.
-    on_pstop2_resettable : event
-        Set if pstop2 is resettable.
-    on_pstop2_reset : event
-        Set if pstop2 is reset.
-    on_estop : event
-        Set if robot receives estop.
-    on_estop_reset : event
-        Set if estop is reset.
-    on_estop_resettable : event
-        Set if estop is resettable.
+    on_safety_stop_reset : event
+        Set if all safety signals that require the power supply Reset function (estop and pstop1) are reset.
+    on_safety_stop_resettable : event
+        Set if the power supply Reset function is currently available to reset safety signals (estop and pstop1).
+    on_safety_stop_state_change : event
+        Set if any safety stop status changes (see RobotSafetyStatus)
     on_motion_paused : event
         Set if robot motion is paused.
     on_motion_resumed : event
@@ -149,7 +143,8 @@ class _RobotEvents:
         Set if end of block has been reached.
     on_end_of_cycle: event
         Set if end of cycle has been reached.
-
+    on_time_scaling_changed: event
+        Set if time scaling has changed.
 """
 
     def __init__(self):
@@ -178,6 +173,13 @@ class _RobotEvents:
 
         self.on_error = InterruptableEvent()
         self.on_error_reset = InterruptableEvent()
+
+        # Safety stop support
+        self.on_safety_stop_reset = InterruptableEvent()
+        self.on_safety_stop_resettable = InterruptableEvent()
+        self.on_safety_stop_state_change = InterruptableEvent()
+
+        # Support for deprecated safety stop methods
         self.on_pstop2 = InterruptableEvent()
         self.on_pstop2_resettable = InterruptableEvent()
         self.on_pstop2_reset = InterruptableEvent()
@@ -210,18 +212,27 @@ class _RobotEvents:
         self.on_offline_program_started = InterruptableEvent()
         self.on_offline_program_op_done = InterruptableEvent()
 
+        self.on_time_scaling_changed = InterruptableEvent()
+
         self.on_end_of_block = InterruptableEvent()
         self.on_end_of_cycle = InterruptableEvent()
 
         self.on_disconnected.set()
         self.on_deactivated.set()
         self.on_error_reset.set()
+
+        self.on_safety_stop_reset.set()
+        self.on_safety_stop_resettable.set()
+        self.on_safety_stop_state_change.set()
         self.on_pstop2_reset.set()
         self.on_pstop2_resettable.set()
         self.on_estop_reset.set()
         self.on_estop_resettable.set()
+
         self.on_motion_resumed.set()
         self.on_deactivate_sim.set()
+
+        self.on_time_scaling_changed.set()
 
         self.on_status_updated.set()
         self.on_network_config_updated.set()
@@ -270,11 +281,15 @@ class _RobotEvents:
                 'on_end_of_cycle',  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
                 'on_activate_recovery_mode',  # Don't abort wait for "on_activate_recovery_mode", available in error
                 'on_deactivate_recovery_mode',  # Don't abort wait for "on_deactivate_recovery_mode", available in error
+                'on_safety_stop_resettable',  # The "Safety stop resettable" state may still change while in error
+                'on_safety_stop_reset',  # The Safety stop reset state may still change while in error
+                'on_safety_stop_state_change',  # The "Safety stop resettable" state may still change while in error
                 'on_estop_reset',  # The EStop state may still change while in error
                 'on_pstop2_resettable',  # The "PStop2 resettable" state may still change while in error
                 'on_pstop2_reset',  # The PStop2 state may still change while in error
                 'on_estop_resettable',  # The "EStop resettable" state may still change while in error
                 'on_estop_reset',  # The EStop state may still change while in error
+                'on_time_scaling_changed',  # The set time scaling still works in error
             ],
             message=message)
 
@@ -381,35 +396,39 @@ class _Robot:
     _robot_info: RobotInfo object
         Store information concerning robot (ex.: serial number)
     _robot_rt_data : RobotRtData object
-        Stores most current robot real-time data.
+        Stores current robot real-time data.
         All attributes of this object are the latest captured on monitor port, so they don't necessarily share the same
         timestamp
     _robot_rt_data_stable : RobotRtData object
-        Stores most current robot real-time data, but all attributes of object share the same timestamp
+        Stores current robot real-time data, but all attributes of object share the same timestamp
     _robot_status: RobotStatus object
-        Stores most current robot status
+        Stores current robot status
+    _robot_safety_status: RobotSafetyStatus object
+        Stores current robot safety status
+    _robot_collision_status: CollisionStatus
+        Stores current collision status (self collision and work zone boundary)
     _gripper_status: GripperStatus object
-        Stores most current gripper status
+        Stores current gripper status
     _external_tool_status: ExtToolStatus object
-        Stores most current external tool status
+        Stores current external tool status
     _gripper_state: GripperState object
-        Stores most current gripper state
+        Stores current gripper state
     _gripper_state_before_last_move : GripperState object
         Stores gripper state at the time a Open/Close/Move gripper command is sent
         (then used to accelerate WaitGripperMoveCompletion in case target_pos_reached is already True when its called
          because otherwise it's not possible to know if the move has completed, or not yet started)
     _valve_state: ValveState object
-        Stores most current pneumatic valve state
+        Stores current pneumatic valve state
     _psu_io_status: IoStatus object
-        Stores most current PSU IO module status
+        Stores current PSU IO module status
     _io_module_status: IoStatus object
-        Stores most current IO module status
+        Stores current IO module status
     _vacuum_state: IoStatus object
-        Stores most current IO module's vacuum gripper state
+        Stores current IO module's vacuum gripper state
     _sig_gen_status: IoStatus object
-        Stores most current signal generator status
+        Stores current signal generator status
     _fw_update_status: Firmware update status
-        Stores most current firmware update status reported by the robot
+        Stores current firmware update status reported by the robot
     _robot_events : RobotEvents object
         Stores events related to the robot state.
 
@@ -533,6 +552,8 @@ class _Robot:
         self._robot_rt_data = None
         self._robot_rt_data_stable = None
         self._robot_status = RobotStatus()
+        self._robot_safety_status = RobotSafetyStatus()
+        self._robot_collision_status = CollisionStatus()
         self._first_robot_status_received = False
         self._using_legacy_json_api = False
         self._gripper_status = GripperStatus()
@@ -550,6 +571,8 @@ class _Robot:
         self._file_logger = None
         self._monitoring_interval = None
         self._monitoring_interval_to_restore = None
+        self._auto_connection_watchdog = False
+        self._auto_connection_watchdog_last = 0
 
         self._reset_disconnect_attributes()
 
@@ -812,7 +835,7 @@ class _Robot:
     def _start_callback_thread(self):
         if self._run_callbacks_in_separate_thread and self._callback_thread is None:
             self._callback_thread = threading.Thread(target=self._handle_callbacks)
-            self._callback_thread.setDaemon(True)  # Make sure thread does not prevent application from quitting
+            self._callback_thread.daemon = True  # Make sure thread does not prevent application from quitting
             self._callback_thread.start()
 
     def _stop_callback_thread(self):
@@ -863,6 +886,10 @@ class _Robot:
                 ipaddress.ip_address(address)
                 self._address = address
 
+                # Reset robot status to default values
+                self._robot_status = RobotStatus()
+                self._robot_safety_status = RobotSafetyStatus()
+                self._robot_collision_status = CollisionStatus()
                 self._first_robot_status_received = False
                 self._using_legacy_json_api = False
 
@@ -877,12 +904,20 @@ class _Robot:
 
                 self._robot_events.on_deactivated.set()
                 self._robot_events.on_error_reset.set()
+
+                self._robot_events.on_safety_stop_reset.set()
+                self._robot_events.on_safety_stop_resettable.set()
+                self._robot_events.on_safety_stop_state_change.set()
+                self._set_robot_operation_mode(MxRobotOperationMode.MX_ROBOT_OPERATION_MODE_AUTO)
+                self._set_reset_ready(False)
                 self._robot_events.on_pstop2_reset.set()
                 self._robot_events.on_pstop2_resettable.set()
                 self._robot_events.on_estop_reset.set()
                 self._robot_events.on_estop_resettable.set()
+
                 self._robot_events.on_motion_resumed.set()
                 self._set_brakes_engaged(True)
+                self._set_connection_watchdog_enabled(True)
 
                 self._robot_events.on_status_updated.set()
                 self._robot_events.on_network_config_updated.set()
@@ -1069,6 +1104,54 @@ class _Robot:
         with self._main_lock:
             return copy.deepcopy(self._robot_status)
 
+    @disconnect_on_exception
+    def GetSafetyStatus(self, synchronous_update: bool = False, timeout: float = None) -> RobotSafetyStatus:
+        """Return a copy of the current robot safety status
+
+        Parameters
+        ----------
+        synchronous_update: boolean
+            True -> Synchronously get updated robot safety status. False -> Get latest known status.
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        RobotSafetyStatus
+            Object containing the current robot safety status
+
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if synchronous_update:
+            self._send_sync_command('GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
+
+        with self._main_lock:
+            return copy.deepcopy(self._robot_safety_status)
+
+    @disconnect_on_exception
+    def GetCollisionStatus(self, timeout: float = None) -> CollisionStatus:
+        """Return a copy of the current robot collision status
+
+        Parameters
+        ----------
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        CollisionStatus
+            Object containing the current robot collision status
+
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+
+        with self._main_lock:
+            return copy.deepcopy(self._robot_collision_status)
+
     def IsConnected(self) -> bool:
         """See documentation in equivalent function in robot.py"""
         if self._robot_events.on_connected.is_set():
@@ -1081,6 +1164,19 @@ class _Robot:
                 return False
         else:
             return False
+
+    def ConnectionWatchdog(self, timeout: float):
+        """See documentation in equivalent function in robot.py"""
+        with self._main_lock:
+            self.SendCustomCommand(f"-ConnectionWatchdog({timeout})")
+
+    def AutoConnectionWatchdog(self, enable: bool):
+        """See documentation in equivalent function in robot.py"""
+        with self._main_lock:
+            if self._auto_connection_watchdog and not enable:
+                # Disabling watchdog, let's immediately tell robot to disable the watchdog
+                self.ConnectionWatchdog(0)
+            self._auto_connection_watchdog = enable
 
     @disconnect_on_exception
     def DeactivateRobot(self):
@@ -1106,6 +1202,7 @@ class _Robot:
         with self._main_lock:
             self._send_command('SetMonitoringInterval', [t])
             self._monitoring_interval = t
+            self._refresh_auto_connection_watchdog(force=True)
 
     @disconnect_on_exception
     def GetStatusGripper(self, synchronous_update: bool = False, timeout: float = None) -> GripperStatus:
@@ -1365,7 +1462,7 @@ class _Robot:
 
         # Make sure that the robot is not in EStop
         if robot_model_is_meca500(
-                self.GetRobotInfo().robot_model) and self.GetStatusRobot(synchronous_update=True).estopState:
+                self.GetRobotInfo().robot_model) and self.GetSafetyStatus(synchronous_update=True).estop_state:
             raise MecademicException(
                 f'Firmware update failed: Robot is in ESTOP. Please clear the ESTOP condition before updating.')
 
@@ -1911,7 +2008,7 @@ class _Robot:
             self._command_socket,
             *args,
         ))
-        thread.setDaemon(True)  # Make sure thread does not prevent application from quitting
+        thread.daemon = True  # Make sure thread does not prevent application from quitting
         thread.start()
         return thread
 
@@ -2344,7 +2441,6 @@ class _Robot:
                 elif response.id == mx_st.MX_ST_CLEAR_MOTION:
                     if self._clear_motion_requests <= 1:
                         self._clear_motion_requests = 0
-                        self._robot_events.on_motion_cleared.set()
                         self._callback_queue.put('on_motion_cleared')
                         # Invalidate checkpoints and appropriate interruptable events
                         message = 'Robot motion was cleared'
@@ -2358,12 +2454,16 @@ class _Robot:
                         #self._invalidate_interruptable_events_on_clear_motion(message)
                     else:
                         self._clear_motion_requests -= 1
+                    self._check_motion_clear_done()
 
                 elif response.id == mx_st.MX_ST_BRAKES_ON:
                     self._set_brakes_engaged(True)
 
                 elif response.id == mx_st.MX_ST_BRAKES_OFF:
                     self._set_brakes_engaged(False)
+
+                elif response.id == mx_st.MX_ST_CONNECTION_WATCHDOG:
+                    self._set_connection_watchdog_enabled(self._parse_response_bool(response)[0])
 
                 elif response.id == mx_st.MX_ST_OFFLINE_START:
                     self._robot_events.on_offline_program_started.set()
@@ -2428,27 +2528,8 @@ class _Robot:
             elif response.id == mx_st.MX_ST_GET_POSE:
                 self._tmp_rt_cart_pos = string_to_numbers(response.data)
             elif response.id == mx_st.MX_ST_RT_CYCLE_END:
-                self._robot_rt_data.cycle_count += 1
-                if not self._robot_info.rt_message_capable:
-                    self._robot_info.rt_message_capable = True
-                timestamp = int(response.data)
-
-                # Useful to detect end of cycle for logging, to start logging on more consistent moment
-                self._robot_events.on_end_of_cycle.set()
-                self._callback_queue.put('on_end_of_cycle')
-
-                # Update joint and pose with legacy messages from current cycle plus the timestamps we just received
-                if self._tmp_rt_joint_pos:
-                    self._robot_rt_data.rt_target_joint_pos.update_from_data(timestamp, self._tmp_rt_joint_pos)
-                    self._tmp_rt_joint_pos = None
-                if self._tmp_rt_cart_pos:
-                    self._robot_rt_data.rt_target_cart_pos.update_from_data(timestamp, self._tmp_rt_cart_pos)
-                    self._tmp_rt_cart_pos = None
-
-                # If logging is active, log the current state.
-                if self._file_logger:
-                    self._file_logger.write_fields(timestamp, self._robot_rt_data)
-                self._make_stable_rt_data()
+                self._handle_cycle_end(response)
+                self._refresh_auto_connection_watchdog()
         else:  # not self._robot_info.rt_message_capable
             if response.id == mx_st.MX_ST_GET_JOINTS:
                 self._robot_rt_data.rt_target_joint_pos.data = string_to_numbers(response.data)
@@ -2475,6 +2556,12 @@ class _Robot:
         #
         if response.id == mx_st.MX_ST_GET_STATUS_ROBOT:
             self._handle_robot_status_response(response)
+
+        if response.id == mx_st.MX_ST_GET_COLLISION_STATUS:
+            self._handle_collision_status_response(response)
+
+        if response.id == mx_st.MX_ST_GET_WORK_ZONE_STATUS:
+            self._handle_work_zone_status_response(response)
 
         if response.id == 2011:  # Legacy motion status (now included in MX_ST_GET_STATUS_ROBOT)
             self._handle_motion_status_response(response)
@@ -2535,46 +2622,39 @@ class _Robot:
         elif response.id == mx_st.MX_ST_RECOVERY_MODE_OFF:
             self._handle_recovery_mode_status(False)
 
-        elif response.id == mx_st.MX_ST_PSTOP2:
-            self._robot_status.pstop2State = self._parse_response_int(response)[0]
-            if self._robot_status.pstop2State == MxStopState.MX_STOP_STATE_ACTIVE:
-                self._robot_events.on_pstop2.set()
-                self._robot_events.on_pstop2_reset.clear()
-                self._robot_events.on_pstop2_resettable.clear()
-                self._callback_queue.put('on_pstop2')
-                # Invalidate checkpoints and appropriate interruptable events
-                message = 'Robot is in PSTOP2 condition'
-                self._invalidate_checkpoints(message)
-                self._invalidate_interruptable_events_on_clear_motion(message)
-            elif self._robot_status.pstop2State == MxStopState.MX_STOP_STATE_RESETTABLE:
-                self._robot_events.on_pstop2.set()
-                self._robot_events.on_pstop2_reset.clear()
-                self._robot_events.on_pstop2_resettable.set()
-                self._callback_queue.put('on_pstop2_resettable')
-            else:
-                self._robot_events.on_pstop2.clear()
-                self._robot_events.on_pstop2_reset.set()
-                self._robot_events.on_pstop2_resettable.set()
-                self._callback_queue.put('on_pstop2_reset')
-
         elif response.id == mx_st.MX_ST_ESTOP:
-            self._robot_status.estopState = self._parse_response_int(response)[0]
+            self._handle_estop_state(response)
 
-            if self._robot_status.estopState == MxStopState.MX_STOP_STATE_ACTIVE:
-                self._robot_events.on_estop.set()
-                self._robot_events.on_estop_reset.clear()
-                self._robot_events.on_estop_resettable.clear()
-                self._callback_queue.put('on_estop')
-            elif self._robot_status.estopState == MxStopState.MX_STOP_STATE_RESETTABLE:
-                self._robot_events.on_estop.set()
-                self._robot_events.on_estop_reset.clear()
-                self._robot_events.on_estop_resettable.set()
-                self._callback_queue.put('on_estop_resettable')
-            else:
-                self._robot_events.on_estop.clear()
-                self._robot_events.on_estop_reset.set()
-                self._robot_events.on_estop_resettable.set()
-                self._callback_queue.put('on_estop_reset')
+        elif response.id == mx_st.MX_ST_PSTOP1:
+            self._handle_pstop1_state(response)
+
+        elif response.id == mx_st.MX_ST_PSTOP2:
+            self._handle_pstop2_state(response)
+
+        elif response.id == mx_st.MX_ST_SAFE_STOP_OPERATION_MODE:
+            self._handle_operation_mode_stop_state(response)
+
+        elif response.id == mx_st.MX_ST_SAFE_STOP_ENABLING_DEVICE_RELEASED:
+            self._handle_enabling_device_released_stop_state(response)
+
+        elif response.id == mx_st.MX_ST_SAFE_STOP_VOLTAGE_FLUCTUATION:
+            self._handle_voltage_fluctuation_stop_state(response)
+
+        elif response.id == mx_st.MX_ST_SAFE_STOP_REBOOT:
+            self._handle_reboot_stop_state(response)
+
+        elif response.id == mx_st.MX_ST_SAFE_STOP_REDUNDANCY_FAULT:
+            self._handle_redundancy_fault_stop_state(response)
+
+        elif response.id == mx_st.MX_ST_SAFE_STOP_STANDSTILL_FAULT:
+            self._handle_standstill_fault_stop_state(response)
+
+        elif response.id == mx_st.MX_ST_SAFE_STOP_CONNECTION_DROPPED:
+            self._handle_connection_dropped_stop_state(response)
+
+        elif response.id == mx_st.MX_ST_GET_OPERATION_MODE:
+            robot_operation_mode = self._parse_response_int(response)[0]
+            self._set_robot_operation_mode(robot_operation_mode)
 
         elif response.id == mx_st.MX_ST_TORQUE_LIMIT_STATUS:
             torque_exceeded = self._parse_response_int(response)[0]
@@ -2615,6 +2695,8 @@ class _Robot:
             self._robot_rt_data.rt_joint_torq.update_from_csv(response.data)
         elif response.id == mx_st.MX_ST_RT_CART_VEL:
             self._robot_rt_data.rt_cart_vel.update_from_csv(response.data, allowed_nb_val=[4, 6])
+        elif response.id == mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING:
+            self._handle_effective_time_scaling_data(response)
 
         elif response.id == mx_st.MX_ST_RT_CONF:
             self._robot_rt_data.rt_conf.update_from_csv(response.data)
@@ -2663,6 +2745,9 @@ class _Robot:
         elif response.id == mx_st.MX_ST_GET_NETWORK_CONFIG:
             self._handle_get_network_config_response(response)
 
+        elif response.id == mx_st.MX_ST_TIME_SCALING:
+            self._handle_get_time_scaling_response(response)
+
     def _parse_response_bool(self, response: Message) -> list[bool]:
         """ Parse standard robot response, returns array of boolean values
         """
@@ -2689,14 +2774,14 @@ class _Robot:
         """
         if not self._first_robot_status_received or self._robot_status.activation_state != activated:
             if activated:
-                if self._robot_status.activation_state != activated:
+                if self._first_robot_status_received and self._robot_status.activation_state != activated:
                     self.logger.info(f'Robot is activated.')
                 self._robot_events.on_deactivated.clear()
                 self._robot_events.on_activated.set()
                 self._set_brakes_engaged(False)
                 self._callback_queue.put('on_activated')
             else:
-                if self._robot_status.activation_state != activated:
+                if self._first_robot_status_received and self._robot_status.activation_state != activated:
                     self.logger.info(f'Robot is deactivated.')
                 self._robot_events.on_activated.clear()
                 self._robot_events.on_deactivated.set()
@@ -2765,7 +2850,7 @@ class _Robot:
                 self._callback_queue.put('on_deactivate_recovery_mode')
             self._robot_status.recovery_mode = recovery_mode
 
-    def _set_error_status(self, error_status: bool):
+    def _set_error_status(self, error_status: bool, error_code: Optional[int] = None):
         """Update the "error" state of the robot
 
         Parameters
@@ -2790,6 +2875,8 @@ class _Robot:
                 self._robot_events.on_error_reset.set()
                 self._callback_queue.put('on_error_reset')
             self._robot_status.error_status = error_status
+
+        self._robot_status.error_code = error_code
 
     def _set_paused(self, paused: bool):
         """Update the "paused" state of the robot
@@ -2824,6 +2911,7 @@ class _Robot:
             else:
                 self._robot_events.on_end_of_block.clear()
             self._robot_status.end_of_block_status = eob
+            self._check_motion_clear_done()
 
     def _set_brakes_engaged(self, brakes_engaged: bool):
         """Update the "brakes_engaged" state of the robot
@@ -2841,6 +2929,83 @@ class _Robot:
             self._robot_events.on_brakes_activated.clear()
             self._robot_events.on_brakes_deactivated.set()
 
+    def _set_connection_watchdog_enabled(self, enabled: bool):
+        self._robot_status.connection_watchdog_enabled = enabled
+
+    def _set_robot_operation_mode(self, robot_operation_mode: MxRobotOperationMode):
+        """Update the "robot_operation_mode" from robot safety status
+
+        Parameters
+        ----------
+        robot_operation_mode : MxRobotOperationMode
+            New robot operation mode to set in robot state
+        """
+        self._robot_safety_status.robot_operation_mode = robot_operation_mode
+        # Notify that some change occurred in safety stop state
+        self._callback_queue.put('on_safety_stop_state_change')
+
+    def _set_reset_ready(self, reset_ready: bool):
+        """Update the "reset_ready" from robot safety status
+
+        Parameters
+        ----------
+        reset_ready : bool
+            New flag to set in robot state
+        """
+        self._robot_safety_status.reset_ready = reset_ready
+        # Notify that some change occurred in safety stop state
+        self._callback_queue.put('on_safety_stop_state_change')
+
+    def _check_motion_clear_done(self):
+        """This function will set (unblock) on_motion_cleared once motion clear is confirmed, i.e. once no more
+           ClearMotion response is pending and once EOB is confirmed."""
+        if not self._robot_events.on_motion_cleared.is_set():
+            if self._clear_motion_requests == 0 and self._robot_status.end_of_block_status:
+                self._robot_events.on_motion_cleared.set()
+
+    def _handle_cycle_end(self, response: Message):
+        """Handle a robot message of type mx_st.MX_ST_RT_CYCLE_END"""
+        self._robot_rt_data.cycle_count += 1
+        if not self._robot_info.rt_message_capable:
+            self._robot_info.rt_message_capable = True
+        timestamp = int(response.data)
+
+        # Useful to detect end of cycle for logging, to start logging on more consistent moment
+        self._robot_events.on_end_of_cycle.set()
+        self._callback_queue.put('on_end_of_cycle')
+
+        # Update joint and pose with legacy messages from current cycle plus the timestamps we just received
+        if self._tmp_rt_joint_pos:
+            self._robot_rt_data.rt_target_joint_pos.update_from_data(timestamp, self._tmp_rt_joint_pos)
+            self._tmp_rt_joint_pos = None
+        if self._tmp_rt_cart_pos:
+            self._robot_rt_data.rt_target_cart_pos.update_from_data(timestamp, self._tmp_rt_cart_pos)
+            self._tmp_rt_cart_pos = None
+
+        # If logging is active, log the current state.
+        if self._file_logger:
+            self._file_logger.write_fields(timestamp, self._robot_rt_data)
+        self._make_stable_rt_data()
+
+    def _refresh_auto_connection_watchdog(self, force=False):
+        """Send a connection watchdog refresh to the robot using appropriate timeout
+
+        Args:
+            force (bool, optional): Force sending refresh now even if minimum elapsed time is not yet elapsed.
+        """
+        if not self._auto_connection_watchdog:
+            return
+        # Use 4x monitoring interval by default
+        now = time.monotonic()
+        # Max every 10ms
+        if force or now - self._auto_connection_watchdog_last > 0.01:
+            self._auto_connection_watchdog_last = now
+            timeout = self._monitoring_interval * 4
+            # But make sure not to use a timer that's exaggeratedly small (Python is not THAT real time!)
+            if timeout < 0.25:
+                timeout = 0.25
+            self.ConnectionWatchdog(timeout)
+
     def _handle_motion_status_response(self, response: Message):
         """Parse robot motion response and update status fields and events.
            Note that this message is normally automatically followed (at least on the monitoring port)
@@ -2856,8 +3021,8 @@ class _Robot:
             # JSON format.
             self._using_legacy_json_api = True
             jsonData = response.jsonData[MX_JSON_KEY_DATA]
-            self._set_paused(jsonData[MX_JSON_KEY_MOTION_ROBOT_HOLD])
-            self._set_eob(jsonData[MX_JSON_KEY_MOTION_ROBOT_EOB])
+            self._set_paused(jsonData[MX_JSON_KEY_MOTION_STATUS_HOLD])
+            self._set_eob(jsonData[MX_JSON_KEY_MOTION_STATUS_EOB])
 
         # Note: Let's not yet update _first_robot_status_received or on_status_updated.
         #       We'll do that in _handle_robot_status_response since we're expecting to receive robot status
@@ -2876,28 +3041,42 @@ class _Robot:
         if response.jsonData:
             # JSON format.
             jsonData = response.jsonData[MX_JSON_KEY_DATA]
-            jsonRobotStatus = None
-            jsonMotionStatus = None
+            json_robot_status = None
+            json_motion_status = None
+            json_safety_status = None
             if MX_JSON_KEY_ROBOT_STATUS in jsonData:
-                jsonRobotStatus = jsonData[MX_JSON_KEY_ROBOT_STATUS]
+                json_robot_status = jsonData[MX_JSON_KEY_ROBOT_STATUS]
             if MX_JSON_KEY_MOTION_STATUS in jsonData:
-                jsonMotionStatus = jsonData[MX_JSON_KEY_MOTION_STATUS]
+                json_motion_status = jsonData[MX_JSON_KEY_MOTION_STATUS]
+            if MX_JSON_KEY_SAFETY_STATUS in jsonData:
+                json_safety_status = jsonData[MX_JSON_KEY_SAFETY_STATUS]
 
-            if jsonRobotStatus is None:
+            if json_robot_status is None:
                 # Legacy JSON format
-                jsonRobotStatus = jsonData
+                json_robot_status = jsonData
 
-            if jsonRobotStatus is not None:
+            if json_robot_status is not None:
+                # Read some states only from JSON (only those that don't have a distinct status event)
                 self._set_activated(
-                    jsonRobotStatus[MX_JSON_KEY_STATUS_ROBOT_STATE] >= MxRobotState.MX_ROBOT_STATE_ACTIVATED)
-                self._set_homed(jsonRobotStatus[MX_JSON_KEY_STATUS_ROBOT_STATE] == MxRobotState.MX_ROBOT_STATE_RUN)
-                self._set_sim_mode(jsonRobotStatus[MX_JSON_KEY_STATUS_ROBOT_SIM])
-                self._set_recovery_mode(jsonRobotStatus[MX_JSON_KEY_STATUS_ROBOT_RECOVERY])
-                self._set_error_status(jsonRobotStatus[MX_JSON_KEY_STATUS_ROBOT_ERR] != 0)
-                self._set_brakes_engaged(jsonRobotStatus[MX_JSON_KEY_STATUS_ROBOT_BRAKES] != 0)
-            if jsonMotionStatus is not None:
-                self._set_paused(jsonMotionStatus[MX_JSON_KEY_MOTION_ROBOT_HOLD])
-                self._set_eob(jsonMotionStatus[MX_JSON_KEY_MOTION_ROBOT_EOB])
+                    json_robot_status[MX_JSON_KEY_STATUS_ROBOT_STATE] >= MxRobotState.MX_ROBOT_STATE_ACTIVATED)
+                self._set_homed(json_robot_status[MX_JSON_KEY_STATUS_ROBOT_STATE] == MxRobotState.MX_ROBOT_STATE_RUN)
+                self._set_sim_mode(json_robot_status[MX_JSON_KEY_STATUS_ROBOT_SIM])
+                self._set_recovery_mode(json_robot_status[MX_JSON_KEY_STATUS_ROBOT_RECOVERY])
+                error_code = json_robot_status[MX_JSON_KEY_STATUS_ROBOT_ERR]
+                self._set_error_status(error_status=error_code != 0, error_code=error_code)
+                self._set_brakes_engaged(json_robot_status[MX_JSON_KEY_STATUS_ROBOT_BRAKES] != 0)
+            if json_motion_status is not None:
+                self._set_paused(json_motion_status[MX_JSON_KEY_MOTION_STATUS_HOLD])
+                self._set_eob(json_motion_status[MX_JSON_KEY_MOTION_STATUS_EOB])
+            if json_safety_status is not None:
+                self._set_reset_ready(json_safety_status[MX_JSON_KEY_SAFETY_STATUS_RESET_READY])
+                if MX_JSON_KEY_SAFETY_STOP_STATIC_MASKS in json_safety_status:
+                    json_stop_masks = json_safety_status[MX_JSON_KEY_SAFETY_STOP_STATIC_MASKS]
+                    self._robot_safety_status.static_masks.clearedByPsu = json_stop_masks[
+                        MX_JSON_KEY_MASK_CLEARED_BY_PSU]
+                    self._robot_safety_status.static_masks.withVmOff = json_stop_masks[MX_JSON_KEY_MASK_WITH_VM_OFF]
+                    self._robot_safety_status.static_masks.maskedByEnablingDevice = json_stop_masks[
+                        MX_JSON_KEY_MASK_ENABLING_DEVICE]
         else:
             # Legacy format.
             status_flags = self._parse_response_bool(response)
@@ -2914,6 +3093,40 @@ class _Robot:
         if self._is_in_sync():
             self._robot_events.on_status_updated.set()
         self._callback_queue.put('on_status_updated')
+
+    def _handle_collision_status_response(self, response: Message):
+        """Parse robot collision status response and update status fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        assert response.id == mx_st.MX_ST_GET_COLLISION_STATUS
+        parsed_response = self._parse_response_int(response)
+        status = self._robot_collision_status.self_collision_status
+        status.collision_detected = parsed_response[0] != 0
+
+        status.object1.set(MxCollisionGroup(parsed_response[1]), parsed_response[2])
+
+        status.object2.set(MxCollisionGroup(parsed_response[3]), parsed_response[4])
+
+    def _handle_work_zone_status_response(self, response: Message):
+        """Parse robot work zone status response and update status fields and events.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        assert response.id == mx_st.MX_ST_GET_WORK_ZONE_STATUS
+        parsed_response = self._parse_response_int(response)
+        status = self._robot_collision_status.work_zone_status
+        status.outside_work_zone = parsed_response[0] != 0
+
+        status.object.set(MxCollisionGroup(parsed_response[1]), parsed_response[2])
 
     def _handle_robot_get_robot_serial_response(self, response: Message):
         """Parse get robot serial response and robot info.
@@ -2980,6 +3193,222 @@ class _Robot:
 
         """
         self._set_recovery_mode(enabled)
+
+    def _handle_safety_stop_common(self):
+        """Code called after state of any safety stop signal has changed"""
+        active_safety_stops = self._robot_safety_status.stop_mask & ~self._robot_safety_status.stop_resettable_mask
+
+        if active_safety_stops != 0:
+            # There are active safety stop signals (non-resettable)
+            if self._robot_events.on_safety_stop_reset.is_set():
+                # First safety stop event occurring -> Call appropriate callback
+                self._callback_queue.put('on_safety_stop')
+            self._robot_events.on_safety_stop_reset.clear()
+            self._robot_events.on_safety_stop_resettable.clear()
+        elif self._robot_safety_status.stop_resettable_mask != 0 and active_safety_stops == 0:
+            # There are safety stop signals that are ready to be reset
+            self._robot_events.on_safety_stop_reset.clear()
+            self._robot_events.on_safety_stop_resettable.set()
+            self._callback_queue.put('on_safety_stop_resettable')
+        elif active_safety_stops == 0:
+            # There are no safety stop signals
+            self._robot_events.on_safety_stop_reset.set()
+            self._robot_events.on_safety_stop_resettable.set()
+            self._callback_queue.put('on_safety_stop_reset')
+
+        # Awake any thread awaiting on WaitSafetyStopStateChange
+        self._robot_events.on_safety_stop_state_change.set()
+
+        # Notify that some change occurred in safety stop state
+        self._callback_queue.put('on_safety_stop_state_change')
+
+    def _handle_estop_state(self, response: Message):
+        """Handle EStop state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_estop_state(self._parse_response_int(response)[0])
+        # Keep legacy field up-to-date
+        self._robot_status.estopState = self._robot_safety_status.estop_state
+
+        # Call deprecated callbacks
+        if self._robot_safety_status.estop_state == MxStopState.MX_STOP_STATE_ACTIVE:
+            self._robot_events.on_estop.set()
+            self._robot_events.on_estop_reset.clear()
+            self._robot_events.on_estop_resettable.clear()
+            self._callback_queue.put('on_estop')
+        elif self._robot_safety_status.estop_state == MxStopState.MX_STOP_STATE_RESETTABLE:
+            self._robot_events.on_estop.set()
+            self._robot_events.on_estop_reset.clear()
+            self._robot_events.on_estop_resettable.set()
+            self._callback_queue.put('on_estop_resettable')
+        else:
+            self._robot_events.on_estop.clear()
+            self._robot_events.on_estop_reset.set()
+            self._robot_events.on_estop_resettable.set()
+            self._callback_queue.put('on_estop_reset')
+
+        self._handle_safety_stop_common()
+
+    def _handle_pstop1_state(self, response: Message):
+        """Handle PStop1 state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_pstop1_state(self._parse_response_int(response)[0])
+        self._handle_safety_stop_common()
+
+    def _handle_pstop2_state(self, response: Message):
+        """Handle PStop2 state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_pstop2_state(self._parse_response_int(response)[0])
+        # Keep legacy field up-to-date
+        self._robot_status.pstop2State = self._robot_safety_status.pstop2_state
+
+        if self._robot_safety_status.pstop2_state == MxStopState.MX_STOP_STATE_ACTIVE:
+            # Invalidate checkpoints and appropriate interruptable events
+            message = 'Robot is in PSTOP2 condition'
+            self._invalidate_checkpoints(message)
+            self._invalidate_interruptable_events_on_clear_motion(message)
+
+        # Call deprecated callbacks
+        if self._robot_safety_status.pstop2_state == MxStopState.MX_STOP_STATE_ACTIVE:
+            self._robot_events.on_pstop2.set()
+            self._robot_events.on_pstop2_reset.clear()
+            self._robot_events.on_pstop2_resettable.clear()
+            self._callback_queue.put('on_pstop2')
+        elif self._robot_safety_status.pstop2_state == MxStopState.MX_STOP_STATE_RESETTABLE:
+            self._robot_events.on_pstop2.set()
+            self._robot_events.on_pstop2_reset.clear()
+            self._robot_events.on_pstop2_resettable.set()
+            self._callback_queue.put('on_pstop2_resettable')
+        else:
+            self._robot_events.on_pstop2.clear()
+            self._robot_events.on_pstop2_reset.set()
+            self._robot_events.on_pstop2_resettable.set()
+            self._callback_queue.put('on_pstop2_reset')
+
+        self._handle_safety_stop_common()
+
+    def _handle_operation_mode_stop_state(self, response: Message):
+        """Handle an operation mode safety stop state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_operation_mode_stop_state(self._parse_response_int(response)[0])
+        self._handle_safety_stop_common()
+
+    def _handle_enabling_device_released_stop_state(self, response: Message):
+        """Handle an enabling device released safety stop state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_enabling_device_released_stop_state(self._parse_response_int(response)[0])
+        self._handle_safety_stop_common()
+
+    def _handle_voltage_fluctuation_stop_state(self, response: Message):
+        """Handle an voltage fluctuation safety stop state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_voltage_fluctuation_stop_state(self._parse_response_int(response)[0])
+        self._handle_safety_stop_common()
+
+    def _handle_reboot_stop_state(self, response: Message):
+        """Handle a "robot just rebooted" safety stop state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_reboot_stop_state(self._parse_response_int(response)[0])
+        self._handle_safety_stop_common()
+
+    def _handle_redundancy_fault_stop_state(self, response: Message):
+        """Handle a "redundancy fault" safety stop state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_redundancy_fault_stop_state(self._parse_response_int(response)[0])
+        self._handle_safety_stop_common()
+
+    def _handle_standstill_fault_stop_state(self, response: Message):
+        """Handle a "standstill fault" safety stop state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_standstill_fault_stop_state(self._parse_response_int(response)[0])
+        self._handle_safety_stop_common()
+
+    def _handle_connection_dropped_stop_state(self, response: Message):
+        """Handle a "connection dropped" safety stop state change.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+
+        """
+        self._robot_safety_status.set_connection_dropped_stop_state(self._parse_response_int(response)[0])
+        self._handle_safety_stop_common()
+
+    def _handle_get_time_scaling_response(self, response: Message):
+        """Handle a time scaling changes.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+        """
+        assert response.id == mx_st.MX_ST_TIME_SCALING
+        self._robot_events.on_time_scaling_changed.set()
+
+    def _handle_effective_time_scaling_data(self, response: Message):
+        """Handle an effective time scaling rt data.
+
+        Parameters
+        ----------
+        response : Message object
+            Robot status response to parse and handle.
+        """
+        assert response.id == mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING
+        self._robot_rt_data.rt_effective_time_scaling.update_from_csv(response.data)
 
     def _handle_ext_tool_fw_version(self, response: Message):
         """Parse external tool firmware version"""
@@ -3377,6 +3806,8 @@ class _Robot:
                 self._robot_rt_data.rt_conf.enabled = True
             if event_id == mx_st.MX_ST_RT_CONF_TURN:
                 self._robot_rt_data.rt_conf_turn.enabled = True
+            if event_id == mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING:
+                self._robot_rt_data.rt_effective_time_scaling.enable = True
             if event_id == mx_st.MX_ST_RT_WRF:
                 self._robot_rt_data.rt_wrf.enabled = True
             if event_id == mx_st.MX_ST_RT_TRF:
