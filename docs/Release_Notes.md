@@ -20,7 +20,7 @@ Copyright &copy; 2023 by Mecademic Inc.
     - GetSafetyStatus, returning new status class RobotSafetyStatus
     - And other appropriate APIs and callbacks in class Robot for managing safety signals
 - Update API to support self-collision and work zone configuration and status (robot firmware 10.1 and above)
-  - GetCollisionStatus, returning new class CollisionStatus (reporting self-collision status and work zone status)
+  - GetCollisionStatus, returning new class CollisionStatus (reporting collision status and work zone status)
   - SetWorkZoneCfg, SetWorkZoneLimits, SetCollisionCfg
 - Support for SetTimeScaling (robot firmware 10.0 and above)
 
@@ -32,7 +32,7 @@ use the new safety signal APIs instead:
 - New callbacks: on_safety_stop, on_safety_stop_reset, on_safety_stop_resettable, on_safety_stop_state_change
 - New methods: WaitSafetyStopReset, WaitSafetyStopResettable and WaitSafetyStopStateChange, GetSafetyStatus
 
-Previous support for beta "workspace" feature has been removed, replaced by the final API for managing self-collision
+Previous support for beta "workspace" feature has been removed, replaced by the final API for managing collision
 and work zone configuration and status.
 - Removed methods: SetWorkspaceLimitsCfg, SetWorkspaceLimits
 - New methods: SetWorkZoneCfg, SetWorkZoneLimits, SetCollisionCfg, GetCollisionStatus

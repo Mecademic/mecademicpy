@@ -15,6 +15,7 @@ A python module designed for robot products from Mecademic. The module offers to
 
 * Python 3.7 (tested with 3.7.17)
 * Python 3.8 (tested with 3.8.18)
+* Python 3.9 (tested with 3.9.18)
 * Python 3.10 (tested with 3.10.13)
 * Python 3.11 (tested with 3.11.8)
 * Python 3.12 (tested with 3.12.2)
