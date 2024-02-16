@@ -11,6 +11,14 @@ A python module designed for robot products from Mecademic. The module offers to
 
  * 8.3 and up
 
+#### Supported Python versions
+
+* Python 3.7 (tested with 3.7.17)
+* Python 3.8 (tested with 3.8.18)
+* Python 3.10 (tested with 3.10.13)
+* Python 3.11 (tested with 3.11.8)
+* Python 3.12 (tested with 3.12.2)
+
 ## Prerequisites
 
 Please read the [user programming manual](https://www.mecademic.com/support/) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
