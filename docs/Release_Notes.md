@@ -10,6 +10,33 @@ Copyright &copy; 2023 by Mecademic Inc.
 
 ---
 
+## Version 2.1.0 (February 2024)
+**Features**
+- Update API to support new safety signals APIs:
+  - For robot firmware 10.1 and above:
+    - SetPStop2Cfg (for robot firmware 10.1 and above)
+    - ConnectionWatchdog
+  - Changes also available on older robot firmware versions:
+    - GetSafetyStatus, returning new status class RobotSafetyStatus
+    - And other appropriate APIs and callbacks in class Robot for managing safety signals
+- Update API to support self-collision and work zone configuration and status (robot firmware 10.1 and above)
+  - GetCollisionStatus, returning new class CollisionStatus (reporting self-collision status and work zone status)
+  - SetWorkZoneCfg, SetWorkZoneLimits, SetCollisionCfg
+- Support for SetTimeScaling (robot firmware 10.0 and above)
+
+**Migration Guide**
+Some methods related to safety signals have been deprecated. It is recommended to update Python's application code to
+use the new safety signal APIs instead:
+- Deprecated callbacks: on_estop, on_estop_reset, on_estop_resettable, on_pstop2, on_pstop2_reset, on_pstop2_resettable
+- Deprecated methods: WaitPStop2Reset, WaitPStop2Resettable, WaitEStopReset, WaitEStopResettable and ResetPStop2
+- New callbacks: on_safety_stop, on_safety_stop_reset, on_safety_stop_resettable, on_safety_stop_state_change
+- New methods: WaitSafetyStopReset, WaitSafetyStopResettable and WaitSafetyStopStateChange, GetSafetyStatus
+
+Previous support for beta "workspace" feature has been removed, replaced by the final API for managing self-collision
+and work zone configuration and status.
+- Removed methods: SetWorkspaceLimitsCfg, SetWorkspaceLimits
+- New methods: SetWorkZoneCfg, SetWorkZoneLimits, SetCollisionCfg, GetCollisionStatus
+
 ## Version 2.0.0 (November 2023)
 
 **Features**

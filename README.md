@@ -229,6 +229,22 @@ If the user is waiting on an event or checkpoint that the `Robot` class later de
 
 The user should use python's built-in `try...except` blocks to handle appropriate exceptions.
 
+### Handling Robot safety stop conditions
+(Note: This section applies to robots running firmware 10.1 and above)
+
+The robot may encounter safety stop conditions based on external safety signals (EStop, PStop1, PStop2, operation mode changed, enabling device released) or other conditions (connection timeout).
+It is recommended to use `GetSafetyStatus` to learn about the current safety stop signals status.
+The `on_safety_stop`, `on_safety_stop_reset`, `on_safety_stop_resettable` and `on_safety_stop_state_change` callbacks can also be used to manage the safety stop signals status.
+
+Some safety stop signals cause motor voltage to be removed (EStop, PStop1, operation mode change, etc.).
+When these safety signals are present, the robot cannot be activated until the safety signals are reset.
+For safety reasons, resetting these signals cannot be done programmatically from the Mecademicpy API. They require to press the Reset button on the power supply (or trigger the reset function from dedicated power supply input pins).
+
+Other safety stop signals will cause the robot to pause motion (PStop2, enabling device released, connection dropped).
+Once these safety conditions are resolved, the robot may be activated or, if already activated, motion can be resumed using `ResumeMotion()`.
+
+For more information about safety signals, refer to the robot's programming manual.
+
 ### Preserved State on Disconnection
 
 Once the robot is disconnected, not all states are immediately cleared. Therefore, it is possible to still get the last-known state of the robot.
