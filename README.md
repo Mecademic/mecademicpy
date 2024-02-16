@@ -12,13 +12,14 @@ A python module designed for robot products from Mecademic. The module offers to
  * 8.3 and up
 
 #### Supported Python versions
-
-* Python 3.7 (tested with 3.7.17)
-* Python 3.8 (tested with 3.8.18)
-* Python 3.9 (tested with 3.9.18)
-* Python 3.10 (tested with 3.10.13)
-* Python 3.11 (tested with 3.11.8)
-* Python 3.12 (tested with 3.12.2)
+Mecademicpy 2.1 targets Python version 3.7 and above.
+It has been tested with the following Python versions:
+* Python 3.7.17
+* Python 3.8.18
+* Python 3.9.18
+* Python 3.10.13
+* Python 3.11.8
+* Python 3.12.2
 
 ## Prerequisites
 
