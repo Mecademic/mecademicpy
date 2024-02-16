@@ -31,6 +31,7 @@ robot_rt_data_to_real_time_monit = {
     'rt_conf_turn': (mx_st.MX_ST_RT_CONF_TURN, 'ConfTurn'),
     'rt_abs_joint_pos': (mx_st.MX_ST_RT_JOINT_POS, 'AbsJointPos'),
     'rt_accelerometer': (mx_st.MX_ST_RT_ACCELEROMETER, 'Accel'),
+    'rt_effective_time_scaling': (mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING, 'EffectiveTimeScaling'),
     'rt_wrf': (mx_st.MX_ST_RT_WRF, 'Wrf'),
     'rt_trf': (mx_st.MX_ST_RT_TRF, 'Trf'),
     'rt_checkpoint': (mx_st.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
@@ -231,10 +232,16 @@ class _RobotTrajectoryLogger:
                 # Write field name followed by joint number. For example: "TargetJointPos_1".
                 self.expanded_fields.extend(assemble_with_prefix(value, range(robot_info.num_joints)))
             elif key.endswith('cart_pos') or key.endswith('wrf') or key.endswith('trf'):
-                self.expanded_fields.extend(assemble_with_prefix(value, ['X', 'Y', 'Z', 'Alpha', 'Beta', 'Gamma']))
+                if robot_info.num_joints == 4:
+                    self.expanded_fields.extend(assemble_with_prefix(value, ['X', 'Y', 'Z', 'Gamma']))
+                else:
+                    self.expanded_fields.extend(assemble_with_prefix(value, ['X', 'Y', 'Z', 'Alpha', 'Beta', 'Gamma']))
             elif key.endswith('cart_vel'):
-                self.expanded_fields.extend(
-                    assemble_with_prefix(value, ['X_Dot', 'Y_Dot', 'Z_Dot', 'Omega_X', 'Omega_Y', 'Omega_Z']))
+                if robot_info.num_joints == 4:
+                    self.expanded_fields.extend(assemble_with_prefix(value, ['X_Dot', 'Y_Dot', 'Z_Dot', 'Omega_Z']))
+                else:
+                    self.expanded_fields.extend(
+                        assemble_with_prefix(value, ['X_Dot', 'Y_Dot', 'Z_Dot', 'Omega_X', 'Omega_Y', 'Omega_Z']))
             elif key.endswith('rt_accelerometer'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['X', 'Y', 'Z']))
             elif key.endswith('conf_turn'):
@@ -242,6 +249,8 @@ class _RobotTrajectoryLogger:
             elif key.endswith('conf'):
                 self.expanded_fields.extend(assemble_with_prefix(value, ['Shoulder', 'Elbow', 'Wrist']))
             elif key.endswith('checkpoint'):
+                self.expanded_fields.append(value)
+            elif key.endswith('rt_effective_time_scaling'):
                 self.expanded_fields.append(value)
             elif key.endswith('rt_external_tool_status'):
                 self.expanded_fields.extend(

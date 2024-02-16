@@ -5,6 +5,7 @@ import platform
 import subprocess
 import time
 from enum import IntEnum
+from typing import Optional, Union
 
 from .mx_robot_def import *
 
@@ -144,6 +145,17 @@ def _ping(ip_address: str) -> bool:
     return False
 
 
+def robot_operation_mode_to_string(robot_operation_mode: MxRobotOperationMode) -> str:
+    """Returns a human-readable string that represents the specified robot operation mode"""
+    if robot_operation_mode == MxRobotOperationMode.MX_ROBOT_OPERATION_MODE_LOCKED:
+        return "Locked"
+    if robot_operation_mode == MxRobotOperationMode.MX_ROBOT_OPERATION_MODE_AUTO:
+        return "Automatic"
+    if robot_operation_mode == MxRobotOperationMode.MX_ROBOT_OPERATION_MODE_MANUAL:
+        return "Manual"
+    return "Invalid"
+
+
 def robot_model_is_meca500(robot_model: MxRobotModel):
     """Tells if the specified robot model is a Meca500 robot (or any revision)"""
     return (robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2
@@ -160,3 +172,54 @@ def robot_model_support_eoat(robot_model: MxRobotModel):
 
     return (robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2
             or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4)
+
+
+def robot_collision_group_robot_idx_to_string(robot_idx: MxCollisionGroupRobotIdx) -> str:
+    """Returns a human-readable string that represents the collision index within group 'robot' """
+    if robot_idx == MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_BASE:
+        return 'Base'
+    if robot_idx == MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_LINK_1:
+        return 'Link-1'
+    if robot_idx == MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_LINK_2:
+        return 'Link-2'
+    if robot_idx == MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_LINK_3:
+        return 'Link-3'
+    if robot_idx == MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_LINK_4:
+        return 'Link-4'
+    if robot_idx == MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_LINK_5:
+        return 'Link-5'
+    if robot_idx == MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_LINK_6:
+        return 'Link-6'
+    return 'Invalid'
+
+
+def robot_collision_group_tool_idx_to_string(tool_idx: MxCollisionGroupToolIdx) -> str:
+    """Returns a human-readable string that represents the collision index within group 'tool' """
+    if tool_idx == MxCollisionGroupToolIdx.MX_COLLISION_GROUP_TOOL_SPHERE:
+        return 'Tool Sphere'
+    if tool_idx == MxCollisionGroupToolIdx.MX_COLLISION_GROUP_TOOL_MPM500:
+        return 'MPM500'
+    if tool_idx == MxCollisionGroupToolIdx.MX_COLLISION_GROUP_TOOL_MVK01:
+        return 'MVK01'
+    return 'Invalid'
+
+
+def robot_collision_group_to_string(collision_group: MxCollisionGroup, index: Optional[int] = 0) -> str:
+    """Returns a human-readable string that represents the collision group"""
+    if collision_group == MxCollisionGroup.MX_COLLISION_GROUP_ROBOT:
+        if index is not None:
+            return f'{robot_collision_group_robot_idx_to_string(index)}'
+        else:
+            return 'Robot'
+    if collision_group == MxCollisionGroup.MX_COLLISION_GROUP_FCP:
+        return 'Flange center point'
+    if collision_group == MxCollisionGroup.MX_COLLISION_GROUP_TOOL:
+        if index is not None:
+            return f'{robot_collision_group_tool_idx_to_string(index)}'
+        else:
+            return 'Tool'
+    if collision_group == MxCollisionGroup.MX_COLLISION_GROUP_ENV_OBJ:
+        return f'Object #{0 if index is None else index}'
+    if collision_group == MxCollisionGroup.MX_COLLISION_GROUP_WORK_ZONE:
+        return 'Work Zone'
+    return 'Invalid'

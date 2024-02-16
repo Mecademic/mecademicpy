@@ -4,10 +4,19 @@ import contextlib
 import copy
 import math
 import pathlib
+import sys
+
+# importlib.metadata is new from v3.8
+if sys.version_info < (3, 8):
+    # From version lower than 3.8, use module
+    from importlib_metadata import version
+else:
+    # Changed in version 3.10: importlib.metadata is no longer provisional.
+    from importlib.metadata import version
+
 from typing import Optional, Tuple, Union
 
 import deprecation
-import pkg_resources
 
 import mecademicpy._robot_trajectory_logger as mx_traj
 
@@ -17,7 +26,7 @@ from .robot_classes import *
 from .robot_trajectory_files import RobotTrajectories
 from .tools import *
 
-__version__ = pkg_resources.get_distribution('mecademicpy').version
+__version__ = version('mecademicpy')
 
 
 class Robot(_Robot):
@@ -125,6 +134,48 @@ class Robot(_Robot):
             Synchronous mode enabled (else asynchronous mode), by default True
         """
         self._enable_synchronous_mode = sync_mode
+
+    def ConnectionWatchdog(self, timeout: float):
+        """Enable, refresh or disable the connection watchdog.
+           This function is non-blocking.
+
+           To enable the connection watchdog, call this function with a non-zero timeout.
+           Then periodically call this function again with a non-zero timeout before expiry of previous timeout.
+           To disable the connection watchdog, call this function with a timeout of zero.
+
+           If the connection watchdog is enabled and the robot does not receive a refresh before the specified timeout,
+           it will close the socket connections with this application, raise MX_SAFE_STOP_CONNECTION_DROPPED safety
+           stop condition and pause motion (if robot is activated).
+
+           Note that if the connection watchdog is not enabled but the socket is closed while the robot is moving,
+           the robot will also raise the MX_SAFE_STOP_CONNECTION_DROPPED safety stop condition and pause motion.
+           But note that a socket may take a very long time to detect a dropped connection upon some type of network
+           failures and thus usage of the connection watchdog feature is recommended to ensure that the robot quickly
+           stops moving in all situations when the application can no longer communicate with it.
+
+           The application may validate that the connection watchdog is active on the robot using the watchdog state,
+           located in RobotStatus.connection_watchdog_active.
+
+        Args:
+            timeout (float): Connection watchdog timeout (in seconds) to enable/refresh (or 0 to disable the watchdog)
+        """
+        return super().ConnectionWatchdog(timeout)
+
+    def AutoConnectionWatchdog(self, enable: bool):
+        """Enable automatic connection watchdog managed by this Robot class.
+           See method ConnectionWatchdog for detailed explanations about the connection watchdog.
+
+           The automatic connection watchdog is an alternative to ConnectionWatchdog which is simpler for the
+           application because it does not have to manage periodic calling of ConnectionWatchdog to refresh the timer.
+
+           When automatic connection watchdog is enabled, the Robot class will automatically enable then refresh the
+           connection watchdog by calling ConnectionWatchdog at appropriate intervals.
+           The connection timeout is automatically chosen based on monitoring interval (see SetMonitoringInterval).
+
+        Args:
+            enable (bool): Enable (else disable) the automatic connection watchdog refresh
+        """
+        return super().AutoConnectionWatchdog(enable)
 
     @disconnect_on_exception
     def ActivateRobot(self):
@@ -322,7 +373,7 @@ class Robot(_Robot):
         self._send_motion_command('MoveLinRelTrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="1.3.0",
+                            removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'MoveLinRelTrf' function instead")
     @disconnect_on_exception
@@ -352,7 +403,7 @@ class Robot(_Robot):
         self._send_motion_command('MoveLinRelWrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="1.3.0",
+                            removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'MoveLinRelWrf' function instead")
     @disconnect_on_exception
@@ -383,7 +434,7 @@ class Robot(_Robot):
         self._send_motion_command('MoveLinVelTrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="1.3.0",
+                            removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'MoveLinVelTrf' function instead")
     @disconnect_on_exception
@@ -415,7 +466,7 @@ class Robot(_Robot):
         self._send_motion_command('MoveLinVelWrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="1.3.0",
+                            removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'MoveLinVelWrf' function instead")
     @disconnect_on_exception
@@ -672,7 +723,7 @@ class Robot(_Robot):
         self._send_motion_command('SetTrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="1.3.0",
+                            removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'SetTrf' function instead")
     @disconnect_on_exception
@@ -702,7 +753,7 @@ class Robot(_Robot):
         self._send_motion_command('SetWrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="1.3.0",
+                            removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'SetWrf' function instead")
     @disconnect_on_exception
@@ -1459,51 +1510,60 @@ class Robot(_Robot):
             timeout = self.default_timeout
         self._robot_events.on_error_reset.wait(timeout=timeout)
 
+    @deprecation.deprecated(deprecated_in="2.1.0",
+                            removed_in="3.0.0",
+                            current_version=__version__,
+                            details="Use the 'WaitSafetyStopReset' function instead")
     @disconnect_on_exception
     def WaitPStop2Reset(self, timeout: float = None):
-        """Pause program execution until the robot is no more in PStop2 condition.
-
-        Parameters
-        ----------
-        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
-            Maximum time to spend waiting for the event (in seconds).
-        """
+        """Deprecated use WaitSafetyStopReset instead."""
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_pstop2_reset.wait(timeout=timeout)
 
+    @deprecation.deprecated(deprecated_in="2.1.0",
+                            removed_in="3.0.0",
+                            current_version=__version__,
+                            details="Use the 'WaitSafetyStopReset' function instead")
     @disconnect_on_exception
     def WaitPStop2Resettable(self, timeout: float = None):
-        """Pause program execution until the robot PStop2 condition can be reset (or has been reset).
-
-        Parameters
-        ----------
-        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
-            Maximum time to spend waiting for the event (in seconds).
-        """
+        """Deprecated use WaitSafetyStopResettable instead."""
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_pstop2_resettable.wait(timeout=timeout)
 
+    @deprecation.deprecated(deprecated_in="2.1.0",
+                            removed_in="3.0.0",
+                            current_version=__version__,
+                            details="Use the 'WaitSafetyStopResettable' function instead")
     @disconnect_on_exception
     def WaitEStopReset(self, timeout: float = None):
-        """Pause program execution until the robot is no more in EStop condition.
-
-        Parameters
-        ----------
-        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
-            Maximum time to spend waiting for the event (in seconds).
-        """
+        """Deprecated use WaitSafetyStopReset instead."""
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_estop_reset.wait(timeout=timeout)
 
+    @deprecation.deprecated(deprecated_in="2.1.0",
+                            removed_in="3.0.0",
+                            current_version=__version__,
+                            details="Use the 'WaitSafetyStopResettable' function instead")
     @disconnect_on_exception
+    def WaitEStopResettable(self, timeout: float = None):
+        """Deprecated use WaitSafetyStopResettable instead."""
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_estop_resettable.wait(timeout=timeout)
+
     def WaitEstopResettable(self, timeout: float = None):
-        """Pause program execution until the robot Estop condition can be reset (or has been reset).
+        self.WaitEStopResettable(timeout)
+
+    @disconnect_on_exception
+    def WaitSafetyStopReset(self, timeout: float = None):
+        """Pause program execution until all safety stop conditions have been reset (EStop, PStop1, PStop2, ...)
 
         Parameters
         ----------
@@ -1513,7 +1573,38 @@ class Robot(_Robot):
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
-        self._robot_events.on_estop_resettable.wait(timeout=timeout)
+        self._robot_events.on_safety_stop_reset.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitSafetyStopResettable(self, timeout: float = None):
+        """Pause program execution until all safety conditions can be reset using the power supply Reset function.
+
+        Parameters
+        ----------
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        self._robot_events.on_safety_stop_resettable.wait(timeout=timeout)
+
+    @disconnect_on_exception
+    def WaitSafetyStopStateChange(self, timeout: float = None):
+        """Pause program execution until any safety stop state changes (Raised, resettable or cleared safety stop,
+           operation mode change, etc) as reported by RobotSafetyStatus.
+
+        Parameters
+        ----------
+        timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
+            Maximum time to spend waiting for the event (in seconds).
+        """
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+
+        self._robot_events.on_safety_stop_state_change.clear()
+        self._robot_events.on_safety_stop_state_change.wait(timeout=timeout)
 
     @disconnect_on_exception
     def WaitMotionResumed(self, timeout: float = None):
@@ -1617,18 +1708,20 @@ class Robot(_Robot):
             self._robot_events.on_error_reset.wait(timeout=self.default_timeout)
 
     @deprecation.deprecated(deprecated_in="1.2.2",
-                            removed_in="2.0.0",
+                            removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'ResetPStop2' function instead")
     @disconnect_on_exception
     def ResetPStop(self, timeout: float = None):
-        """Deprecated use ResetPStop2 instead.
-        """
+        """Deprecated use ResetPStop2 instead."""
         self.ResetPStop2(timeout)
 
     @disconnect_on_exception
     def ResetPStop2(self, timeout: float = None):
-        """Attempt to reset robot PStop2."""
+        """Attempt to reset robot PStop2.
+           Deprecated for robots running firmware 10.1 and above: use ResumeMotion instead.
+           *** IMPORTANT NOTE: PStop2 is not safety-rated on Meca500 robots ***
+        """
         with self._main_lock:
             self._check_internal_states()
             if self._robot_info.version.is_at_least(9, 2):
@@ -1641,7 +1734,7 @@ class Robot(_Robot):
             # Use appropriate default timeout if not specified
             if timeout is None:
                 timeout = 2
-            self._robot_events.on_pstop2_reset.wait(timeout)
+            self._robot_events.on_motion_resumed.wait(timeout)
 
     @disconnect_on_exception
     def Delay(self, t: float):
@@ -2396,7 +2489,7 @@ class Robot(_Robot):
             self._send_command('SetRtc', [t])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="1.3.0",
+                            removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'SetRtc' function instead")
     @disconnect_on_exception
@@ -2489,6 +2582,27 @@ class Robot(_Robot):
                 self._robot_events.on_deactivate_recovery_mode.wait(timeout=self.default_timeout)
 
     @disconnect_on_exception
+    def SetTimeScaling(self, p: float):
+        """This command sets the time scaling (in percentage) of the trajectory generator. By calling this command
+            with p < 100, all robot motions remain exactly the same (i.e., the path remains the same), but executed
+            at p% of the original speed, including time delays (e.g., the pause set by the command Delay). In other words,
+            this command is more than a simple velocity override.
+
+        Parameters
+        ----------
+        p : float
+            Percentage time scaling, from 0.001 to 100.
+
+        """
+        with self._main_lock:
+            self._check_internal_states()
+            self._robot_events.on_time_scaling_changed.clear()
+            self._send_command('SetTimeScaling', [p])
+
+        if self._enable_synchronous_mode:
+            self._robot_events.on_time_scaling_changed.wait(timeout=self.default_timeout)
+
+    @disconnect_on_exception
     def SetJointLimitsCfg(self, e: bool = True):
         """Enable/Disable user-defined limits set by the 'SetJointLimits' command. It can only be executed while
         the robot is deactivated. If the user-defined limits are disabled, the default joint limits become active.
@@ -2539,13 +2653,71 @@ class Robot(_Robot):
                 self._send_command('SetJointLimits', f"{n},{lower_limit},{upper_limit}")
 
     @disconnect_on_exception
-    def SetWorkspaceLimitsCfg(
-            self,
-            severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR,
-            mode: MxCollisionAvoidanceMode = MxCollisionAvoidanceMode.MX_COLLISION_MODE_SELF_COLLISION_DETECTION):
-        """Set the severity at which to report collision events and the detection mode for collisions used by the robot.
-        This command can only be used when the robot is deactivated. User-defined limits remain in memory, even after a
+    def SetWorkZoneCfg(self,
+                       severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR,
+                       mode: MxWorkZoneMode = MxWorkZoneMode.MX_WORK_ZONE_MODE_FCP_IN_WORK_ZONE):
+        """Set the severity at which to report work zone violations and the detection mode for work zone violations used
+        by the robot. This command can only be used when the robot is deactivated. User-defined limits remain in memory, even after a
         power down.
+
+        Parameters
+        ----------
+            severity : MxEventSeverity
+                Severity-level to report work zone events.
+                The available severities are found in mx_robot_def.MxEventSeverity.
+                Note that MX_EVENT_SEVERITY_PAUSE_MOTION = 2 is not supported as colliding paths should not be followed.
+            mode : MxWorkZoneMode
+                Work zone detection mode to use for checks.
+                The available modes are found in mx_robot_def.MxWorkZoneMode.
+        """
+        if self._enable_synchronous_mode:
+            response_event = self.SendCustomCommand(f'SetWorkZoneCfg({severity},{mode})',
+                                                    expected_responses=[
+                                                        MxRobotStatusCode.MX_ST_SET_WORK_ZONE_LIMITS_CFG,
+                                                        MxRobotStatusCode.MX_ST_CMD_FAILED
+                                                    ])
+            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
+                raise MecademicException("Argument Error in Command : SetWorkZoneCfg")
+        else:
+            with self._main_lock:
+                self._check_internal_states()
+                self._send_command('SetWorkZoneCfg', f"{severity},{mode}")
+
+    @disconnect_on_exception
+    def SetWorkZoneLimits(self, x_min: float, y_min: float, z_min: float, x_max: float, y_max: float, z_max: float):
+        """Set the work zone limits the robot must not exceed. This command can only be used when the robot is
+        deactivated. User-defined limits remain in memory, even after a power down.
+
+        Parameters
+        ----------
+            x_min : float
+                minimum x value of the work zone
+            y_min : float
+                minimum y value of the work zone
+            z_min : float
+                minimum z value of the work zone
+            x_max : float
+                maximum x value of the work zone
+            y_max : float
+                maximum y value of the work zone
+            z_max : float
+                maximum z value of the work zone
+        """
+        if self._enable_synchronous_mode:
+            response_event = self.SendCustomCommand(
+                f'SetWorkZoneLimits({x_min}, {y_min}, {z_min}, {x_max}, {y_max}, {z_max})',
+                expected_responses=[MxRobotStatusCode.MX_ST_SET_WORK_ZONE_LIMITS, MxRobotStatusCode.MX_ST_CMD_FAILED])
+            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
+                raise MecademicException("Argument Error in Command : SetWorkZoneLimits")
+        else:
+            with self._main_lock:
+                self._check_internal_states()
+                self._send_command('SetWorkZoneLimits', [x_min, y_min, z_min, x_max, y_max, z_max])
+
+    @disconnect_on_exception
+    def SetCollisionCfg(self, severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR):
+        """Set the severity at which to report self collision events. This command can only be used when the robot is
+        deactivated. User-defined configurations remain in memory, even after a power down.
 
         Parameters
         ----------
@@ -2553,57 +2725,21 @@ class Robot(_Robot):
                 Severity-level to report collision events.
                 The available severities are found in mx_robot_def.MxEventSeverity.
                 Note that MX_EVENT_SEVERITY_PAUSE_MOTION = 2 is not supported as colliding paths should not be followed.
-            mode : MxCollisionAvoidanceMode
-                Collision detection mode to use for checks.
-                The available modes are found in mx_robot_def.MxCollisionAvoidanceMode.
-        """
-        if self._enable_synchronous_mode:
-            response_event = self.SendCustomCommand(f'SetWorkspaceLimitsCfg({severity},{mode})',
-                                                    expected_responses=[
-                                                        MxRobotStatusCode.MX_ST_SET_WORKSPACE_LIMITS_CFG,
-                                                        MxRobotStatusCode.MX_ST_CMD_FAILED
-                                                    ])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetWorkspaceLimitsCfg")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetWorkspaceLimitsCfg', f"{severity},{mode}")
-
-    @disconnect_on_exception
-    def SetWorkspaceLimits(self, x_min: float, y_min: float, z_min: float, x_max: float, y_max: float, z_max: float):
-        """Set the workspace limits the robot must not exceed. This command can only be used when the robot is
-        deactivated. User-defined limits remain in memory, even after a power down.
-
-        Parameters
-        ----------
-            x_min : float
-                minimum x value of the workspace
-            y_min : float
-                minimum y value of the workspace
-            z_min : float
-                minimum z value of the workspace
-            x_max : float
-                maximum x value of the workspace
-            y_max : float
-                maximum y value of the workspace
-            z_max : float
-                maximum z value of the workspace
         """
         if self._enable_synchronous_mode:
             response_event = self.SendCustomCommand(
-                f'SetWorkspaceLimits({x_min}, {y_min}, {z_min}, {x_max}, {y_max}, {z_max})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_WORKSPACE_LIMITS, MxRobotStatusCode.MX_ST_CMD_FAILED])
+                f'SetCollisionCfg({severity})',
+                expected_responses=[MxRobotStatusCode.MX_ST_SET_COLLISION_CFG, MxRobotStatusCode.MX_ST_CMD_FAILED])
             if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetWorkspaceLimits")
+                raise MecademicException("Argument Error in Command : SetCollisionCfg")
         else:
             with self._main_lock:
                 self._check_internal_states()
-                self._send_command('SetWorkspaceLimits', [x_min, y_min, z_min, x_max, y_max, z_max])
+                self._send_command('SetCollisionCfg', f"{severity}")
 
     @disconnect_on_exception
     def SetToolSphere(self, x: float, y: float, z: float, r: float):
-        """Set the workspace limits the robot must not exceed. This command can only be used when the robot is
+        """Set the tool sphere model of the robot. This command can only be used when the robot is
         deactivated. User-defined limits remain in memory, even after a power down.
 
         Parameters
@@ -2680,6 +2816,31 @@ class Robot(_Robot):
                 f'SetTorqueLimits: Incorrect number of joints sent {len(args)}, command. expecting: {expect_count}.')
 
         self._send_motion_command('SetTorqueLimits', args)
+
+    @disconnect_on_exception
+    def SetPStop2Cfg(self, severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_CLEAR_MOTION):
+        """Set the severity at which to treat a PStop2 events.
+        This command can only be used when the robot is deactivated. User-defined severity remains in memory, even after
+        a power down.
+
+        Parameters
+        ----------
+            severity : MxEventSeverity
+                Severity-level to treat PStop2 events.
+                The available severities are:
+                    - mx_robot_def.MxEventSeverity.MX_EVENT_SEVERITY_PAUSE_MOTION
+                    - mx_robot_def.MxEventSeverity.MX_EVENT_SEVERITY_CLEAR_MOTION
+        """
+        if self._enable_synchronous_mode:
+            response_event = self.SendCustomCommand(
+                f'SetPStop2Cfg({severity})',
+                expected_responses=[MxRobotStatusCode.MX_ST_SET_PSTOP2_CFG, MxRobotStatusCode.MX_ST_CMD_FAILED])
+            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
+                raise MecademicException("Argument Error in Command : SetPStop2Cfg")
+        else:
+            with self._main_lock:
+                self._check_internal_states()
+                self._send_command('SetPStop2Cfg', f"{severity}")
 
     @disconnect_on_exception
     def SetPayload(self, mass: float, x: float, y: float, z: float):
@@ -2778,6 +2939,42 @@ class Robot(_Robot):
 
         """
         return super().GetStatusRobot(synchronous_update, timeout)
+
+    @disconnect_on_exception
+    def GetSafetyStatus(self, synchronous_update: bool = False, timeout: float = None) -> RobotSafetyStatus:
+        """Return a copy of the current robot safety status
+
+        Parameters
+        ----------
+        synchronous_update: bool
+            True -> Synchronously get updated robot safety status. False -> Get latest known status.
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        RobotSafetyStatus
+            Object containing the current robot safety status
+
+        """
+        return super().GetSafetyStatus(synchronous_update, timeout)
+
+    @disconnect_on_exception
+    def GetCollisionStatus(self, timeout: float = None) -> CollisionStatus:
+        """Return a copy of the current robot collision status
+
+        Parameters
+        ----------
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        CollisionStatus
+            Object containing the current robot collision status
+
+        """
+        return super().GetCollisionStatus(timeout)
 
     @disconnect_on_exception
     def GetGripperRange(self, timeout: float = None) -> Tuple[float, float]:
