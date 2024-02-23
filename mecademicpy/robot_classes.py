@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+from typing import Optional, Union
 
 import mecademicpy.tools as tools
 
@@ -136,6 +137,7 @@ class RobotCallbacks:
             Function to be called once disconnected.
         on_status_updated : function object
             Function to be called once robot status is updated.
+
         on_status_gripper_updated : function object
             Function to be called once gripper status is updated (legacy, use following external tools callbacks).
         on_external_tool_status_updated: function object
@@ -144,12 +146,14 @@ class RobotCallbacks:
             Function to be called once gripper state is updated.
         on_valve_state_updated: function object
             Function to be called once valve state is updated.
+
         on_output_state_updated: function object
             Function to be called when digital outputs changed.
         on_input_state_updated: function object
             Function to be called when digital inputs changed.
         on_vacuum_state_updated: function object
             Function to be called once vacuum state is updated.
+
         on_activated : function object
             Function to be called once activated.
         on_deactivated : function object
@@ -160,20 +164,42 @@ class RobotCallbacks:
             Function to be called if robot enters an error state.
         on_error_reset : function object
             Function to be called once error is reset.
+
+        on_safety_stop : function object
+            Function to be called when the robot enters safety stop state following a raised safety stop conditions
+            (EStop, PStop1, PStop2, etc.).
+            Note that on_safety_stop_state_change can be used to be notified of more safety stop conditions that change
+            while the robot is already in safety stop.
+        on_safety_stop_reset : function object
+            Function to be called when all safety stop conditions (EStop, PStop1, PStop2, ...) are cleared (reset)
+        on_safety_stop_resettable : function object
+            Function to be called when all safety stop conditions (EStop, PStop1, PStop2, ...) can be reset
+            i.e. the safety stop conditions are no more present and need a reset (Power supply reset button in some
+            cases, or simply ResumeMotion in other cases)
+        on_safety_stop_state_change : function object
+            Function to be called when any safety stop state change (see RobotSafetyStatus)
+
         on_pstop2 : function object
             Function to be called if PStop2 is activated.
+            *** DEPRECATED (replaced by on_safety_stop_state)
         on_pstop2_resettable : function object
             Function to be called when PStop2 condition can be reset
             (i.e. the power supply PStop2 signal is no more asserted)
+            *** DEPRECATED (replaced by on_safety_stop_state)
         on_pstop2_reset : function object
             Function to be called if PStop2 is reset.
+            *** DEPRECATED (replaced by on_safety_stop_state)
         on_estop : function object
             Function to be called if EStop is activated.
+            *** DEPRECATED (replaced by on_safety_stop_state)
         on_estop_reset : function object
             Function to be called if EStop is reset.
+            *** DEPRECATED (replaced by on_safety_stop_state)
         on_estop_resettable : function object
             Function to be called when EStop condition can be reset
             (i.e. the power supply EStop signal is no more asserted)
+            *** DEPRECATED (replaced by on_safety_stop_state)
+
         on_motion_paused : function object
             Function to be called once motion is paused.
         on_motion_cleared : function object
@@ -182,6 +208,7 @@ class RobotCallbacks:
             Function to be called once motion is resumed.
         on_checkpoint_reached : function object
             Function to be called if a checkpoint is reached.
+
         on_activate_sim : function object
             Function to be called once sim mode is activated.
         on_deactivate_sim : function object
@@ -194,10 +221,12 @@ class RobotCallbacks:
             Function to be called once IO simulation mode is enabled.
         on_io_sim_disabled : function object
             Function to be called once IO simulation mode is disabled.
+
         on_activate_recovery_mode : function object
             Function to be called once recovery mode is activated.
         on_deactivate_recovery_mode : function object
             Function to be called once recovery mode is deactivated.
+
         on_command_message : function object
             Function to be called each time a command response is received.
         on_monitor_message : function object
@@ -205,8 +234,10 @@ class RobotCallbacks:
             Only available when connected to the robot in monitoring mode.
             Note that on_monitor_message may not be very useful. We suggest to use on_end_of_cycle instead
             (which works for both monitoring or control mode connections).
+
         on_offline_program_state : function object
             Function to be called each time an offline program starts or fails to start.
+
         on_end_of_cycle : function object
             Function to be called each time end of cycle is reached.
             It's called once all real-time data for current monitoring interval has been received.
@@ -234,6 +265,10 @@ class RobotCallbacks:
 
         self.on_error = None
         self.on_error_reset = None
+        self.on_safety_stop_resettable = None
+        self.on_safety_stop_reset = None
+        self.on_safety_stop_state_change = None
+
         self.on_pstop2 = None
         self.on_pstop2_resettable = None
         self.on_pstop2_reset = None
@@ -559,6 +594,8 @@ class RobotInfo:
         Tells if this robot supports connecting external tools (gripper or valve box).
     supports_io_module : bool
         Tells if this robot supports IO expansion module.
+    supports_manual_mode : bool
+        Tells if this robot supports manual mode.
     gripper_pos_ctrl_capable : bool
         Tells if this robot supports gripper position control.
     ext_tool_version_capable : bool
@@ -589,6 +626,8 @@ class RobotInfo:
         self.gripper_pos_ctrl_capable = False
         self.ext_tool_version_capable = False
         self.ext_tool_version = RobotVersion(ext_tool_version)
+        self.supports_io_module = False
+        self.supports_manual_mode = False
 
         if self.model == 'Meca500':
             if self.revision == 1:
@@ -609,6 +648,7 @@ class RobotInfo:
             self.requires_homing = False
             self.supports_ext_tool = False
             self.supports_io_module = True
+            self.supports_manual_mode = True
         elif self.model == 'Unknown':
             self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
             self.num_joints = 1
@@ -926,6 +966,8 @@ class RobotRtData:
 
     rt_accelerometer : TimestampedData
         Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g. (GetRtAccelerometer)
+    rt_effective_time_scaling : TimestampedData
+        Effective time scaling ratio (GetRtEffectiveTimeScaling)
 
     rt_external_tool_status : TimestampedData
         External tool status [sim_tool_type, physical_tool_type, homing_state, error_status, overload_error].
@@ -985,6 +1027,9 @@ class RobotRtData:
         self.rt_cart_vel = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm/s and deg/s
         self.rt_conf = TimestampedData.zeros(nb_conf_val)
         self.rt_conf_turn = TimestampedData.zeros(1)
+
+        self.rt_effective_time_scaling = TimestampedData.zeros(
+            1)  # microseconds timestamp, effective time scaling ratio
 
         # Another way of getting robot joint position using less-precise encoders.
         # For robot production testing (otherwise use rt_joint_pos which is much more precise)
@@ -1062,9 +1107,16 @@ class RobotStatus:
         True if the robot is in recovery mode.
     error_status : bool
         True if the robot is in error.
+    error_code : int
+        Current robot error code, or 0 if the robot is not in error state.
+        Note: Only supported if connecting to the on port MX_ROBOT_TCP_PORT_CONTROL_JSON or MX_ROBOT_TCP_PORT_FEED_JSON.
+              Otherwise error_code will be None (unknown).
     pstop2State : MxStopState
-        Current PStop2 status
+        *** IMPORTANT NOTE: PStop2 is not safety-rated on Meca500 robots ***
+        *** Deprecated. Use RobotSafetyStatus.pstop2_state instead.
+        Current PStop2 status.
     estopState : MxStopState
+        *** Deprecated. Use RobotSafetyStatus.estop_state instead.
         Current EStop status.
         Note that Meca500 revision 3 or older never report this condition because these robots's power supply
         will be shutdown completely in case of EStop (and thus this API will get disconnected from the robot instead).
@@ -1079,6 +1131,8 @@ class RobotStatus:
     brakes_engaged : bool
         True if robot brakes are engaged.
         This is relevant only when robot is deactivated (brakes are automatically disengaged upon robot activation).
+    connection_watchdog_active : bool
+        True if the connection watchdog is currently enabled/active (see ConnectionWatchdog API call)
 """
 
     def __init__(self):
@@ -1089,23 +1143,271 @@ class RobotStatus:
         self.simulation_mode = False
         self.recovery_mode = False
         self.error_status = False
-        self.pstop2State = MxStopState.MX_STOP_STATE_RESET
-        self.estopState = MxStopState.MX_STOP_STATE_RESET
+        self.error_code: Optional[int] = None
+        self.pstop2State = MxStopState.MX_STOP_STATE_RESET  # Deprecated, moved to RobotSafetyStatus.pstop2_state
+        self.estopState = MxStopState.MX_STOP_STATE_RESET  # Deprecated, moved to RobotSafetyStatus.estop_state
         self.pause_motion_status = False
         self.end_of_block_status = False
         self.brakes_engaged = False
+        self.connection_watchdog_enabled = False
 
     def __str__(self) -> str:
+        error_str = f'{self.error_status}' if self.error_code is None else f'{self.error_code}'
         return (f"Activated: {self.activation_state}, "
                 f"homed: {self.homing_state}, "
                 f"sim: {self.simulation_mode}, "
                 f"recovery mode: {self.recovery_mode}, "
-                f"error: {self.error_status}, "
-                f"pstop2 state: {self.pstop2State}, "
-                f"estop state: {str(self.estopState)}, "
+                f"error: {error_str}, "
                 f"pause motion: {str(self.pause_motion_status)}, "
                 f"EOB: {self.end_of_block_status}, "
-                f"brakes engaged: {self.brakes_engaged}")
+                f"brakes engaged: {self.brakes_engaged}, "
+                f"connection watchdog: {'enabled' if self.connection_watchdog_enabled else 'disabled'}")
+
+    def can_move(self) -> bool:
+        """Tells if robot can currently be moved (state is homed, or activated in recovery mode)
+
+        Returns:
+            bool: true if robot can be moved
+        """
+        return self.homing_state or (self.activation_state and self.recovery_mode)
+
+
+class RobotStaticSafetyStopMasks:
+    """Various useful bit masks used to categorize safety signals
+
+    Attributes
+    ----------
+    clearedByPsu : int
+        Bit mask to identify safety signals that must be reset using the power supply reset function.
+    withVmOff : int
+        Bit mask to identify safety signals that cause motor voltage to be removed.
+        These are category 1 safety stop signals (Estop, PStop1, etc.).
+    maskedByEnablingDevice : int
+        Bit mask to identify safety signals that are masked by the enabling device when the robot is in "manual"
+        operation mode (PStop1, PStop2)
+
+    """
+
+    def __init__(self):
+        # Useful masks to categorize RobotSafetyStatus.stop_mask above
+        # *** Note: Only available when connected on the JSON port (MX_ROBOT_TCP_PORT_CONTROL_JSON)
+        self.clearedByPsu = 0
+        self.withVmOff = 0
+        self.maskedByEnablingDevice = 0
+
+
+class RobotSafetyStatus:
+    """Class for storing the safety stop status of a Mecademic robot.
+
+    Attributes
+    ----------
+    robot_operation_mode : MxRobotOperationMode
+        The current robot operation mode, based on the the power supply key position (not supported on Meca500 robots).
+        When the key is not in "automatic" position, restrictions will apply for using the robot.
+    reset_ready : bool
+        Not yet implemented. Future implementation will:
+        Indicate if it's currently possible to reset safety stop conditions that are linked to the power supply reset
+        button because they remove motor power (EStop, PStop1, Operation mode change, robot reboot, etc.)
+    stop_mask : int
+        Bit mask that summarizes all safety stop conditions on the robot (including both active or resettable signals).
+        Use bits from MxSafeStopCategory
+    stop_resettable_mask : int
+        Bit mask that summarizes all safety stop conditions that are currently resettable.
+        Use bits from MxSafeStopCategory
+    estop_state : MxStopState
+        Current EStop status.
+        Note that Meca500 revision 3 or older never report this condition because these robots's power supply
+        will be shutdown completely in case of EStop (and thus this API will get disconnected from the robot instead).
+    pstop1_state : MxStopState
+        Current PStop1 status
+    pstop2_state : MxStopState
+        Current PStop2 status
+        *** IMPORTANT NOTE: PStop2 is not safety-rated on Meca500 robots ***
+    operation_mode_stop_state : MxStopState
+        Current status for "operation mode" safety stop condition (upon mode changes or when mode is locked)
+    enabling_device_released_stop_state : MxStopState
+        Current status for "enabling device" safety stop condition
+    voltage_fluctuation_stop_state : MxStopState
+        Current status for "voltage fluctuation" safety stop condition
+    reboot_stop_state : MxStopState
+        Current status for "robot just rebooted" safety stop condition
+    redundancy_fault_stop_state : MxStopState
+        Current status for "redundancy fault" safety stop condition
+    standstill_fault_stop_state : MxStopState
+        Current status for "standstill fault" safety stop condition
+    connection_dropped_stop_state : MxStopState
+        Current status for "connection dropped" safety stop condition
+    static_masks : RobotStaticSafetyStopMasks
+        Useful masks to categorize safety stop signals from stop_mask
+"""
+
+    def __init__(self):
+        self.robot_operation_mode = MxRobotOperationMode.MX_ROBOT_OPERATION_MODE_AUTO
+        self.reset_ready = False
+        self.stop_mask = 0
+        self.stop_resettable_mask = 0
+        self.estop_state = MxStopState.MX_STOP_STATE_RESET
+        self.pstop1_state = MxStopState.MX_STOP_STATE_RESET
+        self.pstop2_state = MxStopState.MX_STOP_STATE_RESET
+        self.operation_mode_stop_state = MxStopState.MX_STOP_STATE_RESET
+        self.enabling_device_released_stop_state = MxStopState.MX_STOP_STATE_RESET
+        self.voltage_fluctuation_stop_state = MxStopState.MX_STOP_STATE_RESET
+        self.reboot_stop_state = MxStopState.MX_STOP_STATE_RESET
+        self.redundancy_fault_stop_state = MxStopState.MX_STOP_STATE_RESET
+        self.standstill_fault_stop_state = MxStopState.MX_STOP_STATE_RESET
+        self.connection_dropped_stop_state = MxStopState.MX_STOP_STATE_RESET
+
+        # Useful masks to categorize stop_mask above
+        self.static_masks = RobotStaticSafetyStopMasks()
+
+    def set_estop_state(self, stop_state: MxStopState):
+        """Change the EStop state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            EStop state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_ESTOP, stop_state)
+
+    def set_pstop1_state(self, stop_state: MxStopState):
+        """Change the PStop1 state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            PStop1 state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_PSTOP1, stop_state)
+
+    def set_pstop2_state(self, stop_state: MxStopState):
+        """Change the PStop2 state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            PStop2 state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_PSTOP2, stop_state)
+
+    def set_operation_mode_stop_state(self, stop_state: MxStopState):
+        """Change the "operation mode" safety stop state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            Safety stop state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_OPERATION_MODE, stop_state)
+
+    def set_enabling_device_released_stop_state(self, stop_state: MxStopState):
+        """Change the "enabling device" safety stop state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            Safety stop state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_ENABLING_DEVICE_RELEASED, stop_state)
+
+    def set_voltage_fluctuation_stop_state(self, stop_state: MxStopState):
+        """Change the "voltage fluctuation" safety stop state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            Safety stop state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_VOLTAGE_FLUCTUATION, stop_state)
+
+    def set_reboot_stop_state(self, stop_state: MxStopState):
+        """Change the "robot just rebooted" safety stop state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            Safety stop state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_REBOOT, stop_state)
+
+    def set_redundancy_fault_stop_state(self, stop_state: MxStopState):
+        """Change the "redundancy fault" safety stop state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            Safety stop state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_REDUNDANCY_FAULT, stop_state)
+
+    def set_standstill_fault_stop_state(self, stop_state: MxStopState):
+        """Change the "standstill fault" safety stop state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            Safety stop state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_STANDSTILL_FAULT, stop_state)
+
+    def set_connection_dropped_stop_state(self, stop_state: MxStopState):
+        """Change the "connection dropped" safety stop state
+
+        Parameters
+        ----------
+        stop_state : MxStopState
+            Safety stop state to set
+        """
+        self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_CONNECTION_DROPPED, stop_state)
+
+    def set_stop_state(self, stop_category: MxSafeStopCategory, stop_state: MxStopState):
+        """Change a safety stop state
+
+        Parameters
+        ----------
+        stop_category : MxSafeStopCategory
+            Safety stop category to change state for
+        stop_state : MxStopState
+            Safety stop state to set
+        """
+        # Update specified stop state
+        if stop_category == MxSafeStopCategory.MX_SAFE_STOP_ESTOP:
+            self.estop_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_PSTOP1:
+            self.pstop1_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_PSTOP2:
+            self.pstop2_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_OPERATION_MODE:
+            self.operation_mode_stop_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_ENABLING_DEVICE_RELEASED:
+            self.enabling_device_released_stop_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_VOLTAGE_FLUCTUATION:
+            self.voltage_fluctuation_stop_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_REBOOT:
+            self.reboot_stop_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_REDUNDANCY_FAULT:
+            self.redundancy_fault_stop_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_STANDSTILL_FAULT:
+            self.standstill_fault_stop_state = stop_state
+        elif stop_category == MxSafeStopCategory.MX_SAFE_STOP_CONNECTION_DROPPED:
+            self.connection_dropped_stop_state = stop_state
+
+        # Update the masks too
+        if stop_state == MxStopState.MX_STOP_STATE_ACTIVE:
+            self.stop_mask |= stop_category
+            self.stop_resettable_mask &= ~stop_category
+        elif stop_state == MxStopState.MX_STOP_STATE_RESETTABLE:
+            self.stop_mask |= stop_category
+            self.stop_resettable_mask |= stop_category
+        else:
+            self.stop_mask &= ~stop_category
+            self.stop_resettable_mask &= ~stop_category
+
+    def __str__(self) -> str:
+        return (f"operation mode: {tools.robot_operation_mode_to_string(self.robot_operation_mode)}, "
+                f"reset_ready: {self.reset_ready}, "
+                f"stop_mask: {hex(self.stop_mask)}, "
+                f"stop_resettable_mask: {hex(self.stop_resettable_mask)}")
 
 
 class GripperStatus:
@@ -1414,6 +1716,158 @@ class VacuumState:
         return (f"Vacuum: {'on' if self.vacuum_on else 'off'}, "
                 f"Purge: {'on' if self.purge_on else 'off'}, "
                 f"Holding part: {self.holding_part}")
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+class CollisionObject:
+    """Class that represents one object that can enter in collision with another or with the work zone boundary.
+       A collision object is defined by its group (MxCollisionGroup) and, in some cases, an index (like the joint)
+
+    Attributes
+    ----------
+    group : MxCollisionGroup
+        The group (type) of this object
+    index: int
+        The index of the object within the group (for groups that can have multiple objects).
+        Available indices for groups are:
+        - MxCollisionGroup.MX_COLLISION_GROUP_ROBOT:     Use index values from MxCollisionGroupRobotIdx.
+        - MxCollisionGroup.MX_COLLISION_GROUP_FCP:       Index is not used (always 0).
+        - MxCollisionGroup.MX_COLLISION_GROUP_TOOL:      Always 0 when tool sphere is used.
+                                                         Future versions may support multiple tool objects.
+        - MxCollisionGroup.MX_COLLISION_GROUP_ENV_OBJ:   User-defined index of the user-defined environment objects.
+                                                         (not supported yet)
+        - MxCollisionGroup.MX_COLLISION_GROUP_WORK_ZONE: Index is not used (always 0).
+"""
+
+    def __init__(self,
+                 group=MxCollisionGroup.MX_COLLISION_GROUP_ROBOT,
+                 index=MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_BASE):
+
+        # The following are status fields.
+        self.set(group, index)
+
+    def set(self, group: MxCollisionGroup, index: int):
+        self.group = group
+        # Update the index according to new group (if appropriate)
+        if self.group == MxCollisionGroup.MX_COLLISION_GROUP_ROBOT:
+            self.index = MxCollisionGroupRobotIdx(index)
+        elif self.group == MxCollisionGroup.MX_COLLISION_GROUP_TOOL:
+            self.index = MxCollisionGroupToolIdx(index)
+        else:
+            self.index = int(index)
+
+    def __eq__(self, other):
+        if int(self.group) != int(other.group):
+            return False
+        if (self.group == MxCollisionGroup.MX_COLLISION_GROUP_ROBOT
+                or self.group == MxCollisionGroup.MX_COLLISION_GROUP_TOOL
+                or self.group == MxCollisionGroup.MX_COLLISION_GROUP_ENV_OBJ):
+            # In this group, the index is important
+            if int(self.index) != int(other.index):
+                return False
+        return True
+
+    def __str__(self) -> str:
+        return tools.robot_collision_group_to_string(self.group, self.index)
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+class SelfCollisionStatus:
+    """Class for storing the Mecademic robot's self collision status.
+       This is used when robot collision detection has been activated (with SetCollisionCfg).
+
+    Attributes
+    ----------
+    collision_detected : bool
+        True if the robot has detected a collision with itself.
+        Note that when the collision severity is set to MX_EVENT_SEVERITY_PAUSE_MOTION or greater
+        the robot will have stopped just before the collision actually occurs and collision_detected will be True
+        until ResumeMotion is called.
+        When collision severity is set to MX_EVENT_SEVERITY_WARNING the robot will actually continue to move and the
+        collision will actually occur. This can damage the robot or the tool.
+    object1 : MxCollisionGroup
+        When collision is detected, indicates the first of the two objects that caused the collision
+        (a part of the robot or the tool)
+    object2 : MxCollisionGroup
+        When collision is detected, indicates the second of the two objects that caused the collision
+        (a part of the robot or the tool)
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.collision_detected = False
+        self.object1 = CollisionObject()
+        self.object2 = CollisionObject()
+
+    def __str__(self) -> str:
+        if self.collision_detected:
+            return (f'Collision detected between {self.object1} and {self.object2}')
+        else:
+            return 'No collision detected'
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+class WorkZoneStatus:
+    """Class for storing the Mecademic robot's "in work zone" status.
+       This is used when robot work zone has been defined and enabled (with SetWorkZoneCfg).
+
+    Attributes
+    ----------
+    outside_work_zone : bool
+        True if the a part of the robot or the tool have reached the work zone boundary.
+        Note that when the collision severity is set to MX_EVENT_SEVERITY_PAUSE_MOTION or greater
+        the robot will have stopped just before the robot moves outside the work zone but flag outside_work_zone will
+        still be set to True until ResumeMotion is called.
+        When collision severity is set to MX_EVENT_SEVERITY_WARNING the flag outside_work_zone will report whether the
+        robot is currently outside the work zone.
+    object : MxCollisionGroup
+        Indicate the object that reached the work zone boundary (a part of the robot, or the tool)
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.outside_work_zone = False
+        self.object = CollisionObject()
+
+    def __str__(self) -> str:
+        if self.outside_work_zone:
+            return (f'Work zone boundary reached by {self.object}')
+        else:
+            return 'Robot is inside work zone'
+
+    def __repr__(self) -> str:
+        return str(self)
+
+
+class CollisionStatus:
+    """Class for storing the Mecademic robot's collision status (collision with self or work zone boundary).
+       This is used when robot collision detection has been activated (with SetCollisionCfg) or
+       work zone has been enabled (with SetWorkZoneCfg)
+
+    Attributes
+    ----------
+    self_collision_status : SelfCollisionStatus
+        Current self collision status
+    work_zone_status : WorkZoneStatus
+        Current "inside work zone" status
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.self_collision_status = SelfCollisionStatus()
+        self.work_zone_status = WorkZoneStatus()
+
+    def __str__(self) -> str:
+        return (f'Collision status: [ {self.self_collision_status}, {self.work_zone_status} ]')
 
     def __repr__(self) -> str:
         return str(self)

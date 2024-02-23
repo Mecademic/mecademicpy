@@ -11,6 +11,16 @@ A python module designed for robot products from Mecademic. The module offers to
 
  * 8.3 and up
 
+#### Supported Python versions
+Mecademicpy 2.1 targets Python version 3.7 and above.
+It has been tested with the following Python versions:
+* Python 3.7.17
+* Python 3.8.18
+* Python 3.9.18
+* Python 3.10.13
+* Python 3.11.8
+* Python 3.12.2
+
 ## Prerequisites
 
 Please read the [user programming manual](https://www.mecademic.com/support/) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
@@ -228,6 +238,22 @@ Improper use of the class can also cause exceptions to be raised. For example, c
 If the user is waiting on an event or checkpoint that the `Robot` class later determines will never occur, the event will unblock and raise an exception. For example, if the user is waiting on a checkpoint (`WaitCheckpoint`), but calls `Disconnect()` or `ClearMotion()` before the checkpoint is received, the checkpoint will unblock and raise an exception. Events and checkpoints will also unblock with exception on robot error state.
 
 The user should use python's built-in `try...except` blocks to handle appropriate exceptions.
+
+### Handling Robot safety stop conditions
+(Note: This section applies to robots running firmware 10.1 and above)
+
+The robot may encounter safety stop conditions based on external safety signals (EStop, PStop1, PStop2, operation mode changed, enabling device released) or other conditions (connection timeout).
+It is recommended to use `GetSafetyStatus` to learn about the current safety stop signals status.
+The `on_safety_stop`, `on_safety_stop_reset`, `on_safety_stop_resettable` and `on_safety_stop_state_change` callbacks can also be used to manage the safety stop signals status.
+
+Some safety stop signals cause motor voltage to be removed (EStop, PStop1, operation mode change, etc.).
+When these safety signals are present, the robot cannot be activated until the safety signals are reset.
+For safety reasons, resetting these signals cannot be done programmatically from the Mecademicpy API. They require to press the Reset button on the power supply (or trigger the reset function from dedicated power supply input pins).
+
+Other safety stop signals will cause the robot to pause motion (PStop2, enabling device released, connection dropped).
+Once these safety conditions are resolved, the robot may be activated or, if already activated, motion can be resumed using `ResumeMotion()`.
+
+For more information about safety signals, refer to the robot's programming manual.
 
 ### Preserved State on Disconnection
 
