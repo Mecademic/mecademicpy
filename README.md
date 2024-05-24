@@ -12,7 +12,7 @@ A python module designed for robot products from Mecademic. The module offers to
  * 8.3 and up
 
 #### Supported Python versions
-Mecademicpy 2.1 targets Python version 3.7 and above.
+Mecademicpy 2.2 targets Python version 3.7 and above.
 It has been tested with the following Python versions:
 * Python 3.7.17
 * Python 3.8.18
@@ -23,7 +23,7 @@ It has been tested with the following Python versions:
 
 ## Prerequisites
 
-Please read the [user programming manual](https://www.mecademic.com/support/) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
+Please read the [user programming manual](https://www.mecademic.com/res/doc/programming-manual) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
 
 To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is required to use python version 3.7 or higher. We recommend using Python 3.9 since this is the version on which this module is actively tested. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
 
@@ -63,7 +63,7 @@ robot.Home()
 
 The robot should move slightly to perform its homing routine. We can also use `robot.WaitHomed()` or [synchronous mode](#synchronous-vs.-asynchronous-mode) to block execution until homing is done.
 
-Once homing is complete, the robot is now ready to perform operations. [The user programming manual](https://www.mecademic.com/support/) or the documentation in the module is sufficient to be able to make the Robot perform actions and control the robot.
+Once homing is complete, the robot is now ready to perform operations. [The user programming manual](https://www.mecademic.com/res/doc/programming-manual) or the documentation in the module is sufficient to be able to make the Robot perform actions and control the robot.
 
 Here is an example of a simple motion to perform:
 
