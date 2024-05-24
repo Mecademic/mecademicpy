@@ -402,7 +402,7 @@ response = robot.SendCustomCommand('ResetError', expected_responses=response_cod
 Although raw numerical response codes can also be used, it is recommended to use the named aliases provided in `mx_robot_def.py` for clarity.
 
 ### Waiting for specific robot message
-The robot API method `GetInterruptableEvent()` creates a "waitable event". This an object that contains a "wait" function that will block the Python application execution until the robot sends the expected message (or until timeout).
+The robot API method `GetInterruptableEvent()` creates a "waitable event". This object contains a "wait" function that will block the Python application execution until the robot sends the expected message (or until timeout).
 This event object can optionally get interrupted (throw InterruptException) in case the robot encounters an error or in case motion gets cleared.
 
 Note that the robot API also contains other "wait" methods for various common conditions, like WaitActivated, WaitMotionPaused, WaitIdle, WaitHoldingPart, etc.
@@ -423,7 +423,7 @@ input_state_changed_event.wait(10)
 Example 2:
 ```python
 # Create interruptable event that will trigger when torque limit is exceeded, i.e. event id MX_ST_TORQUE_LIMIT_STATUS with data 1.
-# Here we want this event to be interrupted (throw InterruptException) if robot is in error or motion cleared.
+# Here we want this event to be interrupted (throw InterruptException) if the robot is in error or motion cleared.
 torque_exceeded_event = robot.GetInterruptableEvent(
     codes=[mdr.Message(mdr.MxRobotStatusCode.MX_ST_TORQUE_LIMIT_STATUS, '1')],
     abort_on_error=True,
