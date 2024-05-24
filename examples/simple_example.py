@@ -29,7 +29,7 @@ def simple_example():
 
         try:
             # Reset the robot configuration (joint limits, work zone, etc.)
-            #initializer.reset_robot_configuration(robot, activate_home=True)
+            #initializer.reset_robot_configuration(robot)
 
             # Send the commands to get the robot ready for operation.
             logger.info('Activating and homing robot...')
