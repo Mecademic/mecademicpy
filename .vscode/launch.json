@@ -1,27 +1,46 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: example",
-            "type": "python",
+            "name": "Run simple example",
+            "type": "debugpy",
             "request": "launch",
-            "program": "${file}",
+            "program": "examples/simple_example.py",
             "console": "integratedTerminal",
-            "justMyCode": false
-        }
-        ,
+            "args" : [
+            ]
+        },
         {
-            "name": "Python: firmware_update_example",
-            "args": [   "--firmware", "examples/Meca500_NE_LD_v9.3.0.4660-BAD.internal",
-                        "--ip", "192.168.0.100"],
-            "type": "python",
+            "name": "Run trajectory logger example",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "examples/trajectory_logger_example.py",
+            "console": "integratedTerminal",
+            "args" : [
+            ]
+        },
+        {
+            "name": "Update meca500",
+            "type": "debugpy",
             "request": "launch",
             "program": "examples/firmware_update_example.py",
             "console": "integratedTerminal",
-            "justMyCode": false
+            "args" : [
+                "--firmware", "Meca500_NE_LD_v9.4.6.5982-alpha.update.internal",
+                "--ip", "192.168.1.101"
+            ]
+        },
+        {
+            "name": "Update Mcs500",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "examples/firmware_update_example.py",
+            "console": "integratedTerminal",
+            "args" : [
+                "--firmware", "mcs500_NE_v9.4.6.5982-alpha.update",
+                "--ip", "192.168.0.100"
+            ]
+
         }
     ]
 }
