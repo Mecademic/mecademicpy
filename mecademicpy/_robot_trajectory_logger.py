@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""
+This file implements mecademicpy's trajectory logger that is used to capture robot's real-time data and save it
+as a csv file.
+This file contains internal code to mecademicpy. Users should use the trajectory capture API provided in robot.py
+"""
 from __future__ import annotations
 
 import queue
@@ -8,6 +13,7 @@ from pathlib import PurePath
 import pandas as pd
 
 from .mx_robot_def import MxRobotStatusCode as mx_st
+# pylint: disable=wildcard-import,unused-wildcard-import
 from .robot_classes import *
 from .robot_trajectory_files import RobotTrajectories
 
@@ -190,14 +196,14 @@ class _RobotTrajectoryLogger:
             field_attr = getattr(robot_rt_data, field)
         return field_attr
 
-    def _build_io_fields(self, prefix: str, type: str, count: int) -> list[str]:
+    def _build_io_fields(self, prefix: str, io_type: str, count: int) -> list[str]:
         """Build a list of digital IO field names
 
         Parameters
         ----------
         prefix : str
             IO bank prefix (ex: 'ioModule')
-        type : str
+        io_type : str
             IO type ('Input' or 'Output')
         count : int
             Number of IOs of this type in this bank
@@ -209,7 +215,7 @@ class _RobotTrajectoryLogger:
         """
         fields = []
         for idx in range(count):
-            fields.append(f'{prefix}{type}_{idx + 1}')
+            fields.append(f'{prefix}{io_type}_{idx + 1}')
         return fields
 
     def write_field_and_element_headers(self, robot_info: RobotInfo, robot_rt_data: RobotRtData):

@@ -12,7 +12,7 @@ A python module designed for robot products from Mecademic. The module offers to
  * 8.3 and up
 
 #### Supported Python versions
-Mecademicpy 2.1 targets Python version 3.7 and above.
+Mecademicpy 2.2 targets Python version 3.7 and above.
 It has been tested with the following Python versions:
 * Python 3.7.17
 * Python 3.8.18
@@ -23,7 +23,7 @@ It has been tested with the following Python versions:
 
 ## Prerequisites
 
-Please read the [user programming manual](https://www.mecademic.com/support/) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
+Please read the [user programming manual](https://www.mecademic.com/res/doc/programming-manual) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
 
 To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is required to use python version 3.7 or higher. We recommend using Python 3.9 since this is the version on which this module is actively tested. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
 
@@ -63,7 +63,7 @@ robot.Home()
 
 The robot should move slightly to perform its homing routine. We can also use `robot.WaitHomed()` or [synchronous mode](#synchronous-vs.-asynchronous-mode) to block execution until homing is done.
 
-Once homing is complete, the robot is now ready to perform operations. [The user programming manual](https://www.mecademic.com/support/) or the documentation in the module is sufficient to be able to make the Robot perform actions and control the robot.
+Once homing is complete, the robot is now ready to perform operations. [The user programming manual](https://www.mecademic.com/res/doc/programming-manual) or the documentation in the module is sufficient to be able to make the Robot perform actions and control the robot.
 
 Here is an example of a simple motion to perform:
 
@@ -259,6 +259,46 @@ For more information about safety signals, refer to the robot's programming manu
 
 Once the robot is disconnected, not all states are immediately cleared. Therefore, it is possible to still get the last-known state of the robot.
 
+### Restore a well-known robot configuration
+File robot_initializer.py contains utilities that can be used to configure the robot to a well-known state.
+It contains useful methods that can be called when reconnecting to a robot (which state is unknown) or activating a robot in order to restore a well-known state.
+See documentation in file robot_initializer.py for more information.
+
+`RobotWithTools`: This is a specialization of the `Robot` class that adds utilities required for using methods in robot_initializer.py.
+An application that wants to use the methods from robot_initializer.py shall instantiate `RobotWithTools` instead of `Robot`.
+
+`reset_robot_configuration`: This method restores default robot's static (permanent) configuration parameters, including joint limits, work zone limits, PStop2 configuration etc.
+
+`reset_motion_queue`: This method configures the robot's motion queue with default values (or user-defined values).
+It receives, as argument, an instance of class `MotionQueueParams` which lists all available motion queue parameters with their default values.
+This method is is useful every time the robot is reactivated (remember that the robot resets its motion queue to default parameters every time it's activated).
+
+`reset_vacuum_module`: This method is used to reset the vacuum module states (digital output states, vacuum parameters and states) to default values.
+It can be used at any time since the vacuum module is functional even when the robot is not activated. Vacuum parameters are thus managed separately from other motion queue parameters.
+
+Example
+```python
+# (use "with" block to ensure proper disconnection at end of block)
+with initializer.RobotWithTools() as robot:
+    robot.Connect(address='192.168.0.100')
+
+    # Reset the robot's static (permanent) configuration (joint limits, work zone, etc.)
+    initializer.reset_robot_configuration(robot)
+    
+    # Reset the vacuum module states (clear digital outputs, vacuum off)
+    initializer.reset_vacuum_module(robot)
+
+    # Activate robot and initialize its motion queue with desired parameters
+    mq_params = initializer.MotionQueueParams()
+    # Customize some motion queue parameters
+    mq_params.joint_vel = 20
+    mq_params.trf = [10,20,0,0,45,0]
+    initializer.reset_motion_queue(robot, params=mq_params, activate_home=True)
+
+    # Wait until robot is activated and homed
+    robot.WaitHomed()
+```
+
 ### Logging Data to File
 
 It is possible to continuously log the robot state to a file using the API either using the `StartLogging` and `EndLogging` functions or using the `FileLogger` context.
@@ -360,6 +400,47 @@ response = robot.SendCustomCommand('ResetError', expected_responses=response_cod
 ```
 
 Although raw numerical response codes can also be used, it is recommended to use the named aliases provided in `mx_robot_def.py` for clarity.
+
+### Waiting for specific robot message
+The robot API method `GetInterruptableEvent()` creates a "waitable event". This object contains a "wait" function that will block the Python application execution until the robot sends the expected message (or until timeout).
+This event object can optionally get interrupted (throw InterruptException) in case the robot encounters an error or in case motion gets cleared.
+
+Note that the robot API also contains other "wait" methods for various common conditions, like WaitActivated, WaitMotionPaused, WaitIdle, WaitHoldingPart, etc.
+Method `GetInterruptableEvent()` is generally used for specific cases that are not covered by other "Wait" methods.
+
+Example 1:
+```python
+# Create interruptable event that will wait until robot sends code MX_ST_RT_INPUT_STATE (which will happen if a digital input state changes)
+input_state_changed_event = robot.GetInterruptableEvent([mdr.MxRobotStatusCode.MX_ST_RT_INPUT_STATE])
+
+# (there can be code here that move the robot or whatever is expected to trigger digital input change)
+# (...)
+
+# Wait (block) until the event is received or until timeout (TimeoutException).
+input_state_changed_event.wait(10)
+```
+
+Example 2:
+```python
+# Create interruptable event that will trigger when torque limit is exceeded, i.e. event id MX_ST_TORQUE_LIMIT_STATUS with data 1.
+# Here we want this event to be interrupted (throw InterruptException) if the robot is in error or motion cleared.
+torque_exceeded_event = robot.GetInterruptableEvent(
+    codes=[mdr.Message(mdr.MxRobotStatusCode.MX_ST_TORQUE_LIMIT_STATUS, '1')],
+    abort_on_error=True,
+    abort_on_clear_motion=True)
+
+# (there can be code here that move the robot or do other things, for example)
+# (...)
+
+# Check if the torque limit exceeded status event was received
+if torque_exceeded_event.is_set():
+    # Torque limit was exceeded between call to GetInterruptableEvent above and now
+    pass
+
+# Wait (block) until the torque limit exceeded event is received or until timeout (TimeoutException)
+torque_exceeded_event.wait(10)
+
+```
 
 ### API Reference
 
