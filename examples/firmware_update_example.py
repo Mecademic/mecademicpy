@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
+"""
+This is a simple example application to show how to update the firmware
+of a Mecademic robot using the 'mecademicpy' Python package
+"""
 
-##############################################################################
-# This is a simple example application to show how to update the firmware
-# of a Mecademic robot using the 'mecademicpy' Python package
-##############################################################################
 from __future__ import annotations
 
 import argparse
@@ -13,11 +13,9 @@ import pathlib
 import mecademicpy.robot as mdr
 import mecademicpy.tools as tools
 
-if __name__ == "__main__":
-    """Main function for running script.
 
-    """
-
+def firmware_update_example():
+    """ Example for updating Mecademic robot firmware with Python code """
     # Minimal command-line parsing to collect IP address of the robot to update and
     # firmware file to install
     parser = argparse.ArgumentParser(description='Update Mecademic robot firmware.')
@@ -50,7 +48,12 @@ if __name__ == "__main__":
             robot.Connect(args.robot_ip)
             robot.UpdateRobot(args.firmware_file_path)
             print(f'Successfully installed firmware file {args.firmware_file_path} on robot {args.robot_ip}')
+        #pylint: disable=broad-exception-caught
         except Exception as e:
             # Print error if firmware update failed
             print(f'Update failed: {e}')
             exit(-1)
+
+
+if __name__ == "__main__":
+    firmware_update_example()

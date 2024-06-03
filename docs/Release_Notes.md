@@ -2,24 +2,36 @@
 ---
 The information contained herein is the property of Mecademic Inc. and shall not be reproduced in whole or in part without prior written approval of Mecademic Inc. The information herein is subject to change without notice and should not be construed as a commitment by Mecademic Inc. This manual will be periodically reviewed and revised.
 
-If you have any technical questions, please use the technical support form on our web site (http://mecademic.com/contact-technical-support).
+If you have any technical questions, please visit the support section of our web site (https://www.mecademic.com/res/support).
 
 Mecademic Inc.~assumes no responsibility for any errors or omissions in this document.
 
-Copyright &copy; 2023 by Mecademic Inc.
+Copyright &copy; 2024 by Mecademic Inc.
 
 ---
+## Version 2.2.0 (May 2024)
+**Features**
+- Updated API to report Mcs500 power supply input states (GetPowerSupplyInputs -> RobotPowerSupplyInputs)
+- Updated API to support new safety signal "minor error"
+- Updated API to support discarded checkpoint notifications from robot (firmware version 10.2.1 and above)
+- Added possibility to register/unregister callback methods without disconnecting from the robot
+- New method GetInterruptableEvent that can be used to wait for specific robot events (by id, or id and data)
+
+**Improvements**
+- Fixed coding style and errors reported by pylint 3.1.0
+- Improved Python type hints for RobotCallbacks
+- Improved documentation for RobotRtData to clarify which values are reported by the robot by default
 
 ## Version 2.1.0 (February 2024)
 **Features**
-- Update API to support new safety signals APIs:
+- Updated API to support new safety signals APIs:
   - For robot firmware 10.1 and above:
     - SetPStop2Cfg (for robot firmware 10.1 and above)
     - ConnectionWatchdog
   - Changes also available on older robot firmware versions:
     - GetSafetyStatus, returning new status class RobotSafetyStatus
     - And other appropriate APIs and callbacks in class Robot for managing safety signals
-- Update API to support self-collision and work zone configuration and status (robot firmware 10.1 and above)
+- Updated API to support self-collision and work zone configuration and status (robot firmware 10.1 and above)
   - GetCollisionStatus, returning new class CollisionStatus (reporting collision status and work zone status)
   - SetWorkZoneCfg, SetWorkZoneLimits, SetCollisionCfg
 - Support for SetTimeScaling (robot firmware 10.0 and above)

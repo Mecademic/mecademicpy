@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# pylint: disable=protected-access
+"""
+This file contains unit-tests for the mecademicpy module
+"""
 
 from __future__ import annotations
 
@@ -50,6 +54,7 @@ DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 # Fixture for creating robot object and also disconnecting on test teardown.
 @pytest.fixture
 def robot():
+    # pylint: disable=redefined-outer-name
     robot = mdr.Robot()
     assert robot is not None
 
@@ -61,20 +66,23 @@ def robot():
 
 
 # Automates sending the welcome message and responding to the robot serial query. Do not use for monitor_mode=True.
+# pylint: disable=redefined-outer-name
 def connect_robot_helper(robot: mdr.Robot,
                          yaml_filename='meca500_r3_v9.yml',
                          monitor_mode=False,
                          offline_mode=True,
                          disconnect_on_exception=False,
                          enable_synchronous_mode=False):
+    """Utility function to simulate a connection to the robot"""
 
     file_path = pathlib.Path.cwd().joinpath('tests', 'robot_config')
     yaml_file_full_path = pathlib.Path.joinpath(file_path, yaml_filename)
 
-    with open(yaml_file_full_path, 'r') as file_stream:
+    with open(yaml_file_full_path, 'r', encoding='utf-8') as file_stream:
         robot_config = yaml.safe_load(file_stream)
 
         # Set connection message
+        # pylint: disable=protected-access
         rx_queue = robot._monitor_rx_queue if monitor_mode else robot._command_rx_queue
         rx_queue.put(mdr.Message(mx_st.MX_ST_CONNECTED, robot_config['expected_connection_message']))
 
@@ -91,6 +99,7 @@ def connect_robot_helper(robot: mdr.Robot,
                 robot_responses.append(cmd_responses)
 
         # Start the fake robot thread (that will simulate response to expected requests)
+        # pylint: disable=protected-access
         fake_robot = threading.Thread(target=simple_response_handler,
                                       args=(robot._command_tx_queue, robot._command_rx_queue, expected_commands,
                                             robot_responses))
@@ -111,7 +120,9 @@ def connect_robot_helper(robot: mdr.Robot,
 # Function for exchanging one message with queue.
 def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expected_in: list[str],
                             desired_out: Union[list[list[mdr.Message]], list[mdr.Message]]):
+    """Simulated handler that simulates responses that the robot send to queued requests"""
     if isinstance(expected_in, list):
+        # pylint: disable=consider-using-enumerate
         for i in range(len(expected_in)):
             event = queue_in.get(block=True, timeout=1)
             assert event == expected_in[i]
@@ -128,8 +139,9 @@ def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expec
         queue_out.put(desired_out)
 
 
-# Server to listen for a connection. Send initial data in data_list on connect, send rest in response to any msg.
 def fake_server(address, port, data_list, server_up):
+    """ Server to listen for a connection. Send initial data in data_list on connect,
+    send rest in response to any msg.  """
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.settimeout(10)  # Allow up to 10 seconds to create the connection.
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -137,6 +149,7 @@ def fake_server(address, port, data_list, server_up):
     server_sock.listen()
     server_up.set()
 
+    # pylint: disable=unused-variable
     client, addr = server_sock.accept()
 
     if data_list:
@@ -162,9 +175,9 @@ def run_fake_server(address, port, data_list):
 # Simulated socket, initialized with list of responses, one response at a time is returned with recv().
 class FakeSocket():
 
-    def __init__(self, input):
+    def __init__(self, input_data):
         self.queue = queue.Queue()
-        for x in input:
+        for x in input_data:
             self.queue.put(x)
 
     def setblocking(self, _):
@@ -242,7 +255,6 @@ def test_successful_connection_split_response():
 
 # Test that we can connect to a Scara robot.
 def test_mcs500_connection(robot: mdr.Robot):
-    cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='mcs500_r1_v9.yml')
     assert not robot.GetStatusRobot().activation_state
     assert robot.GetRobotInfo().model == 'Mcs500'
@@ -254,7 +266,6 @@ def test_mcs500_connection(robot: mdr.Robot):
 
 # Test that we can connect to a M500 robot running older version 7.0.6
 def test_7_0_connection(robot: mdr.Robot):
-    cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v7_0.yml')
     assert not robot.GetStatusRobot().activation_state
     assert robot.GetRobotInfo().model == 'Meca500'
@@ -270,7 +281,6 @@ def test_7_0_connection(robot: mdr.Robot):
 
 # Test that we can connect to a M500 robot running version 8.3
 def test_8_3_connection(robot: mdr.Robot):
-    cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v8_3.yml')
     assert not robot.GetStatusRobot().activation_state
     assert robot.GetRobotInfo().model == 'Meca500'
@@ -285,7 +295,6 @@ def test_8_3_connection(robot: mdr.Robot):
 
 # Test that we can connect to a M500 robot running version 8.4
 def test_8_4_connection(robot: mdr.Robot):
-    cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v8_4.yml')
     assert not robot.GetStatusRobot().activation_state
     assert robot.GetRobotInfo().model == 'Meca500'
@@ -300,7 +309,6 @@ def test_8_4_connection(robot: mdr.Robot):
 
 # Test that we can connect to a M500 robot running version 9.1.5 and next
 def test_9_1_connection(robot: mdr.Robot):
-    cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
 
     assert not robot.GetStatusRobot().activation_state
@@ -324,7 +332,6 @@ def test_9_1_connection(robot: mdr.Robot):
 
 # Test that we can connect to a M500 robot running older version 8.4
 def test_already_connected(robot: mdr.Robot):
-    cur_dir = os.getcwd()
     connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
 
     # Try connecting again, should do nothing
@@ -361,6 +368,7 @@ def test_monitoring_connection_extra_messages(robot: mdr.Robot):
 
 
 # Ensure user can wrap robot object within "with" block.
+# pylint: disable=unused-argument
 def test_with_block(robot: mdr.Robot):
     called_callbacks = []
 
@@ -384,6 +392,7 @@ def test_with_block(robot: mdr.Robot):
 
 
 # Ensure user can wrap robot object within "with" block on an already existing robot
+# pylint: disable=unused-argument
 def test_with_block_twice(robot: mdr.Robot):
     called_callbacks = []
 
@@ -415,6 +424,7 @@ def test_with_block_twice(robot: mdr.Robot):
 
 
 # Ensure robot must not yet be connected when entering "with" block.
+# pylint: disable=unused-argument
 def test_with_pre_connected(robot: mdr.Robot):
     robot2 = mdr.Robot()
     connect_robot_helper(robot2)
@@ -595,8 +605,8 @@ def test_repeated_checkpoints(robot: mdr.Robot):
 def test_special_checkpoints(robot: mdr.Robot):
     connect_robot_helper(robot)
 
-    checkpoint_1 = robot.SetCheckpoint(1)
-    checkpoint_2 = robot.SetCheckpoint(2)
+    robot.SetCheckpoint(1)
+    robot.SetCheckpoint(2)
 
     with pytest.raises(mdr.TimeoutException):
         robot.WaitForAnyCheckpoint(timeout=0)
@@ -674,7 +684,7 @@ def test_events(robot: mdr.Robot):
 
     robot.ClearMotion()
     robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_CLEAR_MOTION, ''))
-    robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,0'))
+    robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,1,1,1'))
     robot.WaitMotionCleared(timeout=1)
 
     robot._robot_events.on_end_of_block.wait(timeout=1)
@@ -751,11 +761,18 @@ def test_callbacks(robot: mdr.Robot):
     # Checkpoint callbacks are different than other callbacks, use different function.
     checkpoint_id = 123
 
-    def checkpoint_callback(id):
+    # pylint: disable=redefined-builtin
+    def checkpoint_reached_callback(id):
         called_callbacks.append('on_checkpoint_reached')
         called_callbacks.append(id)
 
-    callbacks.on_checkpoint_reached = checkpoint_callback
+    # pylint: disable=redefined-builtin
+    def checkpoint_discarded_callback(id):
+        called_callbacks.append('on_checkpoint_discarded')
+        called_callbacks.append(id)
+
+    callbacks.on_checkpoint_reached = checkpoint_reached_callback
+    callbacks.on_checkpoint_discarded = checkpoint_discarded_callback
 
     # The two message callbacks are also unique.
     def command_message_callback(message):
@@ -792,7 +809,7 @@ def test_callbacks(robot: mdr.Robot):
         robot.GetRtGripperState(synchronous_update=False)
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_GRIPPER, '0,0,0,0,0,0'))
 
-        checkpoint_1 = robot.SetCheckpoint(checkpoint_id)
+        robot.SetCheckpoint(checkpoint_id)
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_CHECKPOINT_REACHED, str(checkpoint_id)))
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,1,0,0'))
@@ -864,6 +881,9 @@ def test_callbacks(robot: mdr.Robot):
         robot.SetRecoveryMode(False)
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_OFFLINE_START, ''))
+
+        robot.SetCheckpoint(checkpoint_id)
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_CHECKPOINT_DISCARDED, str(checkpoint_id)))
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '0,0,0,0,0,0,0'))
         robot.DeactivateRobot()
@@ -1060,8 +1080,8 @@ def test_synchronous_gets_legacy(robot: mdr.Robot):
     with pytest.raises(mdr.InvalidStateError):
         robot.GetRtTargetCartPos(include_timestamp=True)
 
-    robot.GetRtTargetJointPos(include_timestamp=False) == fake_data(seed=1)
-    robot.GetRtTargetCartPos(include_timestamp=False) == fake_data(seed=1)
+    assert robot.GetRtTargetJointPos(include_timestamp=False) == fake_data(seed=1)
+    assert robot.GetRtTargetCartPos(include_timestamp=False) == fake_data(seed=1)
 
     assert not robot.GetRobotInfo().rt_message_capable
 
@@ -1169,7 +1189,7 @@ def test_custom_command(robot: mdr.Robot):
     fake_robot.start()
 
     response_event = robot.SendCustomCommand('TestCommand', expected_responses=[mx_st.MX_ST_CMD_SUCCESSFUL])
-    response_event.wait(timeout=DEFAULT_TIMEOUT) == robot_response
+    assert response_event.wait(timeout=DEFAULT_TIMEOUT) == robot_response
 
     assert len(robot._custom_response_events) == 0
 
@@ -1203,9 +1223,9 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
     robot._command_rx_queue.put(io_module_outputs)
     robot._command_rx_queue.put(io_module_inputs)
 
-    startTime = time.monotonic()
+    start_time = time.monotonic()
     while len(robot._robot_rt_data.rt_io_module_inputs.data) == 0:
-        if time.monotonic() - startTime >= 1:
+        if time.monotonic() - start_time >= 1:
             raise TimeoutError('Timeout waiting for MX_ST_RT_INPUT_STATE to be handled for io_module')
         time.sleep(0.001)
 
@@ -1217,9 +1237,9 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
     robot._command_rx_queue.put(sig_gen_outputs)
     robot._command_rx_queue.put(sig_gen_inputs)
 
-    startTime = time.monotonic()
+    start_time = time.monotonic()
     while len(robot._robot_rt_data.rt_sig_gen_inputs.data) == 0:
-        if time.monotonic() - startTime >= 1:
+        if time.monotonic() - start_time >= 1:
             raise TimeoutError('Timeout waiting for MX_ST_RT_INPUT_STATE to be handled for sig_gen')
         time.sleep(0.001)
 

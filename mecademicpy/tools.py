@@ -1,3 +1,6 @@
+"""
+This file contains various tools and functions useful when using mecademicpy package.
+"""
 from __future__ import annotations
 
 import logging
@@ -5,11 +8,13 @@ import platform
 import subprocess
 import time
 from enum import IntEnum
-from typing import Optional, Union
+from typing import Optional
 
+# pylint: disable=wildcard-import,unused-wildcard-import
 from .mx_robot_def import *
 
 
+#pylint: disable=invalid-name
 def SetDefaultLogger(console_level=logging.INFO, filename: str = "", file_level=logging.INFO):
     """Utility function that prepares a default console logger and optionally a file logger
 
@@ -25,14 +30,15 @@ def SetDefaultLogger(console_level=logging.INFO, filename: str = "", file_level=
     handlers: list[logging.StreamHandler | logging.FileHandler] = []
     formatter = logging.Formatter(fmt='%(asctime)s.%(msecs)03d:[%(levelname)s]: %(message)s',
                                   datefmt='%Y-%m-%d %H:%M:%S')
-    consoleHandler = logging.StreamHandler()
-    consoleHandler.setFormatter(formatter)
-    handlers.append(consoleHandler)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    handlers.append(console_handler)
 
     if filename != "":
-        fileHandler = logging.FileHandler(filename=filename)
-        fileHandler.setFormatter(formatter)
-        handlers.append(fileHandler)
+        file_handler = logging.FileHandler(filename=filename)
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(file_level)
+        handlers.append(file_handler)
 
     logging.basicConfig(level=console_level, handlers=handlers)
 
@@ -131,7 +137,7 @@ def _ping(ip_address: str) -> bool:
     else:
         ping_command = ['ping', '-c', '1', ip_address]
     try:
-        command_result = subprocess.run(ping_command, capture_output=True, shell=False)
+        command_result = subprocess.run(ping_command, capture_output=True, shell=False, check=False)
         stdout = command_result.stdout.decode("utf-8")
     except subprocess.CalledProcessError as exc:
         logger.info(f"Error running command:'{ping_command}',  error: '{exc}'")
@@ -157,9 +163,14 @@ def robot_operation_mode_to_string(robot_operation_mode: MxRobotOperationMode) -
 
 
 def robot_model_is_meca500(robot_model: MxRobotModel):
-    """Tells if the specified robot model is a Meca500 robot (or any revision)"""
+    """Tells if the specified robot model is a Meca500 robot (any revision)"""
     return (robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R1 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R2
             or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R3 or robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4)
+
+
+def robot_model_is_mcs500(robot_model: MxRobotModel):
+    """Tells if the specified robot model is a Mcs500 robot (any revision)"""
+    return robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1
 
 
 def robot_model_is_mg2(robot_model: MxRobotModel):

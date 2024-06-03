@@ -12,11 +12,12 @@ Manipulated or processed data will use all attributes of RobotTrajectories, stor
 robot_df_hist.mid_dfs, statistics in robot_context.test_results and info on how statistics where produced in
 robot_context.test_context
 """
+from __future__ import annotations
+
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from tempfile import TemporaryDirectory
-from typing import Dict, List
 
 import pandas as pd
 from dataclasses_json import dataclass_json
@@ -42,11 +43,11 @@ class TestContext:
         -A function could inspect many columns, one after the other: [['col1', 'col2', 'col3']]
         -A function could compare two columns: [['col1'],['col2']]
         -A function could compare many columns, one after the other:
-         [['tg_col1', 'tg_col2', 'tg_col3'], ['col1', 'col2', 'col3']] (tg meaming target)
+         [['tg_col1', 'tg_col2', 'tg_col3'], ['col1', 'col2', 'col3']] (tg meaning target)
     """
     testing_function_name: str = field(default='')
-    data_origin_files: List[str] = field(default_factory=list)
-    data_columns_inspected: List[List[str]] = field(default_factory=list)
+    data_origin_files: list[str] = field(default_factory=list)
+    data_columns_inspected: list[list[str]] = field(default_factory=list)
 
 
 @dataclass_json
@@ -69,10 +70,10 @@ class RobotContext:
         This dict should contain results of tests made on robot rt_data after data was logged. This will not
         be filled by the logger.
     """
-    robot_information: List[Dict[str, str]] = field(default_factory=list)
-    sent_commands: List[str] = field(default_factory=list)
+    robot_information: list[dict[str, str]] = field(default_factory=list)
+    sent_commands: list[str] = field(default_factory=list)
     test_context: TestContext = field(default_factory=TestContext)
-    test_results: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    test_results: dict[str, dict[str, str]] = field(default_factory=dict)
 
     def to_file(self, filename):
         """ Creates a json file in which is stored relevant context
@@ -85,9 +86,11 @@ class RobotContext:
             Name given to the file in which info is stored. '.json' is added here
         """
 
+        # Note: to_json comes from @dataclass_json
+        # pylint: disable=no-member
         context_json = self.to_json(indent=4)
 
-        with open(f'{filename}.json', 'w') as file:
+        with open(f'{filename}.json', 'w', encoding='utf-8') as file:
             file.write(context_json)
 
     @staticmethod
@@ -105,8 +108,10 @@ class RobotContext:
             Context info built from json file
         """
 
-        with open(filepath) as file:
+        with open(filepath, encoding='utf-8') as file:
             file_content = file.read()
+            # Note: from_json comes from @dataclass_json
+            # pylint: disable=no-member
             robot_context = RobotContext.from_json(file_content)
 
         return robot_context
@@ -127,9 +132,9 @@ class RobotDfHist:
         Final results of processing. 'RobotDfHist' should contain at least one dataframe in this list (this is the only
         attribute that is needed at the end of a function producing a 'RobotDfHist', all other attributes are optional)
     """
-    input_dfs: List[pd.DataFrame] = field(default_factory=list)
-    mid_dfs: Dict[str, pd.DataFrame] = field(default_factory=dict)
-    output_dfs: List[pd.DataFrame] = field(default_factory=list)
+    input_dfs: list[pd.DataFrame] = field(default_factory=list)
+    mid_dfs: dict[str, pd.DataFrame] = field(default_factory=dict)
+    output_dfs: list[pd.DataFrame] = field(default_factory=list)
 
     def from_other(self, other, input_names=None, output_names=None):
         """This function fills this object with the contents of another 'RobotDfHist'
@@ -170,7 +175,7 @@ class RobotDfHist:
             self.mid_dfs[name] = df
 
     def make_dict(self):
-        """Creates a dictionnary using all dataframes found in this object
+        """Creates a dictionary using all dataframes found in this object
 
         Returns
         -------
@@ -242,7 +247,7 @@ class RobotDfHist:
             try:
                 attr_list[index] = df
             except IndexError:
-                for i in range(index - len(attr_list) + 1):
+                for _ in range(index - len(attr_list) + 1):
                     attr_list.append(None)
                 attr_list[index] = df
         else:
@@ -267,7 +272,7 @@ class RobotDfHist:
         Parameters
         ----------
         other : RobotDfHist object
-            Object comapred to self
+            Object compared to self
 
         Returns
         -------
