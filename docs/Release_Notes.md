@@ -6,9 +6,35 @@ If you have any technical questions, please visit the support section of our web
 
 Mecademic Inc.~assumes no responsibility for any errors or omissions in this document.
 
-Copyright &copy; 2024 by Mecademic Inc.
+Copyright &copy; 2025 by Mecademic Inc.
 
 ---
+## Version 2.3.0 (March 2025)
+**Features**
+- Support for time-based movements (`SetMoveMode`, `SetMoveDurationCfg`, `SetMoveDuration`)
+- Support for fast simulation mode (`MxRobotSimulationMode.MX_SIM_MODE_FAST` with `ActivateSim`)
+- Support for relative-torque limit mode (`MxTorqueLimitsMode.MX_TORQUE_LIMITS_MODE_DELTA_WITH_EXPECTED` with `SetTorqueLimitsCfg`)
+- Support for robot variables (`CreateVariable`, `robot.vars.my_var=my_val`, etc.)
+
+**Fixes**
+- ROBOT-3186: RobotRtData does not populate data correctly when in Monitor mode
+
+**Improvements**
+- Improved performance in some situations
+- Better detection of closed connection with the robot and awakening awaiting threads
+
+**Migration Guide**
+Some methods have been renamed. Although the legacy name remains supported, we recommend updating your
+code to use the new function names:
+- `ListPrograms` -> `ListFiles`
+- `LoadProgram` -> `LoadFile`
+- `SaveProgram` -> `SaveFile`
+- `DeleteProgram` -> `DeleteFile`
+- `SaveProgram` -> `SaveFile`
+- `GetNetworkConfig` -> `GetNetworkCfg`
+
+The `offline_mode` parameter of `robot.Connect` has been removed (was not used).
+
 ## Version 2.2.0 (May 2024)
 **Features**
 - Updated API to report Mcs500 power supply input states (GetPowerSupplyInputs -> RobotPowerSupplyInputs)
@@ -104,7 +130,7 @@ or
 - Update API to support new features from 9.0 robot firmware
 
 **Fixes**
-- Rename udpate_robot to UpdateRobot for API name uniformity
+- Rename update_robot to UpdateRobot for API name uniformity
 - Fix UpdateRobot to support 8.4.4 and up
 - Fix annotation issues for Python 3.7. Added annotations for return values
 - Prevent Disconnect() errors when already disconnected
