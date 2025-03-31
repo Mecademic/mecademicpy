@@ -1,0 +1,36 @@
+# Robot model
+model: "mca250"
+# Robot model revision
+revision: 1
+# Boolean indicating of the robot is virtual or not. (virtual is different from fake robot)
+virtual: True
+
+# This is the connection string returned to the Python API when you connect to a 'fake' robot
+expected_connection_message: "Connected to Mca250 R1-virtual v10.2.1"
+
+#
+# expected_connect_commands is a list of commands send by the Python API on connect
+# That list is used by the 'fake' robot to answer those command properly
+#
+# Each command is composed of:
+#   - name: Name of the command (just like in the web)
+#   - response_code: Command return code.
+#   - response: String return by the 'fake' to the Python API
+expected_connect_commands:
+  - name: "GetRobotSerial"
+    response_code: 2083
+    response: 'mca250-250250'
+  - name: "GetFwVersionFull"
+    response_code: 2082
+    response: '10.2.2.9999-tests'
+  - name: "GetRealTimeMonitoring"
+    response_code: 2117
+    response: ''
+  - name: "GetMonitoringInterval"
+    response_code: 2116
+    response: '0.017'
+  - name: "SetCtrlPortMonitoring(1)"
+    response_code: 2096
+    response: 'Monitoring on control port enabled/disabled'
+    extra_event: 2007
+    extra_event_data: '0,0,0,0,1,1,1'
