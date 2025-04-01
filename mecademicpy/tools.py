@@ -4,14 +4,49 @@ This file contains various tools and functions useful when using mecademicpy pac
 from __future__ import annotations
 
 import logging
+import os
+import pathlib
 import platform
+import re
+import socket
 import subprocess
+import sys
 import time
+import traceback
+from datetime import datetime
 from enum import IntEnum
-from typing import Optional
+from typing import Callable, Optional
+
+try:
+    from colorama import Fore, Style
+    COLOR_RED = Fore.RED
+    COLOR_YELLOW = Fore.YELLOW
+    COLOR_RESET = Style.RESET_ALL
+except ImportError:
+    # Define empty strings if colorama is not installed
+    COLOR_RED = ""
+    COLOR_YELLOW = ""
+    COLOR_RESET = ""
 
 # pylint: disable=wildcard-import,unused-wildcard-import
 from .mx_robot_def import *
+
+
+class MxTraceFormatter(logging.Formatter):
+
+    def format(self, record):
+        try:
+            timestamp = datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S')
+        # pylint: disable=broad-exception-caught
+        except Exception:
+            # Note: This happen when quitting
+            timestamp = ""
+        prefix = f"{timestamp} [{record.levelname}]"
+        if record.levelno >= logging.ERROR:
+            prefix = f"{COLOR_RED}{prefix}"
+        elif record.levelno >= logging.WARNING:
+            prefix = f"{COLOR_YELLOW}{prefix}"
+        return f"{prefix}: {record.msg}{COLOR_RESET}"
 
 
 #pylint: disable=invalid-name
@@ -28,8 +63,7 @@ def SetDefaultLogger(console_level=logging.INFO, filename: str = "", file_level=
         Logging level to use in the file (if filename is not empty), by default logging.INFO
     """
     handlers: list[logging.StreamHandler | logging.FileHandler] = []
-    formatter = logging.Formatter(fmt='%(asctime)s.%(msecs)03d:[%(levelname)s]: %(message)s',
-                                  datefmt='%Y-%m-%d %H:%M:%S')
+    formatter = MxTraceFormatter()
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(formatter)
     handlers.append(console_handler)
@@ -41,6 +75,94 @@ def SetDefaultLogger(console_level=logging.INFO, filename: str = "", file_level=
         handlers.append(file_handler)
 
     logging.basicConfig(level=console_level, handlers=handlers)
+
+
+def shorten_stack_trace_file_path(trace_line):
+    """Replaces the file path in a call trace line with the filename, removing quotes.
+
+  Args:
+    trace_line: The call trace line string.
+
+  Returns:
+    The call trace line with the file path replaced by the filename, without quotes.
+  """
+
+    # Find the index of "File "
+    file_index = trace_line.find("File ")
+    if file_index == -1:
+        return trace_line
+
+    # Extract the path portion with quotes
+    match = re.search(r'File "(.*?)",', trace_line)
+    if not match:
+        return trace_line
+
+    path = match.group(1)  # Extract the captured path without quotes
+    filename = os.path.basename(path)
+
+    # Replace the path with the filename
+    return trace_line.replace(match.group(0), f"File {filename},")
+
+
+def format_stack(exception: Optional[Exception] = None,
+                 from_str: Optional[str] = None,
+                 included=False,
+                 format_callback: Optional[Callable[[str], str]] = None) -> str:
+    """Format the part of the call stack starting from the specified file name
+    (i.e. avoid showing all parent functions in the call stack while we're interested in the problem within child code)
+
+    Args:
+        exception (Optional[Exception]): Exception to format partial call stack for.
+                                         The current call stack is used if None.
+        from_str (Optional[str]):   File path or string to search in the call stack.
+                                    The stack will be formatted starting from this file/string.
+                                    The whole stack is formatted if None.
+        included (bool, optional): Include from_str in the trace (else start with next). Defaults to False.
+        format_callback (Callable): Callback to customize the formatted call stack, called for each formatted line.
+
+    Returns:
+        str: A string that contains the call stack of the provided exception (or current call stack),
+             starting from from_str (or just after) if necessary.
+    """
+    # Get the call stack from the exception
+    if exception:
+        # Get the exception call stack
+        stack = traceback.format_tb(exception.__traceback__)
+    else:
+        # Get the current call stack
+        stack = traceback.format_stack()
+
+    trimmed_called_stack: list[str] = []
+    found_file = False
+    found_next_file = False
+    skip_last = False
+    if from_str:
+        # Start formatting the call stack from the specified file
+        from_str = pathlib.Path(from_str).stem
+    else:
+        # Start formatting the call stack from the main python file (avoid system stuff that precedes)
+        from_str = pathlib.Path(sys.argv[0]).stem
+        if exception is None:
+            # Also skip the last call stack item (this function)
+            skip_last = True
+
+    for item in stack:
+        if from_str in item:
+            found_file = True
+            found_next_file = False
+
+        if found_next_file or (included and found_file):
+            formatted_line = shorten_stack_trace_file_path(item)
+            if format_callback is not None:
+                formatted_line = format_callback(formatted_line)
+            trimmed_called_stack.append(formatted_line)
+        found_next_file |= found_file
+
+    if skip_last:
+        trimmed_called_stack = trimmed_called_stack[:-1]
+
+    # Return the stack as a string
+    return ''.join(trimmed_called_stack)
 
 
 def string_to_numbers(input_string: str) -> list:
@@ -151,6 +273,72 @@ def _ping(ip_address: str) -> bool:
     return False
 
 
+def socket_connect_loop(address: str, port: int, timeout: float = 1.0) -> socket.socket:
+    """Function that retry connecting a socket to remote IP/Port until it succeeds or until timeout
+
+    Args:
+        address (str): Remote address (IP or host name) to connect to
+        port (int): Remote port to connect to
+        timeout (float, optional): Maximum time retrying the connection. Defaults to 1.0.
+
+    Raises:
+        TimeoutError: Timeout trying to establish the connection
+        ConnectionError: Failure to establish the connection for reason other than a timeout
+                         (generally means that remote side is explicitly refusing the connection)
+
+    Returns:
+        socket.socket: The connected socket
+    """
+    start_time = time.monotonic()
+    loop_timeout = 0.1
+    success = False
+    try:
+        while True:
+            # Create socket and attempt connection.
+            new_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            new_socket.settimeout(loop_timeout)
+            try:
+                new_socket.connect((address, port))
+                success = True
+                return new_socket
+            except (socket.timeout, TimeoutError) as exception:
+                if (time.monotonic() - start_time) < timeout:
+                    new_socket.close()
+                    continue
+                else:
+                    raise TimeoutError(f'Unable to connect to {address}:{port} after {timeout}s, exception: {exception}'
+                                       ) from exception
+            except (ConnectionAbortedError, ConnectionRefusedError, ConnectionResetError) as exception:
+                if (time.monotonic() - start_time) < timeout:
+                    time.sleep(loop_timeout)
+                else:
+                    error_message = f'Unable to connect to {address}:{port}, exception: {exception}'
+                    raise ConnectionError(error_message) from exception
+    finally:
+        if not success:
+            new_socket.close()
+
+
+def interruptable_sleep(timeout: float, condition_callback: Callable[[float], bool] = None):
+    """Similar to time.sleep but can be interrupted
+
+    Args:
+        timeout (float): Timeout to wait for
+        condition_callback (Callable[[float], bool], optional): Callback function that will receive the elapsed time
+            and return True to interrupt this sleep. Defaults to None.
+    """
+    start_time = time.time()
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > timeout:
+            break
+        if condition_callback is not None:
+            stop = condition_callback(elapsed)
+            if stop:
+                break
+        time.sleep(0.1)  # Sleep in short intervals to allow interruption
+
+
 def robot_operation_mode_to_string(robot_operation_mode: MxRobotOperationMode) -> str:
     """Returns a human-readable string that represents the specified robot operation mode"""
     if robot_operation_mode == MxRobotOperationMode.MX_ROBOT_OPERATION_MODE_LOCKED:
@@ -175,7 +363,9 @@ def robot_model_is_mcs500(robot_model: MxRobotModel):
 
 def robot_model_is_mg2(robot_model: MxRobotModel):
     """Tells if the specified robot model is a Mecademic 2nd generation robot (Mcs500, ...)"""
-    return (robot_model == MxRobotModel.MX_ROBOT_MODEL_M1000_R1 or robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1)
+    return (robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA1000_R1
+            or robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA250_R1
+            or robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1)
 
 
 def robot_model_support_eoat(robot_model: MxRobotModel):

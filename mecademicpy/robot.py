@@ -14,6 +14,8 @@ from typing import Optional, Tuple, Union
 
 import deprecation
 
+import mecademicpy.robot_sidecar_classes as rsc
+
 from ._robot_base import _Robot, disconnect_on_exception_decorator
 from .mx_robot_def import *
 from .robot_classes import *
@@ -100,7 +102,6 @@ class Robot(_Robot):
                 enable_synchronous_mode: bool = False,
                 disconnect_on_exception: bool = True,
                 monitor_mode: bool = False,
-                offline_mode: bool = False,
                 timeout=1.0):
         """Attempt to connect to a Mecademic Robot.
            This function is synchronous (awaits for success or timeout) even when using this class in asynchronous mode
@@ -118,12 +119,16 @@ class Robot(_Robot):
             Also note that the robot will automatically pause motion whenever a disconnection occurs.
         monitor_mode : bool
             If true, command connection will not be established, only monitoring connection.
-        offline_mode : bool
-            If true, socket connections are not created, only used for testing.
+        timeout : float
+            Time allowed to try connecting to the robot before this function returns.
 
         """
-        return super().Connect(address, enable_synchronous_mode, disconnect_on_exception, monitor_mode, offline_mode,
-                               timeout)
+        return super()._Connect(address,
+                                enable_synchronous_mode,
+                                disconnect_on_exception,
+                                monitor_mode,
+                                offline_mode=False,
+                                timeout=timeout)
 
     def Disconnect(self):
         """Disconnects Mecademic Robot object from the Mecademic robot.
@@ -145,6 +150,7 @@ class Robot(_Robot):
             (see doc for method Connect for details) """
         return super().IsSynchronousMode()
 
+    # mx:export_to=robot_sidecar_globals.py
     def IsAllowedToMove(self) -> bool:
         """Tells if the robot is currently allowed to be moved (i.e. homed, or activated in recovery mode)"""
         can_move = False
@@ -170,7 +176,17 @@ class Robot(_Robot):
         """
         self._enable_synchronous_mode = sync_mode
 
-    def ConnectionWatchdog(self, timeout: float):
+    def Sync(self):
+        """ Synchronize with the robot (send a request and await for the response).
+            This can be useful to make sure that no response from previous asynchronous requests are in the network
+            pipeline and would be received later.
+            Note: This Sync method is only valid for synchronization with commands that get an immediate response.
+                  It will not work with commands related to the motion queue because their response may be received
+                  asynchronously later (after the response to this "Sync")
+        """
+        self._send_sync_command(command=None)  # Note: This will simply send the "sync" command
+
+    def ConnectionWatchdog(self, timeout: float, message: Optional[str] = None):
         """Enable, refresh or disable the connection watchdog.
            This function is non-blocking.
 
@@ -193,10 +209,13 @@ class Robot(_Robot):
 
         Args:
             timeout (float): Connection watchdog timeout (in seconds) to enable/refresh (or 0 to disable the watchdog)
+            message (Optional[str]): Optional message to print in the robot log in case the connection times-out after
+                                     this call to ConnectionWatchdog. This can be used to help determine what the
+                                     application was doing when the connection has timed out.
         """
-        return super().ConnectionWatchdog(timeout)
+        return super().ConnectionWatchdog(timeout, message)
 
-    def AutoConnectionWatchdog(self, enable: bool):
+    def AutoConnectionWatchdog(self, enable: bool, timeout: float = 0, message: Optional[str] = None):
         """Enable automatic connection watchdog managed by this Robot class.
            See method ConnectionWatchdog for detailed explanations about the connection watchdog.
 
@@ -209,44 +228,57 @@ class Robot(_Robot):
 
         Args:
             enable (bool): Enable (else disable) the automatic connection watchdog refresh
+            timeout (float): Connection watchdog to set as a last call to the robot by this function.
+                             Default is 0 (connection watchdog is completely disabled).
+                             If non-zero, don't forget to call ConnectionWatchdog afterwards because the watchdog will
+                             still be active on the robot.
+            message (Optional[str]): See ConnectionWatchdog for details
         """
-        return super().AutoConnectionWatchdog(enable)
+        return super().AutoConnectionWatchdog(enable, timeout, message)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def ActivateRobot(self):
         """Activate the robot."""
         return super().ActivateRobot()
 
+    # mx:export_to=robot_sidecar_globals.py
     def DeactivateRobot(self):
         """Deactivate the robot."""
         return super().DeactivateRobot()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def Home(self):
         """Home the robot."""
         return super().Home()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def ActivateAndHome(self):
         """Utility function that combines activate and home."""
         super().ActivateRobot()
         super().Home()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def PauseMotion(self):
         """Immediately pause robot motion. """
         return super().PauseMotion()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def ResumeMotion(self):
         """Un-pause robot motion."""
         return super().ResumeMotion()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def ClearMotion(self):
         """Clear the motion queue, includes implicit PauseMotion command."""
         return super().ClearMotion()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveJoints(self, *args: float):
         """Move the robot by specifying each joint's target angular position.
@@ -264,6 +296,7 @@ class Robot(_Robot):
 
         self._send_motion_command('MoveJoints', args)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveJointsRel(self, *args: float):
         """Move the robot relative to current position by specifying each joint's offset angular position.
@@ -281,6 +314,7 @@ class Robot(_Robot):
 
         self._send_motion_command('MoveJointsRel', args)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveJointsVel(self, *args: float):
         """Moves joints at desired velocities.
@@ -298,6 +332,7 @@ class Robot(_Robot):
 
         self._send_motion_command('MoveJointsVel', args)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MovePose(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Move robot's tool to an absolute Cartesian position (non-linear move, but all joints arrive simultaneously).
@@ -317,6 +352,7 @@ class Robot(_Robot):
         [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MovePose', [x, y, z, alpha, beta, gamma])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveJump(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Move robot to desired position but performing an arch of specified height between start and end positions.
@@ -339,6 +375,7 @@ class Robot(_Robot):
         [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MoveJump', [x, y, z, alpha, beta, gamma])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveLin(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Linearly move robot's tool to an absolute Cartesian position.
@@ -358,6 +395,7 @@ class Robot(_Robot):
         [alpha, beta, gamma] = self._normalize_cart_cmd_args(alpha, beta, gamma)
         self._send_motion_command('MoveLin', [x, y, z, alpha, beta, gamma])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveLinRelTrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Linearly move robot's tool to a Cartesian position relative to current TRF position.
@@ -387,6 +425,7 @@ class Robot(_Robot):
         """
         self.MoveLinRelTrf(x, y, z, alpha, beta, gamma)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveLinRelWrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Linearly move robot's tool to a Cartesian position relative to a reference frame that has the same
@@ -417,6 +456,7 @@ class Robot(_Robot):
         """
         self.MoveLinRelWrf(x, y, z, alpha, beta, gamma)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveLinVelTrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Move robot's by Cartesian velocity relative to the TRF.
@@ -449,6 +489,7 @@ class Robot(_Robot):
         """
         self.MoveLinVelTrf(x, y, z, alpha, beta, gamma)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveLinVelWrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Move robot's by Cartesian velocity relative to the WRF.
@@ -481,6 +522,7 @@ class Robot(_Robot):
         """
         self.MoveLinVelWrf(x, y, z, alpha, beta, gamma)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetVelTimeout(self, t: float):
         """Maximum time the robot will continue to move after a velocity move command was sent.
@@ -495,6 +537,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetVelTimeout', [t])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetConf(self, shoulder: int = None, elbow: int = None, wrist: int = None):
         """Manually set inverse kinematics options (and disable auto-conf).
@@ -516,6 +559,7 @@ class Robot(_Robot):
         [shoulder, elbow, wrist] = self._normalize_conf_cmd_args(shoulder, elbow, wrist)
         self._send_motion_command('SetConf', [shoulder, elbow, wrist])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetAutoConf(self, e: int):
         """Enable or disable auto-conf (automatic selection of inverse kinematics options).
@@ -528,6 +572,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetAutoConf', [int(e)])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetConfTurn(self, n: int):
         """Manually set the last joint turn configuration parameter.
@@ -540,6 +585,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetConfTurn', [n])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetAutoConfTurn(self, e: int):
         """Enable or disable auto-conf (automatic selection of inverse kinematics options) for joint 6.
@@ -552,6 +598,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetAutoConfTurn', [int(e)])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetBlending(self, p: float):
         """Set percentage of blending between consecutive movements in the same mode (velocity or cartesian).
@@ -566,6 +613,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetBlending', [p])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetCartAcc(self, p: float):
         """Set target acceleration (linear and angular) during MoveLin commands.
@@ -578,6 +626,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetCartAcc', [p])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetCartAngVel(self, w: float):
         """Set maximum angular velocity during MoveLin commands.
@@ -592,6 +641,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetCartAngVel', [w])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetCartLinVel(self, v: float):
         """Set maximum linear velocity during MoveLin commands.
@@ -606,6 +656,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetCartLinVel', [v])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetJointAcc(self, p: float):
         """Set target joint acceleration during MoveJoints commands.
@@ -618,6 +669,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetJointAcc', [p])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetJointVel(self, p: float):
         """Set target joint velocity during MoveJoints commands.
@@ -630,6 +682,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetJointVel', [p])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetJointVelLimit(self, p: float):
         """Change the safety joint velocity limit that is applied to all type of moves.
@@ -646,8 +699,49 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetJointVelLimit', [p])
 
-    # pylint: disable=invalid-name
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
+    def SetMoveMode(self, mode=MxMoveMode.MX_MOVE_MODE_VELOCITY):
+        """Select the current move mode (velocity-based or time-based) for following mode commands.
+        The default mode when robot is activated is velocity-based.
+
+        Parameters
+        ----------
+        mode : MxMoveMode
+            The move mode to use.
+
+        """
+        self._send_motion_command('SetMoveMode', [mode])
+
+    # mx:export_to=robot_sidecar_globals.py
+    @disconnect_on_exception_decorator
+    def SetMoveDurationCfg(self, severity=MxEventSeverity.MX_EVENT_SEVERITY_WARNING):
+        """Set the configuration of the time-based movements.
+
+        Parameters
+        ----------
+        severity : MxEventSeverity
+            Severity level when the requested move duration is too short for the robot.
+
+        """
+        self._send_motion_command('SetMoveDurationCfg', [severity])
+
+    # mx:export_to=robot_sidecar_globals.py
+    @disconnect_on_exception_decorator
+    def SetMoveDuration(self, t: float):
+        """Set the duration of move commands when the move mode is time-based (see SetMoveMove).
+
+        Parameters
+        ----------
+        t : float
+            Move duration in seconds.
+
+        """
+        self._send_motion_command('SetMoveDuration', [t])
+
+    # mx:export_to=robot_sidecar_globals.py
+    @disconnect_on_exception_decorator
+    # pylint: disable=invalid-name
     def SetMoveJumpHeight(self,
                           startHeight: float = MX_MOVE_JUMP_DEFAULT_HEIGHT_MM,
                           endHeight: float = MX_MOVE_JUMP_DEFAULT_HEIGHT_MM,
@@ -676,6 +770,8 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetMoveJumpHeight', [startHeight, endHeight, minHeight, maxHeight])
 
+    # mx:export_to=robot_sidecar_globals.py
+    #pylint: disable=invalid-name
     @disconnect_on_exception_decorator
     def SetMoveJumpApproachVel(self,
                                startVel: float = MX_MOVE_JUMP_DEFAULT_APPROACH_VEL_MM_SEC,
@@ -709,6 +805,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetMoveJumpApproachVel', [startVel, startDist, endVel, endDist])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetTrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Set the TRF (tool reference frame) Cartesian position.
@@ -739,6 +836,7 @@ class Robot(_Robot):
         """
         self.SetTrf(x, y, z, alpha, beta, gamma)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetWrf(self, x: float, y: float, z: float, alpha: float = None, beta: float = None, gamma: float = None):
         """Set the WRF (world reference frame) Cartesian position.
@@ -769,6 +867,7 @@ class Robot(_Robot):
         """
         self.SetWrf(x, y, z, alpha, beta, gamma)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetCheckpoint(self, n: int) -> InterruptableEvent:
         """Set checkpoint with desired id.
@@ -814,6 +913,7 @@ class Robot(_Robot):
             assert MX_CHECKPOINT_ID_MIN <= n <= MX_CHECKPOINT_ID_MAX
             return self._set_checkpoint_impl(n, send_to_robot=False)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitGripperMoveCompletion(self, timeout: Optional[float] = None):
         """Wait until the most recent gripper move command has completed.
@@ -854,6 +954,7 @@ class Robot(_Robot):
         """
         return super().GripperOpen()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GripperClose(self):
         """Close the gripper.
@@ -874,6 +975,7 @@ class Robot(_Robot):
         """
         return super().GripperClose()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def MoveGripper(self, target: Union[bool, float]):
         """Move the gripper to a target position.
@@ -907,6 +1009,7 @@ class Robot(_Robot):
         """
         return super().MoveGripper(target)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetGripperForce(self, p: float):
         """Set the gripper's force in percent.
@@ -919,6 +1022,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetGripperForce', [p])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetGripperVel(self, p: float):
         """Set the gripper's velocity in percent.
@@ -931,6 +1035,8 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetGripperVel', [p])
 
+    # mx:export_to=robot_sidecar_globals.py
+    #pylint: disable=invalid-name
     @disconnect_on_exception_decorator
     def SetGripperRange(self, closePos: float, openPos: float):
         """Set the gripper's range that will be used when calling GripperClose and GripperOpen.
@@ -951,6 +1057,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetGripperRange', [closePos, openPos])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetValveState(self, *args: Union[MxCmdValveState, int, str]):
         """Set the pneumatic module valve states.
@@ -973,6 +1080,7 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetValveState', args)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def VacuumGrip(self):
         """Start applying vacuum to grip a part with the IO module's vacuum gripper (motion queue command).
@@ -991,11 +1099,13 @@ class Robot(_Robot):
         """
         self._send_motion_command('VacuumGrip')
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def VacuumGrip_Immediate(self):
         """Same as VacuumGrip but without going through robot's motion queue (immediately applied)"""
         self.VacuumGripReleaseImmediate(False)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def VacuumRelease(self):
         """Release part held by the IO module's vacuum gripper (motion queue command).
@@ -1014,11 +1124,13 @@ class Robot(_Robot):
         """
         self._send_motion_command('VacuumRelease')
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def VacuumRelease_Immediate(self):
         """Same as VacuumRelease but without going through robot's motion queue (immediately applied)"""
         self.VacuumGripReleaseImmediate(True)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitHoldingPart(self, timeout: Optional[float] = None):
         """Wait for the gripper (or vacuum gripper) to confirm it's holding part.
@@ -1038,6 +1150,7 @@ class Robot(_Robot):
             timeout = self.default_timeout
         self._robot_events.on_holding_part.wait(timeout=timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitReleasedPart(self, timeout: Optional[float] = None):
         """Wait for the gripper (or vacuum gripper) to confirm it has released part.
@@ -1057,6 +1170,7 @@ class Robot(_Robot):
             timeout = self.default_timeout
         self._robot_events.on_released_part.wait(timeout=timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitPurgeDone(self, timeout: Optional[float] = None):
         """Wait for the vacuum gripper purge to be done after releasing part.
@@ -1071,6 +1185,7 @@ class Robot(_Robot):
             timeout = self.default_timeout
         self._robot_events.on_vacuum_purge_done.wait(timeout=timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetVacuumThreshold(self, hold_threshold: float, release_threshold: float):
         """Set vacuum pressure level thresholds for considering holding or releasing a part (motion queue command).
@@ -1090,11 +1205,13 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetVacuumThreshold', [hold_threshold, release_threshold])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetVacuumThreshold_Immediate(self, hold_threshold: float, release_threshold: float):
         """Same as SetVacuumThreshold but without going through robot's motion queue (immediately applied)"""
         self._send_immediate_command('SetVacuumThreshold_Immediate', [hold_threshold, release_threshold], None)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetVacuumPurgeDuration(self, duration: float):
         """Set duration (in seconds) of the positive air pressure applied when VacuumRelease is called
@@ -1110,11 +1227,13 @@ class Robot(_Robot):
         """
         self._send_motion_command('SetVacuumPurgeDuration', [duration])
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetVacuumPurgeDuration_Immediate(self, duration: float):
         """Same as SetVacuumPurgeDuration but without going through robot's motion queue (immediately applied)"""
         self._send_immediate_command('SetVacuumPurgeDuration_Immediate', [duration], None)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetOutputState(self, bank_id: MxIoBankId, *output_states: Union[MxDigitalIoState, int, str]):
         """Set the digital output states for the specified IO bank (motion queue command).
@@ -1137,11 +1256,13 @@ class Robot(_Robot):
         """
         super().SetOutputState(bank_id, *output_states)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetOutputState_Immediate(self, bank_id: MxIoBankId, *output_states: Union[MxDigitalIoState, int, str]):
         """Same as SetOutputState but without going through robot's motion queue (immediately applied)"""
         super().SetOutputState_Immediate(bank_id, *output_states)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitForAnyCheckpoint(self, timeout: float = None):
         """Pause program execution until any checkpoint has been received from the robot.
@@ -1178,6 +1299,7 @@ class Robot(_Robot):
         """
         super().WaitDisconnected(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitActivated(self, timeout: float = None):
         """Pause program execution until the robot is activated.
@@ -1189,6 +1311,7 @@ class Robot(_Robot):
         """
         super().WaitActivated(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitDeactivated(self, timeout: float = None):
         """Pause program execution until the robot is deactivated.
@@ -1200,6 +1323,7 @@ class Robot(_Robot):
         """
         super().WaitDeactivated(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitHomed(self, timeout: float = None):
         """Pause program execution until the robot is homed.
@@ -1211,6 +1335,7 @@ class Robot(_Robot):
         """
         super().WaitHomed(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitSimActivated(self, timeout: float = None):
         """Pause program execution until the robot simulation mode is activated.
@@ -1223,6 +1348,7 @@ class Robot(_Robot):
         """
         super().WaitSimActivated(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitSimDeactivated(self, timeout: float = None):
         """Pause program execution until the robot simulation mode is deactivated.
@@ -1234,6 +1360,7 @@ class Robot(_Robot):
         """
         super().WaitSimDeactivated(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitExtToolSimActivated(self, timeout: float = None):
         """Pause program execution until the robot external tool simulation mode is activated.
@@ -1246,6 +1373,7 @@ class Robot(_Robot):
         """
         super().WaitExtToolSimActivated(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitExtToolSimDeactivated(self, timeout: float = None):
         """Pause program execution until the robot external tool simulation mode is deactivated.
@@ -1305,6 +1433,7 @@ class Robot(_Robot):
         """
         return self.IsDesiredIoState(bank_id, False, *expected_states)
 
+    # mx:export_to=robot_sidecar_globals.py
     def WaitOutputState(self,
                         bank_id: MxIoBankId,
                         *expected_states: Union[MxDigitalIoState, int, str],
@@ -1349,6 +1478,7 @@ class Robot(_Robot):
         """
         return self.IsDesiredIoState(bank_id, True, *expected_states)
 
+    # mx:export_to=robot_sidecar_globals.py
     def WaitInputState(self,
                        bank_id: MxIoBankId,
                        *expected_states: Union[MxDigitalIoState, int, str],
@@ -1373,6 +1503,7 @@ class Robot(_Robot):
         """
         return self.WaitIOState(bank_id, True, *expected_states, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitRecoveryMode(self, activated: bool, timeout: float = None):
         """Pause program execution until the robot recovery mode is in the requested state.
@@ -1386,6 +1517,7 @@ class Robot(_Robot):
         """
         super().WaitRecoveryMode(activated, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitForError(self, timeout: float = None):
         """Pause program execution until the robot is in error state.
@@ -1397,6 +1529,7 @@ class Robot(_Robot):
         """
         super().WaitForError(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitErrorReset(self, timeout: float = None):
         """Pause program execution until the robot is not in an error state.
@@ -1447,6 +1580,7 @@ class Robot(_Robot):
     def WaitEstopResettable(self, timeout: float = None):
         super().WaitEStopResettableDeprecated(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitSafetyStopReset(self, timeout: float = None):
         """Pause program execution until all safety stop conditions have been reset (EStop, PStop1, PStop2, ...)
@@ -1458,6 +1592,7 @@ class Robot(_Robot):
         """
         super().WaitSafetyStopReset(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitSafetyStopResettable(self, timeout: float = None):
         """Pause program execution until all safety conditions can be reset using the power supply Reset function.
@@ -1469,6 +1604,7 @@ class Robot(_Robot):
         """
         super().WaitSafetyStopResettable(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitSafetyStopStateChange(self, timeout: float = None):
         """Pause program execution until any safety stop state changes (Raised, resettable or cleared safety stop,
@@ -1481,6 +1617,7 @@ class Robot(_Robot):
         """
         super().WaitSafetyStopStateChange(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitMotionResumed(self, timeout: float = None):
         """Pause program execution until the robot motion is resumed.
@@ -1492,6 +1629,7 @@ class Robot(_Robot):
         """
         super().WaitMotionResumed(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitMotionPaused(self, timeout: float = None):
         """Pause program execution until the robot motion is paused.
@@ -1503,6 +1641,7 @@ class Robot(_Robot):
         """
         super().WaitMotionPaused(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitMotionCleared(self, timeout: float = None):
         """Pause program execution until all pending request to clear motion have been acknowledged.
@@ -1514,6 +1653,7 @@ class Robot(_Robot):
         """
         super().WaitMotionCleared(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitEndOfCycle(self, timeout: float = None):
         """Pause program execution until all messages in a message cycle are received
@@ -1525,9 +1665,17 @@ class Robot(_Robot):
         """
         super().WaitEndOfCycle(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def WaitIdle(self, timeout: float = None, wait_rt_data=False):
-        """Pause program execution until robot is idle.
+        """Pause program execution until robot is idle (no longer moving, motion queue empty).
+
+        Note: After this function returns (and the robot is idle), some real-time values
+        (e.g. GetRtTargetJointPos, GetRtTargetCartPos, GetRobotRtData) may still be outdated since they are updated at
+        a defined monitoring interval (defined by SetMonitoringInterval()).
+        To get the most recent real-time position immediately after WaitIdle(), use the synchronous_update option
+        in those functions.
+        Alternatively, you can use WaitEndOfCycle() after WaitIdle() to ensure the latest real-time data is received.
 
         Parameters
         ----------
@@ -1540,6 +1688,7 @@ class Robot(_Robot):
         """
         super().WaitIdle(timeout, wait_rt_data)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def ResetError(self):
         """Attempt to reset robot error."""
@@ -1549,6 +1698,7 @@ class Robot(_Robot):
                             removed_in="3.0.0",
                             current_version=__version__,
                             details="Use the 'ResetPStop2' function instead")
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def ResetPStop(self, timeout: float = None):
         """Attempt to reset robot PStop2.
@@ -1557,6 +1707,7 @@ class Robot(_Robot):
         """
         self.ResetPStop2Deprecated(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def ResetPStop2(self, timeout: float = None):
         """Attempt to reset robot PStop2.
@@ -1565,6 +1716,7 @@ class Robot(_Robot):
         """
         super().ResetPStop2Deprecated(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def Delay(self, t: float):
         """Set a delay between motion commands.
@@ -1577,6 +1729,7 @@ class Robot(_Robot):
         """
         super().Delay(t)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SendCustomCommand(self,
                           command: str,
@@ -1671,6 +1824,7 @@ class Robot(_Robot):
         """
         return super().GetInterruptableEvent(codes, abort_on_error, abort_on_clear_motion)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def StartProgram(self, n: int | str, timeout: float = None):
         """Start an offline program.
@@ -1696,24 +1850,24 @@ class Robot(_Robot):
         super().StartProgram(n, timeout)
 
     @disconnect_on_exception_decorator
-    def ListPrograms(self, timeout: float = None) -> dict:
-        """List all offline programs that are stored on the robot.
-        Related commands: LoadProgram, SaveProgram, DeleteProgram
+    def ListFiles(self, timeout: float = None) -> dict:
+        """List all files that are stored on the robot.
+        Related commands: LoadFile, SaveFile, DeleteFile
 
         This function is synchronous only for now.
-        If you want to asynchronously list programs, you can use SendCustomCommand, for example:
-        done_evt = self.SendCustomCommand('ListPrograms')
+        If you want to asynchronously list files, you can use SendCustomCommand, for example:
+        done_evt = self.SendCustomCommand('ListFiles')
         Callback on_command_message(response) can be attached to be informed of all responses from the robot.
         Responses to check fore are:
-            - response.id == MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_LIST
-            In this case response.json_data[MX_JSON_KEY_DATA]["programs"] will contain the listed programs list
+            - response.id == MxRobotStatusCode.MX_ST_LIST_FILES
+            In this case response.json_data[MX_JSON_KEY_DATA]["files"] will contain the listed files list
             (same format as returned by this function)
-            - response.id == MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_LIST_ERR
+            - response.id == MxRobotStatusCode.MX_ST_LIST_FILES_ERR
 
         Parameters
         ----------
         timeout: float
-            Timeout (in seconds) waiting for programs list.
+            Timeout (in seconds) waiting for files list.
 
         Raises
         ------
@@ -1725,7 +1879,7 @@ class Robot(_Robot):
         Returns
         -------
         dict
-            Object that contains the status of all listed offline programs, in this format
+            Object that contains the status of all listed files, in this format
             {
                 "myProgramName": {
                     "status": {
@@ -1742,28 +1896,38 @@ class Robot(_Robot):
                 ...
             }
         """
-        return super().ListPrograms(timeout)
+        return super().ListFiles(timeout)
+
+    @deprecation.deprecated(deprecated_in="2.1.0",
+                            removed_in="3.0.0",
+                            current_version=__version__,
+                            details="Use the 'ListFiles' function instead")
+    @disconnect_on_exception_decorator
+    def ListPrograms(self, timeout: float = None) -> dict:
+        """Deprecated use ListFiles instead.
+        """
+        return super().ListFiles(timeout)
 
     @disconnect_on_exception_decorator
-    def LoadProgram(self, name: str, timeout: float = None) -> dict:
-        """Load a program from the robot.
+    def LoadFile(self, name: str, timeout: float = None) -> dict:
+        """Load a file from the robot.
 
-        Related commands: ListPrograms, SaveProgram, DeleteProgram
+        Related commands: ListFiles, SaveFile, DeleteFile
 
         This function is synchronous only for now.
-        If you want to asynchronously load a program, you can use SendCustomCommand, for example:
-        done_evt = self.SendCustomCommand('LoadProgram{"data":{"name":"programName"}')
+        If you want to asynchronously load a file, you can use SendCustomCommand, for example:
+        done_evt = self.SendCustomCommand('LoadFile{"data":{"name":"programName"}')
         Callback on_command_message(response) can be attached to be informed of all responses from the robot.
         Responses to check fore are:
-            - response.id == MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_LOAD
-            - response.id == MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_LOAD_ERR
+            - response.id == MxRobotStatusCode.MX_ST_LOAD_FILES
+            - response.id == MxRobotStatusCode.MX_ST_LOAD_FILES_ERR
 
         Parameters
         ----------
         name: str
-            Name of the offline program to load.
+            Name of the file to load.
         timeout: float
-            Timeout (in seconds) waiting for program to be loaded.
+            Timeout (in seconds) waiting for file to be loaded.
 
         Raises
         ------
@@ -1777,76 +1941,94 @@ class Robot(_Robot):
         dict
             Object that contains information and contents of the loaded program
             {
-                "name": "programName",
+                "name": "fileName",
                 "status": {
                     "valid": false,
                     "invalidLines": [10, 332, 522]
                 },
-                "code":{"// Program code"}
+                "content":{"// File content"}
             }
         """
-        return super().LoadProgram(name, timeout)
+        return super().LoadFile(name, timeout)
 
+    @deprecation.deprecated(deprecated_in="2.1.0",
+                            removed_in="3.0.0",
+                            current_version=__version__,
+                            details="Use the 'LoadFile' function instead")
+    @disconnect_on_exception_decorator
+    def LoadProgram(self, name: str, timeout: float = None) -> dict:
+        """Deprecated use LoadFile instead.
+        """
+        return super().LoadFile(name, timeout)
+
+    @disconnect_on_exception_decorator
+    def SaveFile(self, name: str, content: str, timeout: float = None, allow_invalid=False, overwrite=False):
+        """Save a file the robot.
+
+        Related commands: ListFiles, LoadFile, DeleteFile
+
+        This function is synchronous only for now.
+        If you want to asynchronously save file, you can use SendCustomCommand, for example:
+        done_evt = self.SendCustomCommand('SaveFile{"data":{"name":"programName", "content":"Program text"}}')
+        Callback on_command_message(response) can be attached to be informed of all responses from the robot.
+        Responses to check fore are:
+            - response.id == MxRobotStatusCode.MX_ST_SAVE_FILE
+            - response.id == MxRobotStatusCode.MX_ST_SAVE_FILE_ERR
+
+        Parameters
+        ----------
+        name: str
+            Name of the file to save.
+        content: str
+            The file content to save.
+        timeout: float
+            Timeout (in seconds) waiting for file to be saved.
+        allow_invalid: bool
+            Allow saving the file even if it is invalid
+        overwrite: bool
+            Overwrite if a file with the same name already exists on the robot.
+            (equivalent of atomic Delete then SaveFile)
+            If False, SaveFile will be refused if the name is already used.
+
+        Raises
+        ------
+        TimeoutException
+            If timeout was reached before the robot returned success or failure response.
+        InterruptException
+            If the robot returns an error (exception message will describe the error).
+        """
+        return super().SaveFile(name, content, timeout, allow_invalid, overwrite)
+
+    @deprecation.deprecated(deprecated_in="2.1.0",
+                            removed_in="3.0.0",
+                            current_version=__version__,
+                            details="Use the 'SaveFile' function instead")
     @disconnect_on_exception_decorator
     def SaveProgram(self, name: str, program: str, timeout: float = None, allow_invalid=False, overwrite=False):
-        """Save a program inside the robot.
-           The provided program is a list of robot commands, separated by a end-line character.
-           The program may contain empty lines, or commented lines (c-style comments with // or /* comment */).
-
-        Related commands: ListPrograms, LoadProgram, DeleteProgram
-
-        This function is synchronous only for now.
-        If you want to asynchronously list programs, you can use SendCustomCommand, for example:
-        done_evt = self.SendCustomCommand('SaveProgram{"data":{"name":"programName", "program":"Program text"}}')
-        Callback on_command_message(response) can be attached to be informed of all responses from the robot.
-        Responses to check fore are:
-            - response.id == MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_SAVE
-            - response.id == MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_SAVE_ERR
-
-        Parameters
-        ----------
-        name: str
-            Name of the offline program to save.
-        program: str
-            The offline program code to save (see description above for details).
-        timeout: float
-            Timeout (in seconds) waiting for program to be saved.
-        allow_invalid: bool
-            Allow saving the program even if it is invalid
-        overwrite: bool
-            Overwrite if a program with the same name already exists on the robot.
-            (equivalent of atomic Delete then SaveProgram)
-            If False, SaveProgram will be refused if the name is already used.
-
-        Raises
-        ------
-        TimeoutException
-            If timeout was reached before the robot returned success or failure response.
-        InterruptException
-            If the robot returns an error (exception message will describe the error).
+        """Deprecated use SaveFile instead.
         """
-        return super().SaveProgram(name, program, timeout, allow_invalid, overwrite)
+        return super().SaveFile(name, program, timeout, allow_invalid, overwrite)
 
     @disconnect_on_exception_decorator
-    def DeleteProgram(self, name: str, timeout: float = None):
-        """Delete a program from the robot.
+    def DeleteFile(self, name: str, timeout: float = None):
+        """Delete a file from the robot.
 
-        Related commands: ListPrograms, LoadProgram, SaveProgram
+        Related commands: ListFiles, LoadFile, SaveFile
 
         This function is synchronous only for now.
-        If you want to asynchronously delete a program, you can use SendCustomCommand, for example:
-        done_evt = self.SendCustomCommand('DeleteProgram{"data":{"name":"programName"}')
+        If you want to asynchronously delete a file, you can use SendCustomCommand, for example:
+        done_evt = self.SendCustomCommand('DeleteFile{"data":{"name":"programName"}')
         Callback on_command_message(response) can be attached to be informed of all responses from the robot.
         Responses to check fore are:
-            - response.id == MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_DELETE
-            - response.id == MxRobotStatusCode.MX_ST_OFFLINE_PROGRAM_DELETE_ERR
+            - response.id == MxRobotStatusCode.MX_ST_DELETE_FILE
+            - response.id == MxRobotStatusCode.MX_ST_DELETE_FILE_ERR
 
         Parameters
         ----------
         name: str
-            Name of the offline program to delete.
+            Name of the file to delete.
         timeout: float
-            Timeout (in seconds) waiting for program to be deleted.
+            Timeout (in seconds) waiting for file to be deleted.
 
         Raises
         ------
@@ -1855,8 +2037,19 @@ class Robot(_Robot):
         InterruptException
             If the robot returns an error (exception message will describe the error).
         """
-        return super().DeleteProgram(name, timeout)
+        return super().DeleteFile(name, timeout)
 
+    @deprecation.deprecated(deprecated_in="2.1.0",
+                            removed_in="3.0.0",
+                            current_version=__version__,
+                            details="Use the 'DeleteFile' function instead")
+    @disconnect_on_exception_decorator
+    def DeleteProgram(self, name: str, timeout: float = None):
+        """Deprecated use DeleteFile instead.
+        """
+        return super().DeleteFile(name, timeout)
+
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtExtToolStatus(self,
                            include_timestamp: bool = False,
@@ -1882,7 +2075,7 @@ class Robot(_Robot):
         return super().GetRtExtToolStatus(include_timestamp, synchronous_update, timeout)
 
     @disconnect_on_exception_decorator
-    def GetNetworkConfig(self, synchronous_update: bool = False, timeout: float = None) -> NetworkConfig:
+    def GetNetworkCfg(self, synchronous_update: bool = True, timeout: float = None) -> NetworkConfig:
         """Return robot's current network configuration
 
         Parameters
@@ -1898,8 +2091,14 @@ class Robot(_Robot):
             Object containing the current network config
 
         """
-        return super().GetNetworkConfig(synchronous_update, timeout)
+        return super().GetNetworkCfg(synchronous_update, timeout)
 
+    @disconnect_on_exception_decorator
+    def GetNetworkConfig(self, synchronous_update: bool = False, timeout: float = None) -> NetworkConfig:
+        """Legacy command. Please use GetNetworkCfg instead."""
+        return super().GetNetworkCfg(synchronous_update, timeout)
+
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtIoStatus(self,
                       bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
@@ -1925,6 +2124,7 @@ class Robot(_Robot):
         """
         return super().GetRtIoStatus(bank_id, include_timestamp, synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtGripperState(self,
                           include_timestamp: bool = False,
@@ -1949,6 +2149,7 @@ class Robot(_Robot):
         """
         return super().GetRtGripperState(include_timestamp, synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtValveState(self,
                         include_timestamp: bool = False,
@@ -1973,6 +2174,7 @@ class Robot(_Robot):
         """
         return super().GetRtValveState(include_timestamp, synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtOutputState(self,
                          bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
@@ -1997,6 +2199,7 @@ class Robot(_Robot):
         """
         return super().GetRtOutputState(bank_id, synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtInputState(self,
                         bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
@@ -2021,6 +2224,7 @@ class Robot(_Robot):
         """
         return super().GetRtInputState(bank_id, synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtVacuumState(self,
                          include_timestamp: bool = False,
@@ -2045,6 +2249,7 @@ class Robot(_Robot):
         """
         return super().GetRtVacuumState(include_timestamp, synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtTargetJointPos(self,
                             include_timestamp: bool = False,
@@ -2057,7 +2262,10 @@ class Robot(_Robot):
         include_timestamp : bool
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
-            If true, requests updated joints positions and waits for response, else uses last known positions.
+            True -> Synchronously get current target joints position.
+            False -> Return latest known data (from previous received cyclic data) without requesting the robot
+            *** WARNING: This position may be outdated from as much as one cycle, which duration is defined by
+                         SetMonitoringInterval().
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time in second to wait for forced update.
 
@@ -2069,12 +2277,15 @@ class Robot(_Robot):
         """
         return super().GetRtTargetJointPos(include_timestamp, synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
+    @disconnect_on_exception_decorator
     def GetJoints(self, synchronous_update: bool = False, timeout: float = None):
         """Legacy command. Please use GetRtTargetJointPos instead."""
         return super().GetRtTargetJointPos(include_timestamp=False,
                                            synchronous_update=synchronous_update,
                                            timeout=timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRtTargetCartPos(self,
                            include_timestamp: bool = False,
@@ -2087,7 +2298,10 @@ class Robot(_Robot):
         include_timestamp : bool
             If true, return a TimestampedData object, otherwise just return joints angles.
         synchronous_update : bool
-            If true, requests updated pose and waits for response, else uses last know pose.
+            True -> Synchronously get current cartesian position.
+            False -> Return latest known data (from previous received cyclic data) without requesting the robot
+            *** WARNING: This position may be outdated from as much as one cycle, which duration is defined by
+                         SetMonitoringInterval().
         timeout : float, defaults to DEFAULT_WAIT_TIMEOUT
             Maximum time in second to wait for forced update.
 
@@ -2105,6 +2319,7 @@ class Robot(_Robot):
                                           synchronous_update=synchronous_update,
                                           timeout=timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetMonitoringInterval(self, t: float):
         """Sets the interval at which the monitoring port sends real-time data.
@@ -2117,6 +2332,7 @@ class Robot(_Robot):
         """
         super().SetMonitoringInterval(t)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetRealTimeMonitoring(self, *events: tuple):
         """Configure which real-time monitoring events to enable.
@@ -2133,6 +2349,7 @@ class Robot(_Robot):
         """
         super().SetRealTimeMonitoring(*events)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetRtc(self, t: int):
         """Sets the robot's real-time clock (date/time).
@@ -2155,16 +2372,24 @@ class Robot(_Robot):
         """
         super().SetRtc(t)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
-    def ActivateSim(self):
-        """Enables simulation mode. Motors and external tool don't move, but commands will be processed."""
-        super().ActivateSim()
+    def ActivateSim(self, mode: Optional[MxRobotSimulationMode] = None):
+        """Enables simulation mode. Motors and external tool don't move, but commands will be processed
 
+        Args:
+            mode (MxRobotSimulationMode, optional): Use the "real-time" or "fast" simulation mode.
+            If not specified (None), the robot's default simulation mode will be used (see SetSimModeCfg).
+        """
+        super().ActivateSim(mode)
+
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def DeactivateSim(self):
         """Disables simulation mode. Motors and external tool will now move normally."""
         super().DeactivateSim()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetExtToolSim(self, sim_ext_tool_type: int = MxExtToolType.MX_EXT_TOOL_MEGP25_SHORT):
         """Simulate an external tool, allowing GripperOpen/Close, MoveGripper and SetValveState commands
@@ -2181,6 +2406,7 @@ class Robot(_Robot):
         """
         super().SetExtToolSim(sim_ext_tool_type)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetIoSim(self, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, enable: bool = True):
         """Enable or disable IO simulation. This allows emulating the presence of an IO module and use the
@@ -2197,11 +2423,13 @@ class Robot(_Robot):
         """
         super().SetIoSim(bank_id, enable)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetRecoveryMode(self, activated: bool = True):
         """Enable/disable recovery mode, allowing robot to move (slowly) without homing and without joint limits."""
         super().SetRecoveryMode(activated)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetTimeScaling(self, p: float):
         """This command sets the time scaling (in percentage) of the trajectory generator. By calling this command
@@ -2217,6 +2445,7 @@ class Robot(_Robot):
         """
         super().SetTimeScaling(p)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetJointLimitsCfg(self, e: bool = True):
         """Enable/Disable user-defined limits set by the 'SetJointLimits' command. It can only be executed while
@@ -2230,6 +2459,7 @@ class Robot(_Robot):
         """
         super().SetJointLimitsCfg(e)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetJointLimits(self, n: int, lower_limit: float, upper_limit: float):
         """This command redefines the lower and upper limits of a robot joint. It can only be executed while the robot
@@ -2249,6 +2479,7 @@ class Robot(_Robot):
         """
         super().SetJointLimits(n, lower_limit, upper_limit)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetWorkZoneCfg(self,
                        severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR,
@@ -2269,6 +2500,7 @@ class Robot(_Robot):
         """
         super().SetWorkZoneCfg(severity, mode)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetWorkZoneLimits(self, x_min: float, y_min: float, z_min: float, x_max: float, y_max: float, z_max: float):
         """Set the work zone limits the robot must not exceed. This command can only be used when the robot is
@@ -2291,6 +2523,7 @@ class Robot(_Robot):
         """
         super().SetWorkZoneLimits(x_min, y_min, z_min, x_max, y_max, z_max)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetCollisionCfg(self, severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR):
         """Set the severity at which to report self collision events. This command can only be used when the robot is
@@ -2305,6 +2538,7 @@ class Robot(_Robot):
         """
         super().SetCollisionCfg(severity)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetToolSphere(self, x: float, y: float, z: float, r: float):
         """Set the tool sphere model of the robot. This command can only be used when the robot is
@@ -2323,6 +2557,7 @@ class Robot(_Robot):
         """
         super().SetToolSphere(x, y, z, r)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetTorqueLimitsCfg(
             self,
@@ -2352,6 +2587,7 @@ class Robot(_Robot):
         """
         super().SetTorqueLimitsCfg(severity, skip_acceleration)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetTorqueLimits(self, *args: float):
         """Set the torque limit (in percent) for each joint.
@@ -2366,6 +2602,7 @@ class Robot(_Robot):
         """
         super().SetTorqueLimits(*args)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetPStop2Cfg(self, severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_CLEAR_MOTION):
         """Set the severity at which to treat a PStop2 events.
@@ -2382,6 +2619,22 @@ class Robot(_Robot):
         """
         super().SetPStop2Cfg(severity)
 
+    @disconnect_on_exception_decorator
+    def SetSimModeCfg(self, default_sim_mode=MxRobotSimulationMode.MX_SIM_MODE_REAL_TIME):
+        """Set the simulation mode configuration.
+        This configuration remains in memory, even after a power down.
+
+        Parameters
+        ----------
+            default_sim_mode : MxRobotSimulationMode
+                Default simulation mode to use when using ActivateSim command without specifying the mode.
+                The available modes are:
+                    - mx_robot_def.MxRobotSimulationMode.MX_SIM_MODE_REAL_TIME
+                    - mx_robot_def.MxRobotSimulationMode.MX_SIM_MODE_FAST
+        """
+        super().SetSimModeCfg(default_sim_mode)
+
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def SetPayload(self, mass: float, x: float, y: float, z: float):
         """Set payload mass and center of mass (in FRF) of currently carried by the robot's gripper (or external tool).
@@ -2400,6 +2653,7 @@ class Robot(_Robot):
         """
         super().SetPayload(mass, x, y, z)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def ActivateBrakes(self, activated: bool = True):
         """Enable/disable the brakes. These commands are only available when the robot is deactivated.
@@ -2415,6 +2669,7 @@ class Robot(_Robot):
         """
         super().ActivateBrakes(activated)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRobotInfo(self) -> RobotInfo:
         """Return a copy of the known robot information.
@@ -2427,6 +2682,7 @@ class Robot(_Robot):
         """
         return super().GetRobotInfo()
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetRobotRtData(self, synchronous_update: bool = False, timeout: float = None) -> RobotRtData:
         """Return a copy of the current robot real-time data, with all values associated with the same timestamp.
@@ -2439,7 +2695,10 @@ class Robot(_Robot):
         Parameters
         ----------
         synchronous_update: bool
-            True -> Synchronously wait for the next data cycle to get updated data. False -> Get latest known data.
+            True -> Synchronously get all robot real-time data by waiting end of current cycle.
+            False -> Return latest known data (from previous received cyclic data) without requesting the robot.
+            *** WARNING: This position may be outdated from as much as one cycle, which duration is defined by
+                         SetMonitoringInterval().
         timeout: float
             Timeout (in seconds) waiting for updated cyclic data from the robot. Only used for synchronous requests.
 
@@ -2451,6 +2710,7 @@ class Robot(_Robot):
         """
         return super().GetRobotRtData(synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetStatusRobot(self, synchronous_update: bool = False, timeout: float = None) -> RobotStatus:
         """Return a copy of the current robot status
@@ -2470,6 +2730,7 @@ class Robot(_Robot):
         """
         return super().GetStatusRobot(synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetSafetyStatus(self, synchronous_update: bool = False, timeout: float = None) -> RobotSafetyStatus:
         """Return a copy of the current robot safety status
@@ -2489,6 +2750,34 @@ class Robot(_Robot):
         """
         return super().GetSafetyStatus(synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
+    @disconnect_on_exception_decorator
+    def GetSidecarStatus(self,
+                         idx: Optional[int] = None,
+                         synchronous_update: bool = False,
+                         timeout: float = None) -> Optional[RobotSidecarStatus]:
+        """Return a copy of the current robot sidecar status
+
+        Parameters
+        ----------
+        idx: Optional[int]
+            Optional index of the sidecar instance to get status for.
+            If None, the function will return the status for the first sidecar instance connected, priority to the
+            sidecar instance embedded in the robot
+        synchronous_update: bool
+            True -> Synchronously get updated robot sidecar status. False -> Get latest known status.
+        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
+            Timeout (in seconds) waiting for synchronous response from the robot.
+
+        Returns
+        -------
+        Optional[RobotSidecarStatus]
+            Status of selected sidecar scripting engine
+
+        """
+        return super().GetSidecarStatus(idx, synchronous_update, timeout)
+
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetPowerSupplyInputs(self, synchronous_update: bool = False, timeout: float = None) -> RobotPowerSupplyInputs:
         """Return a copy of the current robot power supply input states
@@ -2508,6 +2797,7 @@ class Robot(_Robot):
         """
         return super().GetPowerSupplyInputs(synchronous_update, timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetCollisionStatus(self, timeout: float = None) -> CollisionStatus:
         """Return a copy of the current robot collision status
@@ -2525,6 +2815,7 @@ class Robot(_Robot):
         """
         return super().GetCollisionStatus(timeout)
 
+    # mx:export_to=robot_sidecar_globals.py
     @disconnect_on_exception_decorator
     def GetGripperRange(self, timeout: float = None) -> Tuple[float, float]:
         """Return the currently configured gripper range.
@@ -2544,7 +2835,8 @@ class Robot(_Robot):
         """
         return super().GetGripperRange(timeout)
 
-    def LogTrace(self, trace: str):
+    # mx:export_to=robot_sidecar_globals.py
+    def LogTrace(self, trace: str, level: Optional[int] = None):
         """Send a text trace that is printed in the robot's log internal file (which can be retrieved from robot's Web
            portal under menu "Options -> Get Log").
            (useful for clearly identifying steps of a program within robot's log when reporting problems to
@@ -2554,8 +2846,11 @@ class Robot(_Robot):
         ----------
         trace : string
             Text string to print in robot's internal log file
+        level : logger level
+            Local logger level to print with logging.DEBUG, logging.INFO, logging.ERROR, etc.
+            Will not print locally (only on robot) if level is None (the default)
         """
-        super().LogTrace(trace)
+        super().LogTrace(trace, level)
 
     def StartLogging(self,
                      monitoringInterval: float,
@@ -2621,6 +2916,7 @@ class Robot(_Robot):
         """
         return super().GetCapturedTrajectory()
 
+    #pylint: disable=invalid-name
     @contextlib.contextmanager
     def FileLogger(self,
                    monitoringInterval: float,
@@ -2676,3 +2972,173 @@ class Robot(_Robot):
 
         """
         return super().UpdateRobot(firmware, timeout)
+
+    # mx:export_to=robot_sidecar_globals.py
+    def CreateVariable(self,
+                       name: str,
+                       value: any,
+                       cyclic_id: Optional[int] = None,
+                       override: bool = False,
+                       timeout: Optional[float] = None):
+        """Create a variable that is permanently saved in the robot.
+
+        Note: The variable will only be added to local namespace (robot.vars) after receiving the robot response for
+            this request. Beware of that if using this function asynchronously.
+            Use robot.Sync() if needed, or use a timeout to make this function blocking.
+        Note: You can check if the variable already exists before calling this function as follows:
+            `robot.vars.get("myvar") is not None`
+
+        See description of the "override" argument below for details about how this function manages the case where a
+        variable with the same name already exists.
+
+        There are different ways to access a created variable:
+        robot.vars.myvar => Return the variable value only
+        robot.vars.get("myvar") => Return a RegisteredVariable that contains value, cyclic_id, etc.
+        robot.GetVariable("myvar") => Return a RegisteredVariable that contains value, cyclic_id, etc.
+
+        Args:
+            name (str): Name of the variable to set.
+            value (any): Value to assign to this variable. The type will be deduced from this value.
+            cyclic_id (int): Optional Id to use to reference variable in cyclic protocols (0 or None to ignore)
+            override (bool): Specifies the behavior when a variable with the same name already exists:
+                             True:  Update the value and cyclic ID with the new ones,
+                             False: Return error if the existing variable has a different type or cyclic ID,
+                                    otherwise do nothing and leave the variable unchanged.
+            timeout (float): Optional time to wait for the robot to confirm variable creation.
+                            If None:
+                                In Synchronous API mode a default timeout is used.
+                                In asynchronous mode a None timeout makes this function non-blocking (will not know
+                                if variable creation may have failed).
+        Raises
+        ------
+        ArgErrorException
+            If the robot refused the variable creation for some reason (name or cyclic ID conflict for example).
+        """
+        super().CreateVariable(name, value, cyclic_id, override, timeout)
+
+    def CreateRegisteredVariable(self,
+                                 var: rsc.RegisteredVariable,
+                                 override: bool = False,
+                                 timeout: Optional[float] = None) -> bool:
+        """ Same as CreateVariable, but taking RegisteredVariable object instead of separate value, cyclic_id """
+        return super().CreateVariable(name=var.name,
+                                      value=var.get_value(),
+                                      cyclic_id=var.cyclic_id,
+                                      override=override,
+                                      timeout=timeout)
+
+    # mx:export_to=robot_sidecar_globals.py
+    def DeleteVariable(self, name: str, timeout: Optional[float] = None):
+        """Delete a variable from the robot's permanently saved variables.
+
+        Note: The variable will only be removed local namespace (robot.vars) after receiving the robot response for
+            this request. Beware of that if using this function asynchronously.
+            Use robot.Sync() if needed, or use a timeout to make this function blocking.
+        Note: You can check if the variable already exists before calling this function as follows:
+            `robot.vars.get(name) is not None`
+
+        This function does nothing if the variable does not exist.
+
+        Args:
+            name (str): Name of the variable to delete.
+            timeout (float): Optional time to wait for the robot to confirm variable deletion.
+                            If None:
+                                In Synchronous API mode a default timeout is used.
+                                In asynchronous mode a None timeout makes this function non-blocking (will not know
+                                if variable deletion may have failed).
+        Raises
+        ------
+        NotFoundException
+            If the variable did not exist on the robot.
+        """
+        super().DeleteVariable(name)
+
+    # mx:export_to=robot_sidecar_globals.py
+    def SetVariable(self, name: str, value: any, timeout: Optional[float] = None):
+        """Set a variable that was previously created on the robot using CreateVariable.
+        This function can be synchronous or asynchronous (see timeout argument explained below).
+
+        Note: There are alternatives to SetVariable that are always synchronous (waiting for robot confirmation):
+              - The simplest way is to directly set the corresponding attribute of the robot class `robot.vars`:
+                `robot.vars.my_var = "my_value"
+              - Using the "set" method of robot.vars, which also returns the previous value
+                prev_val = `robot.vars.my_var.set("my_var", "my_value")
+
+        Args:
+            name (str):  Name of the variable to create.
+            value (any): New value to assign to this variable. The type will be deduced from this value.
+                        The new value type must match the existing value type otherwise the robot will return an error.
+            timeout (float): Optional time to wait for the robot to confirm variable modification.
+                            If None:
+                                In Synchronous API mode a default timeout is used.
+                                In asynchronous mode a None timeout makes this function non-blocking (will not know
+                                if variable modification may have failed).
+        Raises
+        ------
+        ArgErrorException
+            If the robot refused the variable creation for some reason (name or cyclic ID conflict for example).
+        """
+        super().SetVariable(name, value, timeout)
+
+    # mx:export_to=robot_sidecar_globals.py
+    def GetVariable(self, name: str) -> Optional[rsc.RegisteredVariable]:
+        """Get a variable by name.
+
+        This is a non-blocking function, it searches locally in the already synchronized variables map.
+
+        This is equivalent to directly accessing the variable from `robot.vars`. For example:
+            `robot.vars.my_var` => Returns the variable value
+            `robot.vars.get("my_var") => Returns a rsc.RegisteredVariable
+
+        Args:
+            name (str): The name of the variable to get value for
+
+        Returns:
+            Optional[rsc.RegisteredVariable]: The found variable, or None if no variable exist with that name
+        """
+        return super().GetVariable(name)
+
+    # mx:export_to=robot_sidecar_globals.py
+    def GetVariableByCyclicId(self, cyclic_id: int) -> Optional[rsc.RegisteredVariable]:
+        """Get a variable by cyclic ID.
+
+        This is a non-blocking function, it searches locally in the already synchronized variables map.
+
+        Args:
+            cyclic_id (int): The variable cyclic ID to search for
+
+        Returns:
+            Optional[rsc.RegisteredVariable]: The found variable, or None if no variable exist with that cyclic_id
+        """
+        return super().GetVariableByCyclicId(cyclic_id)
+
+    def ListVariables(self) -> list[str]:
+        """ Return the list of robot variables.
+            This is a non-blocking function that returns a list of all variable names that are synchronized
+            with the robot.
+        """
+        return super().ListVariables()
+
+    #####################################################################################
+    # Private methods.
+    #####################################################################################
+    def _sidecar_get_registered_attr(self, attr_name: str) -> any:
+        """ Callback for getting an attribute from local namespace.
+            This function is used (for now) to detect if a registered function will overload an existing public API
+            function from this class.
+        """
+        # Note: DO NOT CALL super()._sidecar_get_registered_attr() because here we really want to get an attribute
+        #       of this derived class (for example, SetBlending or any function that does not exist on the base class).
+        return getattr(Robot, attr_name, None)
+
+    def _sidecar_set_registered_attr(self, attr_name: str, attr_val: any):
+        """ Callback for setting an attribute from local namespace """
+        # Set in both parent class' namespace
+        super()._sidecar_set_registered_attr(attr_name, attr_val)
+        setattr(Robot, attr_name, attr_val)
+
+    def _sidecar_del_registered_attr(self, attr_name: str):
+        """ Callback for deleting an attribute from local namespace """
+        # Delete from both parent class' namespace
+        super()._sidecar_del_registered_attr(attr_name)
+        delattr(Robot, attr_name)
