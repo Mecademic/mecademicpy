@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
 from typing import Callable, Optional, Union
 
 import mecademicpy.tools as tools
@@ -23,6 +24,14 @@ DEFAULT_WAIT_TIMEOUT = 10
 
 # Available levels for SetTorqueLimitsCfg
 TORQUE_LIMIT_SEVERITIES = {'disabled': 0, 'warning': 1, 'pause-motion': 2, 'clear-motion': 3, 'error': 4}
+
+
+# Temporary location until consensus reached
+class RtDataUpdateType(IntEnum):
+    MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE = 0  # Data is not available
+    MX_RT_DATA_UPDATE_TYPE_CYCLICAL = 1  # Data is sent every cycle
+    MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL = 2  # Data sent every cycle when configured through SetRealTimeMonitoring
+    MX_RT_DATA_UPDATE_TYPE_EVENT_BASED = 3  # Data is sent upon connection and updated when its values change
 
 
 #####################################################################################
@@ -68,8 +77,12 @@ class Message:
             Input string to convert to message.
 
         """
+        id = 0
+        data = ""
         json_data = {}
-        if input[0] == '{':
+        if len(input) == 0:
+            pass
+        elif input[0] == '{':
             # JSON format
             json_data = json.loads(input)
             # Extract id from JSON payload
@@ -84,7 +97,7 @@ class Message:
 
             # Find next square brackets (contains data).
             data_start = input.find('[', id_end) + 1
-            data_end = input.find(']', data_start)
+            data_end = input.rfind(']')
 
             data = ''
             if data_start != -1 and data_end != -1:
@@ -161,6 +174,16 @@ class InterruptException(MecademicNonFatalException):
 class TimeoutException(MecademicNonFatalException):
     """Requested timeout during a blocking operation (synchronous mode or Wait* functions) has been reached.
        (raised by InterruptableEvent)"""
+    pass
+
+
+class NotFoundException(MecademicNonFatalException):
+    """A method, variable or object was not found"""
+    pass
+
+
+class ArgErrorException(MecademicNonFatalException):
+    """An argument was invalid, the operation could not be completed"""
     pass
 
 
@@ -403,11 +426,18 @@ class InterruptableEvent:
         """
         with self._lock:
             self.check_interrupted()
-        wait_result = self._event.wait(timeout=timeout)
+        start_time = time.monotonic()
+        # Wait by smaller chunks to we can get interrupted by OS signals (like SIGINT)
+        partial_timeout = 0.1 if timeout is None else min(timeout, 0.1)
+        while True:
+            is_set = self._event.wait(timeout=partial_timeout)
+            if is_set:
+                break
+            self.check_interrupted()
+            if timeout is not None and time.monotonic() - start_time > timeout:
+                raise TimeoutException("Timeout waiting for interruptable event")
         with self._lock:
             self.check_interrupted()
-            if not wait_result:
-                raise TimeoutException("Timeout waiting for interruptable event")
             return self._data
 
     def set(self, data: Message = None):
@@ -518,6 +548,11 @@ class RobotVersion:
     def __str__(self) -> str:
         return self.full_version
 
+    def __lt__(self, other: RobotVersion) -> bool:
+        """" Less than implementation
+        """
+        return not self.is_at_least(other.major, other.minor, other.patch, other.build)
+
     def get_str(self, build=False, extra=False) -> str:
         """Get version string
 
@@ -568,7 +603,7 @@ class RobotVersion:
 
         self.full_version = self.get_str(build=True, extra=True)
 
-    def is_at_least(self, major, minor=0, patch=0) -> bool:
+    def is_at_least(self, major, minor=0, patch=0, build=0) -> bool:
         """Tells if this RobotInfo instance's version is at least the specified version
 
         Parameters
@@ -579,6 +614,8 @@ class RobotVersion:
             Minimum desired minor version
         patch : integer
             Minimum desired patch version
+        build : integer
+            Minimum desired build version
 
         Returns
         -------
@@ -598,8 +635,22 @@ class RobotVersion:
             return False
 
         # Same minor, check patch
-        if self.patch >= patch:
+        if self.patch > patch:
             return True
+        elif self.patch < patch:
+            return False
+
+        if build == 0 or build is None:
+            # Don't need to check build
+            return True
+
+        # Same patch, check build
+        if self.build is not None:
+            if self.build >= build:
+                return True
+        else:
+            # Build is not known, we can't make sure we're ok
+            return False
 
         return False
 
@@ -629,6 +680,8 @@ class RobotInfo:
         True if robot is capable of sending real-time monitoring messages.
     rt_on_ctrl_port_capable : bool
         True if robot is capable of sending real-time monitoring messages on control port (SetCtrlPortMonitoring).
+    sidecar_capable : bool
+        True if robot supports running the sidecar scripting engine.
     num_joints : int
         Number of joints on the robot.
     requires_homing : bool
@@ -646,8 +699,20 @@ class RobotInfo:
     ext_tool_version : str
         External tool firmware revision number as received from the connection string.
         Version 0.0.0.0 if device isn't connected or ext_tool_version_capable == False.
+    supports_joint_vel_limit : bool
+        Tells if this robot supports SetJointVelLimit
+    supports_set_payload : bool
+        Tells if this robot supports SetPayload
+    supports_torque_limits : bool
+        Tells if this robot supports SetTorqueLimits and SetTorqueLimitsCfg
+    supports_conf_turn : bool
+        Tells if this robot supports SetConfTurn
+    supports_time_scaling : bool
+        Tells if this robot supports SetTimeScaling
     supports_checkpoint_discarded : bool
         Tells if this robot supports reporting discarded checkpoints (MX_ST_CHECKPOINT_DISCARDED)
+    supports_move_duration : bool
+        Tells if this robot supports time-based movements (SetMoveDuration, SetMoveMode, ...)
 """
 
     def __init__(self,
@@ -658,7 +723,7 @@ class RobotInfo:
                  version: str = '0.0.0',
                  serial: str = '',
                  ext_tool_version: str = '0.0.0.0'):
-        self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R3
+        self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
         self.model = model
         self.revision = revision
         self.is_virtual = is_virtual
@@ -668,14 +733,21 @@ class RobotInfo:
         self.ip_address = None  # Set later
         self.rt_message_capable = False
         self.rt_on_ctrl_port_capable = False
+        self.sidecar_capable = False
         self.gripper_pos_ctrl_capable = False
         self.ext_tool_version_capable = False
         self.ext_tool_version = RobotVersion(ext_tool_version)
         self.supports_io_module = False
         self.supports_manual_mode = False
+        self.supports_joint_vel_limit = False
+        self.supports_set_payload = False
+        self.supports_torque_limits = False
+        self.supports_conf_turn = False
+        self.supports_time_scaling = False
         self.supports_checkpoint_discarded = False
+        self.supports_move_duration = False
 
-        if self.model == 'Meca500':
+        if self.model.upper() == MX_ROBOT_MODEL_OFFICIAL_NAME_M500.upper():
             if self.revision == 1:
                 self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R1
             elif self.revision == 2:
@@ -688,14 +760,28 @@ class RobotInfo:
             self.requires_homing = True
             self.supports_ext_tool = True
             self.supports_io_module = False
-        elif self.model == 'Mcs500':
+        elif self.model.upper() == MX_ROBOT_MODEL_OFFICIAL_NAME_MCS500.upper():
             self.robot_model = MxRobotModel.MX_ROBOT_MODEL_MCS500_R1
             self.num_joints = 4
             self.requires_homing = False
             self.supports_ext_tool = False
             self.supports_io_module = True
             self.supports_manual_mode = True
-        elif self.model == 'Unknown':
+        elif self.model.upper() == MX_ROBOT_MODEL_OFFICIAL_NAME_MCA250.upper():
+            self.robot_model = MxRobotModel.MX_ROBOT_MODEL_MCA250_R1
+            self.num_joints = 6
+            self.requires_homing = False
+            self.supports_ext_tool = False
+            self.supports_io_module = True
+            self.supports_manual_mode = True
+        elif self.model.upper() == MX_ROBOT_MODEL_OFFICIAL_NAME_MCA1000.upper():
+            self.robot_model = MxRobotModel.MX_ROBOT_MODEL_MCA1000_R1
+            self.num_joints = 6
+            self.requires_homing = False
+            self.supports_ext_tool = False
+            self.supports_io_module = True
+            self.supports_manual_mode = True
+        elif self.model.upper() == 'UNKNOWN':
             self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
             self.num_joints = 1
             self.requires_homing = False
@@ -711,14 +797,26 @@ class RobotInfo:
         # Check if this robot supports real-time monitoring on control port
         if self.version.is_at_least(9, 0):
             self.rt_on_ctrl_port_capable = True
+        # Check if this robot supports the sidecar scripting engine
+        if self.version.is_at_least(11, 1, 3):
+            self.sidecar_capable = True
         # Check if this robot supports gripper position control
         if self.version.is_at_least(9, 1):
             self.gripper_pos_ctrl_capable = True
         if self.version.is_at_least(9, 1, 5):
             # Check if this robot supports external tool version
             self.ext_tool_version_capable = True
+        if self.version.is_at_least(9, 3):
+            self.supports_joint_vel_limit = True
+            self.supports_set_payload = True
+            self.supports_torque_limits = True
+            self.supports_conf_turn = True
+        if self.version.is_at_least(10, 0, 1):
+            self.supports_time_scaling = True
         if self.version.is_at_least(10, 2, 1):
             self.supports_checkpoint_discarded = True
+        if self.version.is_at_least(11, 1, 2):
+            self.supports_move_duration = True
 
     def __str__(self):
         safe_boot_str = " SAFE-BOOT" if self.is_safe_boot else ""
@@ -743,6 +841,8 @@ class RobotInfo:
         connection_string_regex = r"Connected to (?P<model>[\w|-]+) ?R?(?P<revision>\d)?"
         connection_string_regex += r"(?P<virtual>-virtual)?(?P<safe_boot>-safe-boot)?( v|_)?(?P<version>\d+\.\d+\.\d+)"
 
+        model: str = "Unknown"
+        revision = 0
         virtual = False
         safe_boot = False
 
@@ -853,12 +953,16 @@ class TimestampedData:
         This timestamp is stamped by the robot so it is not affected by host/network jitter
     data : object
         Data to be stored.
+    update_type : RtDataUpdateType
+        Update type of the TimestampedData. Refer to RtDataUpdateType for the various update types.
 """
 
-    def __init__(self, timestamp: int, data: list[float]):
+    def __init__(self, timestamp: int, data: list[float], update_type: RtDataUpdateType):
         self.timestamp = timestamp
         self.data = data
-        self.enabled = False
+        self.update_type = update_type
+        self.enabled = False if (update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL
+                                 or update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE) else True
 
     def __str__(self):
         return str([self.timestamp] + self.data)
@@ -871,7 +975,7 @@ class TimestampedData:
         """
         if not self.enabled:
             self.timestamp = 0
-            self.data = TimestampedData.zeros(len(self.data)).data
+            self.data = TimestampedData.zeros(len(self.data), self.update_type).data
 
     def update_from_csv(self, input_string: str, allowed_nb_val: list[int] = None):
         """Update from comma-separated string, only if timestamp is newer.
@@ -900,6 +1004,7 @@ class TimestampedData:
         if numbs[0] >= self.timestamp:
             self.timestamp = numbs[0]
             self.data = numbs[1:]
+            self.enabled = True
 
     def update_from_data(self, timestamp: int, data: list[float]):
         """Update with data unless timestamp is older
@@ -915,22 +1020,25 @@ class TimestampedData:
         if timestamp >= self.timestamp:
             self.timestamp = timestamp
             self.data = data
+            self.enabled = True
 
     @classmethod
-    def zeros(cls, length: int):
+    def zeros(cls, length: int, update_type: RtDataUpdateType):
         """ Construct empty TimestampedData object of specified length.
 
         Parameters
         ----------
         length : int
             Length of data to construct.
+        update_type : RtDataUpdateType
+            Update type of monitored data. Refer to RtDataUpdateType for the various update types
 
         Return
         ------
         TimestampedData object
 
         """
-        return cls(0, [0.] * length)
+        return cls(0, [0.] * length, update_type)
 
     def __eq__(self, other):
         """ Return true if other object has identical timestamp and data.
@@ -946,7 +1054,7 @@ class TimestampedData:
             True if objects have same timestamp and data.
 
         """
-        return other.timestamp == self.timestamp and other.data == self.data
+        return other.timestamp == self.timestamp and other.data == self.data and other.update_type == self.update_type
 
     def __ne__(self, other):
         """ Return true if other object has different timestamp or data.
@@ -1032,6 +1140,14 @@ class RobotRtData:
     rt_effective_time_scaling : TimestampedData
         Effective time scaling ratio (GetRtEffectiveTimeScaling).
         *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_EFFECTIVE_TIME_SCALING).
+    rt_vm : TimestampedData
+        Motor voltage readings (GetRtVm).
+        Contains: [Baseboard VM, Psu VM, SafeMcu VM, Drive 1 VM, Drive 1 VM, ..., Drive N VM]
+        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_VM).
+    rt_current : TimestampedData
+        Motor current readings (GetRtIm).
+        Contains: [Baseboard current]
+        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_CURRENT).
 
     rt_external_tool_status : TimestampedData
         External tool status [sim_tool_type, physical_tool_type, homing_state, error_status, overload_error]
@@ -1089,55 +1205,95 @@ class RobotRtData:
         nb_cart_val = num_joints  # 4 degrees of liberty for 4 joints robots, 6 for 6 joint robots
         nb_conf_val = 3 if num_joints == 6 else 1  # 4 degrees of liberty for 4 joints robots, 6 for 6 joint robots
 
-        self.rt_target_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.rt_target_cart_pos = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
-        self.rt_target_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.rt_target_cart_vel = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm/s and deg/s
-        self.rt_target_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.rt_target_conf = TimestampedData.zeros(nb_conf_val)
-        self.rt_target_conf_turn = TimestampedData.zeros(1)
+        self.rt_target_joint_pos = TimestampedData.zeros(
+            num_joints, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)  # microseconds timestamp, degrees
+        self.rt_target_cart_pos = TimestampedData.zeros(
+            nb_cart_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)  # microseconds timestamp, mm and degrees
+        self.rt_target_joint_vel = TimestampedData.zeros(
+            num_joints,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, degrees/second
+        self.rt_target_cart_vel = TimestampedData.zeros(
+            nb_cart_val,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, mm/s and deg/s
+        self.rt_target_joint_torq = TimestampedData.zeros(
+            num_joints,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, percent of maximum
+        self.rt_target_conf = TimestampedData.zeros(nb_conf_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+        self.rt_target_conf_turn = TimestampedData.zeros(1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
 
-        self.rt_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
-        self.rt_cart_pos = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
-        self.rt_joint_vel = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees/second
-        self.rt_joint_torq = TimestampedData.zeros(num_joints)  # microseconds timestamp, percent of maximum
-        self.rt_cart_vel = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm/s and deg/s
-        self.rt_conf = TimestampedData.zeros(nb_conf_val)
-        self.rt_conf_turn = TimestampedData.zeros(1)
+        self.rt_joint_pos = TimestampedData.zeros(
+            num_joints, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, degrees
+        self.rt_cart_pos = TimestampedData.zeros(
+            nb_cart_val,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, mm and degrees
+        self.rt_joint_vel = TimestampedData.zeros(
+            num_joints,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, degrees/second
+        self.rt_joint_torq = TimestampedData.zeros(
+            num_joints,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, percent of maximum
+        self.rt_cart_vel = TimestampedData.zeros(
+            nb_cart_val,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, mm/s and deg/s
+        self.rt_conf = TimestampedData.zeros(nb_conf_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+        self.rt_conf_turn = TimestampedData.zeros(1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
 
-        self.rt_effective_time_scaling = TimestampedData.zeros(
-            1)  # microseconds timestamp, effective time scaling ratio
+        self.rt_effective_time_scaling = TimestampedData.zeros(1,
+                                                               RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL
+                                                               )  # microseconds timestamp, effective time scaling ratio
+        self.rt_vm = TimestampedData.zeros(
+            num_joints + 3, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL
+        )  # microseconds timestamp, Baseboard VM, Psu VM, SafeMcu Vm, Drive 1 VM, Drive 2 Vm, ...
+        self.rt_current = TimestampedData.zeros(
+            1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, Baseboard current
 
         # Another way of getting robot joint position using less-precise encoders.
         # For robot production testing (otherwise use rt_joint_pos which is much more precise)
-        self.rt_abs_joint_pos = TimestampedData.zeros(num_joints)  # microseconds timestamp, degrees
+        self.rt_abs_joint_pos = TimestampedData.zeros(
+            num_joints, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, degrees
 
         # Contains dictionary of accelerometers stored in the robot indexed by joint number.
         # For example, Meca500 currently only reports the accelerometer in joint 5.
         self.rt_accelerometer: dict[int, TimestampedData] = dict()  # 16000 = 1g
 
         self.rt_external_tool_status = TimestampedData.zeros(
-            5)  # microseconds timestamp, sim tool type, physical tool type, homed, error, overload
+            5, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED
+        )  # microseconds timestamp, sim tool type, physical tool type, homed, error, overload
         self.rt_valve_state = TimestampedData.zeros(
-            MX_EXT_TOOL_MPM500_NB_VALVES)  # microseconds timestamp, valve1 opened, valve2 opened
+            MX_EXT_TOOL_MPM500_NB_VALVES,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # microseconds timestamp, valve1 opened, valve2 opened
         self.rt_gripper_state = TimestampedData.zeros(
-            4)  # microseconds timestamp, holding part, target pos reached, closed, opened
-        self.rt_gripper_force = TimestampedData.zeros(1)  # microseconds timestamp, gripper force [%]
-        self.rt_gripper_pos = TimestampedData.zeros(1)  # microseconds timestamp, gripper position [mm]
+            4, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED
+        )  # microseconds timestamp, holding part, target pos reached, closed, opened
+        self.rt_gripper_force = TimestampedData.zeros(
+            1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, gripper force [%]
+        self.rt_gripper_pos = TimestampedData.zeros(
+            1,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, gripper position [mm]
 
-        self.rt_io_module_status = TimestampedData.zeros(4)
-        self.rt_io_module_outputs = TimestampedData.zeros(0)  # Resized later
-        self.rt_io_module_inputs = TimestampedData.zeros(0)  # Resized later
-        self.rt_vacuum_state = TimestampedData.zeros(3)  # microseconds timestamp, vacuum on/off, purge on/off, holding
-        self.rt_vacuum_pressure = TimestampedData.zeros(1)  # microseconds timestamp, vacuum pressure [kPa]
+        self.rt_io_module_status = TimestampedData.zeros(4, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+        self.rt_io_module_outputs = TimestampedData.zeros(
+            0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # Resized later
+        self.rt_io_module_inputs = TimestampedData.zeros(
+            0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # Resized later
+        self.rt_vacuum_state = TimestampedData.zeros(3, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED
+                                                     )  # microseconds timestamp, vacuum on/off, purge on/off, holding
+        self.rt_vacuum_pressure = TimestampedData.zeros(
+            1,
+            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, vacuum pressure [kPa]
 
-        self.rt_sig_gen_status = TimestampedData.zeros(4)
-        self.rt_sig_gen_outputs = TimestampedData.zeros(0)  # Resized later
-        self.rt_sig_gen_inputs = TimestampedData.zeros(0)  # Resized later
+        self.rt_sig_gen_status = TimestampedData.zeros(4, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+        self.rt_sig_gen_outputs = TimestampedData.zeros(
+            0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # Resized later
+        self.rt_sig_gen_inputs = TimestampedData.zeros(
+            0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # Resized later
 
-        self.rt_wrf = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
-        self.rt_trf = TimestampedData.zeros(nb_cart_val)  # microseconds timestamp, mm and degrees
-        self.rt_checkpoint = TimestampedData.zeros(1)  # microseconds timestamp, checkpointId
+        self.rt_wrf = TimestampedData.zeros(
+            nb_cart_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # microseconds timestamp, mm and degrees
+        self.rt_trf = TimestampedData.zeros(
+            nb_cart_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # microseconds timestamp, mm and degrees
+        self.rt_checkpoint = TimestampedData.zeros(
+            1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # microseconds timestamp, checkpointId
 
     def _for_each_rt_data(self):
         """Iterates for each TimestampedData type member of this class (rt_joint_pos, rt_cart_pos, etc.)
@@ -1162,11 +1318,37 @@ class RobotRtData:
         for rt_data in self._for_each_rt_data():
             rt_data.enabled = False
 
-    def _clear_if_disabled(self):
+        # manually remove the accelerometer data
+        self.rt_accelerometer.clear()
+
+    def _clear_accelerometer_data_if_disabled(self):
+        """Clear the accelerometer data dictionary member
+        """
+        for accelerometer_idx in list(self.rt_accelerometer.keys()):
+            if self.rt_accelerometer[accelerometer_idx].enabled is False:
+                del self.rt_accelerometer[accelerometer_idx]
+
+    def clear_if_outdated(self):
+        """Clear the TimestampedData of each member if the data is outdated
+        """
+        # Clear any outdated pieces of data by using the enable flag
+        reference_timestamp = self.rt_target_joint_pos.timestamp  # Present at every cycle
+
+        for rt_data in self._for_each_rt_data():
+            if (rt_data.timestamp != reference_timestamp
+                    and rt_data.update_type != RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED):
+                rt_data.enabled = False
+                rt_data.clear_if_disabled()
+
+        self._clear_accelerometer_data_if_disabled()
+
+    def clear_if_disabled(self):
         """Clear real-time values that are disabled (not reported by robot's current real-time monitoring configuration)
         """
         for rt_data in self._for_each_rt_data():
             rt_data.clear_if_disabled()
+
+        self._clear_accelerometer_data_if_disabled()
 
 
 class RobotStatus:
@@ -1178,8 +1360,8 @@ class RobotStatus:
         True if the robot is activated.
     homing_state : bool
         True if the robot is homed.
-    simulation_mode : bool
-        True if the robot is in simulation-only mode.
+    simulation_mode : MxRobotSimulationMode
+        True if the robot is in simulation-only mode (fast or real-time)
     recovery_mode : bool
         True if the robot is in recovery mode.
     error_status : bool
@@ -1217,7 +1399,7 @@ class RobotStatus:
         # The following are status fields.
         self.activation_state = False
         self.homing_state = False
-        self.simulation_mode = False
+        self.simulation_mode = MxRobotSimulationMode.MX_SIM_MODE_DISABLED
         self.recovery_mode = False
         self.error_status = False
         self.error_code: Optional[int] = None
@@ -2135,3 +2317,34 @@ class CollisionStatus:
 
     def __repr__(self) -> str:
         return str(self)
+
+
+class RobotSidecarStatus:
+    """Class for storing the status of a "sidecar" scripting engine connected to the robot.
+
+    Attributes
+    ----------
+    embedded : bool
+        True if this sidecar instance is running embedded inside the robot.
+    remote_ip : str
+        The IP address of this sidecar instance.
+    registered_functions : list[str]
+        List of functions registered by this sidecar instance.
+"""
+
+    def __init__(self):
+
+        # The following are status fields.
+        self.id: Optional[int] = None
+        self.embedded = False
+        self.remote_ip = ""
+        self.registered_functions: list[str] = []
+
+    def __str__(self) -> str:
+        ip = ""
+        if not self.embedded:
+            ip = f", IP: {self.remote_ip}"
+        return ((f"Id: {self.id}, "
+                 f"Embedded: {self.embedded}, "
+                 f"Ip: {self.remote_ip}{ip}, "
+                 f"functions: [{','.join(self.registered_functions)}]"))

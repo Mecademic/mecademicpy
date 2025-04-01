@@ -50,6 +50,9 @@ class MotionQueueParams:
         self.joint_acc = 50
         self.joint_vel_limit = 100
         self.joint_vel = 50
+        self.move_mode = MxMoveMode.MX_MOVE_MODE_VELOCITY
+        self.move_duration_severity = MxEventSeverity.MX_EVENT_SEVERITY_WARNING
+        self.move_duration = 3.0
         self.vel_timeout = 0.1
         self.trf = [0, 0, 0, 0, 0, 0]
         self.wrf = [0, 0, 0, 0, 0, 0]
@@ -73,9 +76,8 @@ class MotionQueueParams:
             if other_attr is None:
                 return False
             if isinstance(self_attr, list):
-                # pylint: disable=consider-using-enumerate
-                for idx in range(len(self_attr)):
-                    if self_attr[idx] != other_attr[idx]:
+                for idx, attr in enumerate(self_attr):
+                    if attr != other_attr[idx]:
                         return False
             elif self_attr != other_attr:
                 return False
@@ -132,7 +134,7 @@ class RobotWithTools(Robot):
         """
         with self._main_lock:
             self._dirty_flags.set_dirty()
-        return super().ActivateAndHome()
+        super().ActivateAndHome()
 
     def Disconnect(self):
         """Overload of Disconnect to set as "dirty" all motion-queue related settings"""
@@ -388,24 +390,22 @@ def reset_joint_limits(robot: RobotWithTools):
         Please use this method only if your situation is covered by one of the cases below.
 
         This function handles only the following cases (write your own function if your situation differs)
-        - In simulation mode (sim_mode) joint limits are disabled
         - For Meca500 with a MPM500 pneumatic module, a limit will be set to avoid collision with the joint 4
         - For Meca500 with a MEGP-25E or MEGP-25LS gripper, joint 6 will be limited to +/- 180 degrees to avoid
           damaging the cable.
         - Otherwise, joint limits are disabled
     """
-    if robot.GetStatusRobot().simulation_mode:
-        set_joint_limits_cfg(robot, set_enable=False)
-    else:
-        # Enable joint limits if physical external tool is connected
-        _enable_joint_limits_for_ext_tool(robot)
+    # Enable joint limits if physical external tool is connected
+    _enable_joint_limits_for_ext_tool(robot)
 
 
 def reset_work_zone_limits(robot: RobotWithTools):
     """This function reverts work zone limits to defaults.
     """
     # Check if already set
-    expected_cfg = [MxEventSeverity.MX_EVENT_SEVERITY_ERROR, MxWorkZoneMode.MX_WORK_ZONE_MODE_FCP_IN_WORK_ZONE]
+    expected_cfg = [
+        MxEventSeverity.MX_EVENT_SEVERITY_ERROR, MxWorkZoneMode.MX_WORK_ZONE_MODE_ROBOT_AND_TOOL_IN_WORK_ZONE
+    ]
     expected_limits = [-10000, -10000, -10000, 10000, 10000, 10000]
 
     # Check work zone limits configuration
@@ -495,6 +495,29 @@ def reset_pstop2_cfg(robot: RobotWithTools):
     robot.SetPStop2Cfg(expected_severity[0])
 
 
+def reset_sim_mode_cfg(robot: RobotWithTools):
+    """This function reverts simulation mode configuration to defaults.
+    """
+    expected_sim_mode_cfg = [MxRobotSimulationMode.MX_SIM_MODE_REAL_TIME]
+
+    if not robot.GetRobotInfo().version.is_at_least(11, 1, 2):
+        # Not supported on this robot version
+        return
+
+    # Check current configuration
+    response = robot.SendCustomCommand('GetSimModeCfg()',
+                                       expected_responses=[MxRobotStatusCode.MX_ST_GET_SIM_MODE_CFG],
+                                       timeout=2)
+    current_sim_mode_cfg = string_to_numbers(response.data)
+    need_to_set_cfg = expected_sim_mode_cfg != current_sim_mode_cfg
+
+    if not need_to_set_cfg:
+        return
+
+    # Set default config
+    robot.SetSimModeCfg(expected_sim_mode_cfg[0])
+
+
 def reset_vacuum_grip(robot: RobotWithTools):
     """This function release vacuum from the io module (without purging) and restores default purge duration """
     if (robot.HasIoModule()
@@ -523,7 +546,7 @@ def reset_io_sim(robot: RobotWithTools):
     """This function clears IO simulation mode"""
     if not robot.GetRobotInfo().supports_io_module:
         return
-    if robot.GetStatusRobot().simulation_mode:
+    if robot.GetStatusRobot().simulation_mode != MxRobotSimulationMode.MX_SIM_MODE_DISABLED:
         # No point trying to change IO sim, the whole robot is in SIM mode
         return
     if robot.GetRtIoStatus(MxIoBankId.MX_IO_BANK_ID_IO_MODULE).sim_mode:
@@ -600,7 +623,7 @@ def reset_sim_mode(robot: RobotWithTools):
     """Disables the robot simulation mode if not already done
        (including deactivating the robot if necessary)
     """
-    if not robot.GetStatusRobot().simulation_mode:
+    if robot.GetStatusRobot().simulation_mode == MxRobotSimulationMode.MX_SIM_MODE_DISABLED:
         # Already cleared
         return
 
@@ -680,6 +703,7 @@ def reset_robot_configuration(robot: RobotWithTools):
     reset_work_zone_limits(robot)
     reset_collision_cfg(robot)
     reset_pstop2_cfg(robot)
+    reset_sim_mode_cfg(robot)
 
 
 #
@@ -697,7 +721,8 @@ def reset_motion_queue(robot: RobotWithTools, params: MotionQueueParams = None, 
                                         False -> Don't change robot status (do nothing if not activated and homed)
                                         Defaults to False.
     """
-    robot.set_if_dirty('SetTimeScaling', 100)
+    if robot.GetRobotInfo().supports_time_scaling:
+        robot.set_if_dirty('SetTimeScaling', 100)
 
     if activate_home and not robot.GetStatusRobot().homing_state:
         robot.ActivateAndHome()
@@ -712,37 +737,47 @@ def reset_motion_queue(robot: RobotWithTools, params: MotionQueueParams = None, 
 
         clear_motion(robot, then_resume=True)
 
-        robot.set_if_dirty('SetTorqueLimitsCfg', params.torque_limits_severity, params.torque_limits_mode)
-        num_joints = robot.GetRobotInfo().num_joints
-        if len(params.torque_limits) == num_joints:
-            robot.set_if_dirty('SetTorqueLimits', *params.torque_limits)
-        else:
-            robot.set_if_dirty('SetTorqueLimits', *params.torque_limits[:num_joints])
+        if robot.GetRobotInfo().supports_torque_limits:
+            robot.set_if_dirty('SetTorqueLimitsCfg', params.torque_limits_severity, params.torque_limits_mode)
+            num_joints = robot.GetRobotInfo().num_joints
+            if len(params.torque_limits) == num_joints:
+                robot.set_if_dirty('SetTorqueLimits', *params.torque_limits)
+            else:
+                robot.set_if_dirty('SetTorqueLimits', *params.torque_limits[:num_joints])
         robot.set_if_dirty('SetAutoConf', params.auto_conf)
-        robot.set_if_dirty('SetAutoConfTurn', params.auto_conf_turn)
+        if robot.GetRobotInfo().supports_conf_turn:
+            robot.set_if_dirty('SetAutoConfTurn', params.auto_conf_turn)
         robot.set_if_dirty('SetBlending', params.blending)
         robot.set_if_dirty('SetCartAcc', params.cart_acc)
         robot.set_if_dirty('SetCartAngVel', params.cart_ang_vel)
         robot.set_if_dirty('SetCartLinVel', params.cart_lin_vel)
         robot.set_if_dirty('SetJointAcc', params.joint_acc)
-        robot.set_if_dirty('SetJointVelLimit', params.joint_vel_limit)
+        if robot.GetRobotInfo().supports_joint_vel_limit:
+            robot.set_if_dirty('SetJointVelLimit', params.joint_vel_limit)
         robot.set_if_dirty('SetJointVel', params.joint_vel)
+        if robot.GetRobotInfo().supports_move_duration:
+            robot.set_if_dirty('SetMoveMode', params.move_mode)
+            robot.set_if_dirty('SetMoveDurationCfg', params.move_duration_severity)
+            robot.set_if_dirty('SetMoveDuration', params.move_duration)
         robot.set_if_dirty('SetVelTimeout', params.vel_timeout)
         robot.set_if_dirty('SetTrf', *params.trf)
         robot.set_if_dirty('SetWrf', *params.wrf)
-        robot.set_if_dirty('SetPayload', *params.payload)
+        if robot.GetRobotInfo().version.is_at_least(9, 3):
+            robot.set_if_dirty('SetPayload', *params.payload)
         # eoat initialization
         if robot_model_support_eoat(robot.GetRobotInfo().robot_model):
             robot.set_if_dirty('SetGripperForce', params.gripper_force)
             robot.set_if_dirty('SetGripperVel', params.gripper_vel)
-            robot.set_if_dirty('SetGripperRange', *params.gripper_range)
-        if not robot_model_is_meca500(robot.GetRobotInfo().robot_model):
+            if robot.GetRobotInfo().gripper_pos_ctrl_capable:
+                robot.set_if_dirty('SetGripperRange', *params.gripper_range)
+        if robot.GetRobotInfo().num_joints == 4:
             robot.set_if_dirty('SetMoveJumpHeight', *params.move_jump_height)
             robot.set_if_dirty('SetMoveJumpApproachVel', *params.move_jump_approach_vel)
 
         # Restore default real-time monitoring events
         robot.set_if_dirty('SetMonitoringInterval', params.monitoring_interval)
-        robot.set_if_dirty('SetRealTimeMonitoring', *params.real_time_monitoring)
+        if robot.GetRobotInfo().version.is_at_least(9, 3):
+            robot.set_if_dirty('SetRealTimeMonitoring', *params.real_time_monitoring)
 
         # Now that we've set all motion-queue parameters,
         robot.clear_dirty_flags(params)

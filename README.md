@@ -5,14 +5,14 @@ A python module designed for robot products from Mecademic. The module offers to
 
 #### Supported Robots
 
- * Meca500, Mcs500
+ * Meca500, MCS500
 
 #### Supported Firmware Versions
 
  * 8.3 and up
 
 #### Supported Python versions
-Mecademicpy 2.2 targets Python version 3.7 and above.
+Mecademicpy 2.3 targets Python version 3.7 and above.
 It has been tested with the following Python versions:
 * Python 3.7.17
 * Python 3.8.18
@@ -20,6 +20,7 @@ It has been tested with the following Python versions:
 * Python 3.10.13
 * Python 3.11.8
 * Python 3.12.2
+* Python 3.13.2
 
 ## Prerequisites
 
@@ -297,6 +298,28 @@ with initializer.RobotWithTools() as robot:
 
     # Wait until robot is activated and homed
     robot.WaitHomed()
+```
+
+### Manage robot variables
+Mecademic robots allow you to store persistent variables, which remain valid even after a reboot or power cycle.
+These variables are useful in Python programs for a variety of tasks, such as utilizing target positions or reference
+frames that have been pre-defined and fine-tuned on each of your robots.
+
+You can create (`CreateVariables`), delete (`DeleteVariables`), read (`robot.vars.variable_name`), 
+and modify (`robot.vars.variable_name = new_value`) these variables as needed.
+
+For detailed information on how to use variables, refer to the `Robot` class documentation in the Mecademicpy API.
+For further details on robot variables, consult the robot's programming manual.
+
+#### Quick Example:
+```python
+# Create a variable on the robot
+robot.CreateVariable("my_wrf", [0,0,0,0,0,0])
+# Modify a variable on the robot
+robot.vars.my_wrf = [10,-10,0,0,0,45]
+# Use the variable value (cached in Robot class for performance)
+print(f'my_wrf={robot.vars.my_wrf}')
+robot.DeleteVariable("my_wrf")
 ```
 
 ### Logging Data to File

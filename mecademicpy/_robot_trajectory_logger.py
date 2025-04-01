@@ -38,6 +38,8 @@ robot_rt_data_to_real_time_monit = {
     'rt_abs_joint_pos': (mx_st.MX_ST_RT_JOINT_POS, 'AbsJointPos'),
     'rt_accelerometer': (mx_st.MX_ST_RT_ACCELEROMETER, 'Accel'),
     'rt_effective_time_scaling': (mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING, 'EffectiveTimeScaling'),
+    'rt_vm': (mx_st.MX_ST_RT_VM, 'Vm'),
+    'rt_current': (mx_st.MX_ST_RT_CURRENT, 'Current'),
     'rt_wrf': (mx_st.MX_ST_RT_WRF, 'Wrf'),
     'rt_trf': (mx_st.MX_ST_RT_TRF, 'Trf'),
     'rt_checkpoint': (mx_st.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
@@ -258,6 +260,13 @@ class _RobotTrajectoryLogger:
                 self.expanded_fields.append(value)
             elif key.endswith('rt_effective_time_scaling'):
                 self.expanded_fields.append(value)
+            elif key.endswith('rt_vm'):
+                columns = ['Baseboard', 'Psu', 'SafeMcu']
+                columns += range(robot_info.num_joints)
+                self.expanded_fields.extend(assemble_with_prefix(value, columns))
+            elif key.endswith('rt_current'):
+                columns = ['Baseboard']
+                self.expanded_fields.extend(assemble_with_prefix(value, columns))
             elif key.endswith('rt_external_tool_status'):
                 self.expanded_fields.extend(
                     assemble_with_prefix(value, ['SimModel', 'PhysicalModel', 'Present', 'Homed', 'Error']))

@@ -106,11 +106,11 @@ def connect_robot_helper(robot: mdr.Robot,
 
         fake_robot.start()
 
-        robot.Connect(TEST_IP,
-                      offline_mode=offline_mode,
-                      disconnect_on_exception=disconnect_on_exception,
-                      enable_synchronous_mode=enable_synchronous_mode,
-                      monitor_mode=monitor_mode)
+        robot._Connect(TEST_IP,
+                       offline_mode=offline_mode,
+                       disconnect_on_exception=disconnect_on_exception,
+                       enable_synchronous_mode=enable_synchronous_mode,
+                       monitor_mode=monitor_mode)
 
         fake_robot.join()
 
@@ -122,10 +122,9 @@ def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expec
                             desired_out: Union[list[list[mdr.Message]], list[mdr.Message]]):
     """Simulated handler that simulates responses that the robot send to queued requests"""
     if isinstance(expected_in, list):
-        # pylint: disable=consider-using-enumerate
-        for i in range(len(expected_in)):
+        for i, expected_val in enumerate(expected_in):
             event = queue_in.get(block=True, timeout=1)
-            assert event == expected_in[i]
+            assert event == expected_val
             if isinstance(desired_out[i], list):
                 desired_list: list = desired_out
                 for response in desired_list[i]:
@@ -159,7 +158,7 @@ def fake_server(address, port, data_list, server_up):
         received_data = client.recv(1024)
         if not received_data:
             break
-        if data_list:
+        if len(received_data) > 1 and data_list:
             client.sendall(data_list.pop(0).encode('ascii'))
 
 
@@ -194,7 +193,7 @@ class FakeSocket():
 
 # Test that connecting with invalid parameters raises exception.
 def test_setup_invalid_input(robot: mdr.Robot):
-    with pytest.raises(ValueError):
+    with pytest.raises(mdr.CommunicationError):
         robot.Connect('1.1.1.1.1')
 
 
@@ -214,7 +213,7 @@ def test_successful_connection_full_socket_legacy(robot: mdr.Robot):
         '[3000][Connected to Meca500 R3-virtual v8.3.10]\0', '[2007][0,0,0,0,1,1,1]\0', '[2083][m500-99999]\0',
         '[2082][v8.3.10.9876-unit-test-fake]\0', '[2007][0,0,0,0,1,1,1]\0'
     ])
-    monitor_server_thread = run_fake_server(TEST_IP, MX_ROBOT_TCP_PORT_FEED, [])
+    monitor_server_thread = run_fake_server(TEST_IP, MX_ROBOT_TCP_PORT_FEED, ['\0'])
 
     with pytest.raises(mdr.TimeoutException):
         robot.WaitConnected(timeout=0)
@@ -240,20 +239,21 @@ def test_successful_connection_full_socket_legacy(robot: mdr.Robot):
 
 
 # Test that the socket handler properly concatenates messages split across multiple recv() calls.
-def test_successful_connection_split_response():
+def test_successful_connection_split_response(robot: mdr.Robot):
+    # Push "Connected to" and empty message (terminated socket)
     fake_socket = FakeSocket([b'[3', b'00', b'0][Connected to Meca500 R3 v9.0.0]\0', b''])
     rx_queue = queue.Queue()
 
     # Test the socket handler directly to ensure messages are received across several recv() calls.
-    mdr.Robot._handle_socket_rx(fake_socket, rx_queue, logging.getLogger(__name__))
+    robot._rx_thread_fct(fake_socket, rx_queue)
 
-    assert rx_queue.qsize() == 1
+    assert rx_queue.qsize() == 2  # "Connected to" and _TERMINATE
     message = rx_queue.get()
     assert message.id == mx_st.MX_ST_CONNECTED
     assert message.data == MECA500_CONNECTED_RESPONSE
 
 
-# Test that we can connect to a Scara robot.
+# Test that we can connect to a Mcs500 robot.
 def test_mcs500_connection(robot: mdr.Robot):
     connect_robot_helper(robot, yaml_filename='mcs500_r1_v9.yml')
     assert not robot.GetStatusRobot().activation_state
@@ -262,6 +262,28 @@ def test_mcs500_connection(robot: mdr.Robot):
     assert robot.GetRobotInfo().version.major == 9
     assert robot.GetRobotInfo().rt_message_capable
     assert robot.GetRobotInfo().serial == 'mcs500-87654321'
+
+
+# Test that we can connect to a Mca250 robot.
+def test_mca250_connection(robot: mdr.Robot):
+    connect_robot_helper(robot, yaml_filename='mca250_r1_v10.yml')
+    assert not robot.GetStatusRobot().activation_state
+    assert robot.GetRobotInfo().model == 'Mca250'
+    assert robot.GetRobotInfo().num_joints == 6
+    assert robot.GetRobotInfo().version.major == 10
+    assert robot.GetRobotInfo().rt_message_capable
+    assert robot.GetRobotInfo().serial == 'mca250-250250'
+
+
+# Test that we can connect to a Mca1000 robot.
+def test_mca1000_connection(robot: mdr.Robot):
+    connect_robot_helper(robot, yaml_filename='mca1000_r1_v10.yml')
+    assert not robot.GetStatusRobot().activation_state
+    assert robot.GetRobotInfo().model == 'Mca1000'
+    assert robot.GetRobotInfo().num_joints == 6
+    assert robot.GetRobotInfo().version.major == 10
+    assert robot.GetRobotInfo().rt_message_capable
+    assert robot.GetRobotInfo().serial == 'mca1000-10001000'
 
 
 # Test that we can connect to a M500 robot running older version 7.0.6
@@ -344,11 +366,11 @@ def test_sequential_connections(robot: mdr.Robot):
 
     robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_USER_ALREADY, ''))
     with pytest.raises(Exception):
-        robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+        robot._Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     robot._command_rx_queue.put(mdr.Message(99999, ''))
     with pytest.raises(Exception):
-        robot.Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
+        robot._Connect(TEST_IP, offline_mode=True, disconnect_on_exception=False)
 
     connect_robot_helper(robot)
     robot.Disconnect()
@@ -443,9 +465,9 @@ def test_monitoring_connection(robot: mdr.Robot):
         return [x + code for x in data]
 
     # Convert the test array into a TimestampedData object.
-    def make_test_data(code, data):
+    def make_test_data(code, data, update_type):
         test_array = make_test_array(code, data)
-        return mdr.TimestampedData(test_array[0], test_array[1:])
+        return mdr.TimestampedData(test_array[0], test_array[1:], update_type)
 
     # Convert the test array into a Message object.
     def make_test_message(code, data):
@@ -476,27 +498,43 @@ def test_monitoring_connection(robot: mdr.Robot):
     robot.Disconnect()
 
     # Temporarily test using direct members, switch to using proper getters once implemented.
-    assert robot._robot_rt_data.rt_target_joint_pos == make_test_data(mx_st.MX_ST_RT_TARGET_JOINT_POS, range(7))
-    assert robot._robot_rt_data.rt_target_cart_pos == make_test_data(mx_st.MX_ST_RT_TARGET_CART_POS, range(7))
-    assert robot._robot_rt_data.rt_target_joint_vel == make_test_data(mx_st.MX_ST_RT_TARGET_JOINT_VEL, range(7))
-    assert robot._robot_rt_data.rt_target_cart_vel == make_test_data(mx_st.MX_ST_RT_TARGET_CART_VEL, range(7))
-    assert robot._robot_rt_data.rt_target_conf == make_test_data(mx_st.MX_ST_RT_TARGET_CONF, range(4))
-    assert robot._robot_rt_data.rt_target_conf_turn == make_test_data(mx_st.MX_ST_RT_TARGET_CONF_TURN, range(2))
+    assert robot._robot_rt_data.rt_target_joint_pos == make_test_data(
+        mx_st.MX_ST_RT_TARGET_JOINT_POS, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)
+    assert robot._robot_rt_data.rt_target_cart_pos == make_test_data(
+        mx_st.MX_ST_RT_TARGET_CART_POS, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)
+    assert robot._robot_rt_data.rt_target_joint_vel == make_test_data(
+        mx_st.MX_ST_RT_TARGET_JOINT_VEL, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    assert robot._robot_rt_data.rt_target_cart_vel == make_test_data(
+        mx_st.MX_ST_RT_TARGET_CART_VEL, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    assert robot._robot_rt_data.rt_target_conf == make_test_data(
+        mx_st.MX_ST_RT_TARGET_CONF, range(4), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+    assert robot._robot_rt_data.rt_target_conf_turn == make_test_data(
+        mx_st.MX_ST_RT_TARGET_CONF_TURN, range(2), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
 
-    assert robot._robot_rt_data.rt_joint_pos == make_test_data(mx_st.MX_ST_RT_JOINT_POS, range(7))
-    assert robot._robot_rt_data.rt_abs_joint_pos == make_test_data(mx_st.MX_ST_RT_ABS_JOINT_POS, range(7))
-    assert robot._robot_rt_data.rt_cart_pos == make_test_data(mx_st.MX_ST_RT_CART_POS, range(7))
-    assert robot._robot_rt_data.rt_joint_vel == make_test_data(mx_st.MX_ST_RT_JOINT_VEL, range(7))
-    assert robot._robot_rt_data.rt_joint_torq == make_test_data(mx_st.MX_ST_RT_JOINT_TORQ, range(7))
-    assert robot._robot_rt_data.rt_cart_vel == make_test_data(mx_st.MX_ST_RT_CART_VEL, range(7))
-    assert robot._robot_rt_data.rt_conf == make_test_data(mx_st.MX_ST_RT_CONF, range(4))
-    assert robot._robot_rt_data.rt_conf_turn == make_test_data(mx_st.MX_ST_RT_CONF_TURN, range(2))
+    assert robot._robot_rt_data.rt_joint_pos == make_test_data(
+        mx_st.MX_ST_RT_JOINT_POS, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    assert robot._robot_rt_data.rt_abs_joint_pos == make_test_data(
+        mx_st.MX_ST_RT_ABS_JOINT_POS, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    assert robot._robot_rt_data.rt_cart_pos == make_test_data(
+        mx_st.MX_ST_RT_CART_POS, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    assert robot._robot_rt_data.rt_joint_vel == make_test_data(
+        mx_st.MX_ST_RT_JOINT_VEL, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    assert robot._robot_rt_data.rt_joint_torq == make_test_data(
+        mx_st.MX_ST_RT_JOINT_TORQ, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    assert robot._robot_rt_data.rt_cart_vel == make_test_data(
+        mx_st.MX_ST_RT_CART_VEL, range(7), mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    assert robot._robot_rt_data.rt_conf == make_test_data(mx_st.MX_ST_RT_CONF, range(4),
+                                                          mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+    assert robot._robot_rt_data.rt_conf_turn == make_test_data(mx_st.MX_ST_RT_CONF_TURN, range(2),
+                                                               mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
 
     # The data is sent as [timestamp, accelerometer_id, {measurements...}].
     # We convert it to a dictionary which maps the accelerometer_id to a TimestampedData object.
     accel_array = make_test_array(mx_st.MX_ST_RT_ACCELEROMETER, range(5))
     assert robot._robot_rt_data.rt_accelerometer == {
-        accel_array[1]: mdr.TimestampedData(accel_array[0], accel_array[2:])
+        accel_array[1]:
+        mdr.TimestampedData(accel_array[0], accel_array[2:],
+                            mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
     }
 
 
@@ -930,7 +968,7 @@ def test_motion_commands(robot: mdr.Robot):
 
     skip_commands = [
         'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
-        'SetTorqueLimitsCfg', 'SetIoSim', 'SetOutputState', 'SetOutputStateImmediate'
+        'SetTorqueLimitsCfg', 'SetIoSim', 'SetOutputState', 'SetOutputStateImmediate', 'SetVariable'
     ]
 
     # List of methods that will be deprecated. The deprecation decorator breaks the way we use to test those methods.
@@ -1015,7 +1053,8 @@ def test_synchronous_gets(robot: mdr.Robot):
     assert robot.GetRtTargetJointPos(synchronous_update=True, timeout=1) == [1, 2, 3, 4, 5, 6]
 
     # Also test get with timestamp
-    expected_response = mdr.TimestampedData(1234, [1, 2, 3, 4, 5, 6])
+    expected_response = mdr.TimestampedData(1234, [1, 2, 3, 4, 5, 6],
+                                            mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)
     assert robot.GetRtTargetJointPos(include_timestamp=True, synchronous_update=False) == expected_response
 
     fake_robot.join()
@@ -1035,7 +1074,8 @@ def test_synchronous_gets(robot: mdr.Robot):
     assert robot.GetRtTargetCartPos(synchronous_update=True, timeout=1) == [2, 3, 4, 5, 6, 7]
 
     # Also test get with timestamp
-    expected_response = mdr.TimestampedData(2345, [2, 3, 4, 5, 6, 7])
+    expected_response = mdr.TimestampedData(2345, [2, 3, 4, 5, 6, 7],
+                                            mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)
     assert robot.GetRtTargetCartPos(include_timestamp=True, synchronous_update=False) == expected_response
 
     fake_robot.join()
@@ -1071,7 +1111,7 @@ def test_synchronous_gets_legacy(robot: mdr.Robot):
 
     # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdrb._TERMINATE)
-    robot._monitor_handler_thread.join(timeout=5)
+    robot._monitor_rx_handler_thread.join(timeout=5)
     robot._initialize_monitoring_connection()
 
     # Without RT messages, enabling 'include_timestamp' should raise exception.
@@ -1143,11 +1183,11 @@ def test_start_offline_program(robot: mdr.Robot):
 def test_monitor_mode(robot: mdr.Robot):
 
     robot._monitor_rx_queue.put(mdr.Message(mx_st.MX_ST_CONNECTED, MECA500_CONNECTED_RESPONSE))
-    robot.Connect(TEST_IP,
-                  monitor_mode=True,
-                  offline_mode=True,
-                  disconnect_on_exception=False,
-                  enable_synchronous_mode=True)
+    robot._Connect(TEST_IP,
+                   monitor_mode=True,
+                   offline_mode=True,
+                   disconnect_on_exception=False,
+                   enable_synchronous_mode=True)
 
     robot.WaitConnected(timeout=0)
 
@@ -1166,7 +1206,7 @@ def test_monitor_mode(robot: mdr.Robot):
 
     # Terminate queue and wait for thread to exit to ensure messages are processed.
     robot._monitor_rx_queue.put(mdrb._TERMINATE)
-    robot._monitor_handler_thread.join(timeout=5)
+    robot._monitor_rx_handler_thread.join(timeout=5)
 
     # Check that these gets do not raise an exception.
     assert robot.GetRtTargetJointPos() == fake_joint
@@ -1303,6 +1343,8 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
                 mdr.Message(mx_st.MX_ST_RT_IO_STATUS, f'29,{MxIoBankId.MX_IO_BANK_ID_SIG_GEN},29,29,29'))
             robot._command_rx_queue.put(
                 mdr.Message(mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING, fake_string(seed=30, length=2)))
+            robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_VM, fake_string(seed=31, length=10)))
+            robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CURRENT, fake_string(seed=32, length=2)))
 
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CYCLE_END, str(i * 100)))
 
@@ -1312,7 +1354,7 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
         # Terminate queue and wait for thread to exit to ensure messages are processed.
         robot._command_rx_queue.put(mdrb._TERMINATE)
 
-    robot._command_response_handler_thread.join(timeout=5)
+    robot._rx_handler_thread.join(timeout=5)
 
     # Restart the monitoring connection to ensure the API is in a good state.
     robot._initialize_monitoring_connection()
@@ -1360,7 +1402,7 @@ def test_file_logger_legacy(tmp_path, robot: mdr.Robot):
 
         # Terminate queue and wait for thread to exit to ensure messages are processed.
         robot._monitor_rx_queue.put(mdrb._TERMINATE)
-        robot._monitor_handler_thread.join(timeout=5)
+        robot._monitor_rx_handler_thread.join(timeout=5)
         # Restart the monitoring connection to ensure the API is in a good state.
         robot._initialize_monitoring_connection()
 
