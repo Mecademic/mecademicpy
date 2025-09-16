@@ -93,6 +93,7 @@ class MxIoBankId(IntEnum):
     MX_IO_BANK_ID_UNDEFINED = 0
     MX_IO_BANK_ID_IO_MODULE = 1  # IOs from the IO expansion module. API string: 'IoModule'
     MX_IO_BANK_ID_GRIPPER_MODULE = 2  # IOs from the gripper expansion module. API string: 'GripperModule'
+    MX_IO_BANK_ID_FTDI_MVK01 = 98 # Internal use by Mecademic
     MX_IO_BANK_ID_SIG_GEN = 99  # IOs from the test signal generator module. API string: 'SigGen'
     MX_IO_BANK_ID_FTDI_PSU = 100  # IOs from the FTDI device for the PSU safety port. API string: 'FtdiPsu'
 MX_IO_BANK_NAME_IO_MODULE = "IoModule"  # \ref MX_IO_BANK_ID_IO_MODULE
