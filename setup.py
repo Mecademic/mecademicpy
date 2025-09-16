@@ -12,7 +12,7 @@ if sys.version_info < (3, 8, 0):
     dependencies.append('importlib_metadata')
 
 setuptools.setup(name='mecademicpy',
-                 version='2.3.0',
+                 version='2.3.1',
                  author='Mecademic',
                  author_email='support@mecademic.com',
                  license='MIT',

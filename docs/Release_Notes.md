@@ -9,6 +9,10 @@ Mecademic Inc.~assumes no responsibility for any errors or omissions in this doc
 Copyright &copy; 2025 by Mecademic Inc.
 
 ---
+## Version 2.3.1 (September 2025)
+**Features**
+- Support for robots with firmware version 11.2
+
 ## Version 2.3.0 (March 2025)
 **Features**
 - Support for time-based movements (`SetMoveMode`, `SetMoveDurationCfg`, `SetMoveDuration`)

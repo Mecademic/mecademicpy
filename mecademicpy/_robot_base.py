@@ -4938,7 +4938,11 @@ class _Robot:
         values = []
         if response.json_data:
             json_data: dict = response.json_data.get(MX_JSON_KEY_DATA, {})
-            bank_id = MxIoBankId(json_data.get(MX_JSON_KEY_IO_STATUS_BANK_ID, 0))
+            try:
+                bank_id = MxIoBankId(json_data.get(MX_JSON_KEY_IO_STATUS_BANK_ID, 0))
+            except ValueError:
+                # Future value not part of the enum
+                bank_id = int(json_data.get(MX_JSON_KEY_IO_STATUS_BANK_ID, 0))
         else:
             values = tools.string_to_numbers(response.data)
             bank_id = values[1]
