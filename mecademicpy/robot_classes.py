@@ -829,6 +829,8 @@ class RobotInfo(RobotCopyable):
         True if robot is capable of sending real-time monitoring messages.
     rt_on_ctrl_port_capable
         True if robot is capable of sending real-time monitoring messages on control port (SetCtrlPortMonitoring).
+    variables_capable
+        True if robot supports saving variables.
     mecascript_capable
         True if robot supports running the MecaScript (Python) engine.
     num_joints
@@ -880,6 +882,7 @@ class RobotInfo(RobotCopyable):
     supports_ext_tool: bool = field(init=False)
     rt_message_capable: bool = field(init=False, default=False)
     rt_on_ctrl_port_capable: bool = field(init=False, default=False)
+    variables_capable: bool = field(init=False, default=False)
     mecascript_capable: bool = field(init=False, default=False)
     gripper_pos_ctrl_capable: bool = field(init=False, default=False)
     ext_tool_version_capable: bool = field(init=False, default=False)
@@ -949,6 +952,8 @@ class RobotInfo(RobotCopyable):
             self.rt_message_capable = True
         if self.version.is_at_least(9, 0):
             self.rt_on_ctrl_port_capable = True
+        if self.version.is_at_least(11, 1, 5):
+            self.variables_capable = True
         if self.version.is_at_least(12, 1, 0):
             self.mecascript_capable = True
         if self.version.is_at_least(9, 1):
@@ -1018,7 +1023,6 @@ class RobotInfo(RobotCopyable):
 
     @tools.deprecation.deprecated(
         deprecated_in="2.4.0",
-        removed_in="3.0.0",
         current_version=tools.get_mecademicpy_version(),
         details="The serial number should always be considered a string with letters and digits")
     def get_serial_digit(self) -> int:

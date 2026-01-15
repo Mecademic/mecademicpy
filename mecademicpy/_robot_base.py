@@ -1132,6 +1132,7 @@ class _Robot:
                 self._monitor_rx_queue = queue.Queue()
         self._rx_timestamp = 0
         self._monitor_timeout_used = False
+        self._silent_prefix = ''
         self._custom_response_events: List[weakref.ReferenceType[InterruptableEvent]] = list()
 
         self._user_checkpoints: Dict[int, List[InterruptableEvent]] = dict()
@@ -1572,6 +1573,9 @@ class _Robot:
                 self._robot_events.on_rt_temperature_updated.set()
                 self._robot_events.on_rt_i2t_updated.set()
 
+            if self._robot_info.version.is_at_least(9, 2):
+                self._silent_prefix = '-'
+
             if (self._robot_info.version.is_at_least(11, 1, 5) and (self._port == MX_ROBOT_TCP_PORT_CONTROL)):
                 # Enable JSON mode automatically on this robot
                 self._send_custom_command('EnableJsonMode', expected_responses=None, timeout=None)
@@ -1579,11 +1583,10 @@ class _Robot:
             connect_to_monitoring_port = True
             if not self._monitor_mode and self._robot_info.version.major >= 8:
                 can_query_robot_info = True
-                prefix = '-' if self._robot_info.version.major >= 9 else ''
 
                 if not self._robot_info.rt_message_capable:
                     # For these versions (8.3-), it is not possible to get robot information if in error.
-                    self._send_custom_command(f'{prefix}GetStatusRobot',
+                    self._send_custom_command(f'{self._silent_prefix}GetStatusRobot',
                                               expected_responses=[mx_st.MX_ST_GET_STATUS_ROBOT],
                                               timeout=self.default_timeout)
                     if self._robot_status.error_status:
@@ -1591,13 +1594,13 @@ class _Robot:
 
                 if can_query_robot_info:
                     # Fetch the robot serial number
-                    self._send_custom_command(f'{prefix}GetRobotSerial',
+                    self._send_custom_command(f'{self._silent_prefix}GetRobotSerial',
                                               expected_responses=[mx_st.MX_ST_GET_ROBOT_SERIAL],
                                               timeout=self.default_timeout)
 
                     # Fetch full version
                     full_version_response = self._send_custom_command(
-                        f'{prefix}GetFwVersionFull',
+                        f'{self._silent_prefix}GetFwVersionFull',
                         expected_responses=[mx_st.MX_ST_GET_FW_VERSION_FULL],
                         timeout=self.default_timeout)
                     full_version = full_version_response.data
@@ -1606,13 +1609,13 @@ class _Robot:
 
                     # Fetch the current real-time monitoring settings
                     if self._robot_info.rt_message_capable:
-                        self._send_custom_command(f'{prefix}GetRealTimeMonitoring',
+                        self._send_custom_command(f'{self._silent_prefix}GetRealTimeMonitoring',
                                                   expected_responses=[mx_st.MX_ST_GET_REAL_TIME_MONITORING],
                                                   timeout=self.default_timeout)
 
                         # Get initial monitoring interval
                         monitoring_interval_response = self._send_custom_command(
-                            f'{prefix}GetMonitoringInterval',
+                            f'{self._silent_prefix}GetMonitoringInterval',
                             expected_responses=[mx_st.MX_ST_GET_MONITORING_INTERVAL],
                             timeout=self.default_timeout)
                         if isinstance(monitoring_interval_response, Message):
@@ -1621,7 +1624,7 @@ class _Robot:
 
                     # Set the date/time on the robot
                     if not self._application_type.is_sidecar() and set_rtc != SetRtcMode.DONT_SET_RTC:
-                        self._send_custom_command(f'-SetRtc',
+                        self._send_custom_command(f'{self._silent_prefix}SetRtc',
                                                   args=[int(time.time())],
                                                   expected_responses=None,
                                                   timeout=None)
@@ -1635,16 +1638,17 @@ class _Robot:
                             # In sidecar mode, the robot automatically enables ctrl port monitoring
                             pass
                         else:
-                            if self._robot_info.mecascript_capable:
-                                self._send_custom_command('-SetDictMonitoring',
-                                                          args=[1, 0],
-                                                          expected_responses=None,
-                                                          timeout=None)
-                                self._send_custom_command('-SetVariablesMonitoring',
+                            if self._robot_info.variables_capable:
+                                self._send_custom_command(f'{self._silent_prefix}SetVariablesMonitoring',
                                                           args=[1],
                                                           expected_responses=None,
                                                           timeout=None)
-                            self._send_custom_command('-SetCtrlPortMonitoring',
+                            if self._robot_info.mecascript_capable:
+                                self._send_custom_command(f'{self._silent_prefix}SetDictMonitoring',
+                                                          args=[1, 0],
+                                                          expected_responses=None,
+                                                          timeout=None)
+                            self._send_custom_command(f'{self._silent_prefix}SetCtrlPortMonitoring',
                                                       args=[1],
                                                       expected_responses=[mx_st.MX_ST_GET_STATUS_ROBOT],
                                                       timeout=self.default_timeout)
@@ -1653,7 +1657,7 @@ class _Robot:
                         # we're disconnected from the robot if ever we no more receive any message from it
                         self._monitor_timeout_used = True
                     else:
-                        self._send_custom_command(f'{prefix}GetStatusRobot',
+                        self._send_custom_command(f'{self._silent_prefix}GetStatusRobot',
                                                   expected_responses=[mx_st.MX_ST_GET_STATUS_ROBOT],
                                                   timeout=self.default_timeout)
             else:
@@ -1803,9 +1807,9 @@ class _Robot:
                     MX_JSON_KEY_CONNECTION_WATCHDOG_TIMEOUT: timeout,
                     MX_JSON_KEY_CONNECTION_WATCHDOG_MESSAGE: message
                 }
-                self._send_json_command('-ConnectionWatchdog', watchdog_ags)
+                self._send_json_command(f'{self._silent_prefix}ConnectionWatchdog', watchdog_ags)
             else:
-                self._send_custom_command("-ConnectionWatchdog", args=[timeout])
+                self._send_custom_command(f'{self._silent_prefix}ConnectionWatchdog', args=[timeout])
 
     def AutoConnectionWatchdog(self, enable: bool, timeout: float = 0, message: Optional[str] = None):
         """See documentation in equivalent function in robot.py"""
@@ -1953,7 +1957,7 @@ class _Robot:
             timeout = self.default_timeout
         if not synchronous_update and self._must_force_sync():
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             self._send_sync_command(f'{prefix}GetStatusGripper', None, self._robot_events.on_status_gripper_updated,
                                     timeout)
@@ -2899,7 +2903,7 @@ class _Robot:
         synchronous_update = True  # For now, this function is only supported in sync mode
         if not synchronous_update and self._must_force_sync():
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             # Note: Use legacy GetNetworkConfig (instead of GetNetworkCfg) for compatibility with older robot versions
             self._send_sync_command(f'{prefix}GetNetworkConfig', None, self._robot_events.on_network_config_updated,
@@ -3081,7 +3085,7 @@ class _Robot:
             timeout = self.default_timeout
         if not synchronous_update and self._must_force_sync(cyclical_cmd="GetRtTargetJointPos"):
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             if self._robot_info.rt_message_capable:
                 self._send_sync_command(f'{prefix}GetRtTargetJointPos', None,
@@ -3159,7 +3163,7 @@ class _Robot:
             timeout = self.default_timeout
         if not synchronous_update and self._must_force_sync(cyclical_cmd="GetRtTargetCartPos"):
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             if self._robot_info.rt_message_capable:
                 self._send_sync_command(f'{prefix}GetRtTargetCartPos', None,
@@ -3513,7 +3517,7 @@ class _Robot:
             timeout = self.default_timeout
         if not synchronous_update and self._must_force_sync():
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             if self._using_legacy_json_api:
                 with self._main_lock:
@@ -3531,7 +3535,7 @@ class _Robot:
             timeout = self.default_timeout
         if not synchronous_update and self._must_force_sync():
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             self._send_sync_command(f'{prefix}GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
 
@@ -3604,7 +3608,7 @@ class _Robot:
             timeout = self.default_timeout
         if not synchronous_update and self._must_force_sync():
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             self._send_sync_command(f'{prefix}GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
 
@@ -3629,7 +3633,8 @@ class _Robot:
     def GetBrakesState(self, *, timeout: float = None) -> bool:
         """See documentation in equivalent function in robot.py"""
         if self._must_force_sync():
-            return self._send_basic_get_command('-GetBrakesState', MxRobotStatusCode.MX_ST_GET_BRAKES_STATE, timeout,
+            return self._send_basic_get_command(f'{self._silent_prefix}GetBrakesState',
+                                                MxRobotStatusCode.MX_ST_GET_BRAKES_STATE, timeout,
                                                 self._parse_response_bool)[0]
         else:
             return self._robot_status.brakes_engaged
@@ -3681,7 +3686,7 @@ class _Robot:
         prefix = ''
         if not synchronous_update and self._must_force_sync():
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             self._send_basic_get_command(f'{prefix}GetCollisionStatus', MxRobotStatusCode.MX_ST_GET_COLLISION_STATUS,
                                          timeout, self._parse_response_int)
@@ -3717,8 +3722,8 @@ class _Robot:
     def GetExtToolFwVersion(self, *, timeout: float = None) -> RobotVersion:
         """See documentation in equivalent function in robot.py"""
         if self._must_force_sync():
-            self._send_basic_get_command('-GetExtToolFwVersion', MxRobotStatusCode.MX_ST_GET_EXT_TOOL_FW_VERSION,
-                                         timeout)
+            self._send_basic_get_command(f'{self._silent_prefix}GetExtToolFwVersion',
+                                         MxRobotStatusCode.MX_ST_GET_EXT_TOOL_FW_VERSION, timeout)
             # Note: _handle_ext_tool_fw_version will handle response
         with self._main_lock:
             return self._robot_info.ext_tool_version.copy()
@@ -3726,14 +3731,16 @@ class _Robot:
     def GetExtToolSim(self, *, timeout: float = None) -> MxExtToolType:
         """See documentation in equivalent function in robot.py"""
         if self._must_force_sync():
-            self._send_basic_get_command('-GetExtToolSim', MxRobotStatusCode.MX_ST_EXTTOOL_SIM, timeout)
+            self._send_basic_get_command(f'{self._silent_prefix}GetExtToolSim', MxRobotStatusCode.MX_ST_EXTTOOL_SIM,
+                                         timeout)
             # Note: _handle_ext_tool_sim_status_legacy will handle response
         return self._external_tool_status.sim_tool_type
 
     def GetFwVersion(self, *, timeout: float = None) -> RobotVersion:
         """See documentation in equivalent function in robot.py"""
         if self._must_force_sync():
-            self._send_basic_get_command('-GetFwVersion', MxRobotStatusCode.MX_ST_GET_FW_VERSION, timeout)
+            self._send_basic_get_command(f'{self._silent_prefix}GetFwVersion', MxRobotStatusCode.MX_ST_GET_FW_VERSION,
+                                         timeout)
         with self._main_lock:
             return self._robot_info.version.copy()
 
@@ -3882,7 +3889,8 @@ class _Robot:
     def GetRobotSerial(self, *, timeout: float = None) -> str:
         """See documentation in equivalent function in robot.py"""
         if self._must_force_sync():
-            self._send_basic_get_command('-GetRobotSerial', MxRobotStatusCode.MX_ST_GET_ROBOT_SERIAL)
+            self._send_basic_get_command(f'{self._silent_prefix}GetRobotSerial',
+                                         MxRobotStatusCode.MX_ST_GET_ROBOT_SERIAL)
         return self._robot_info.serial
 
     def GetRtc(self, *, timeout: float = None) -> int:
@@ -3947,7 +3955,7 @@ class _Robot:
         prefix = ''
         if not synchronous_update and self._must_force_sync():
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             self._send_basic_get_command(f'{prefix}GetTorqueLimitsStatus', MxRobotStatusCode.MX_ST_TORQUE_LIMIT_STATUS,
                                          timeout, self._parse_response_bool)
@@ -3989,7 +3997,7 @@ class _Robot:
         prefix = ''
         if not synchronous_update and self._must_force_sync():
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             self._send_basic_get_command(f'{prefix}GetWorkZoneStatus', MxRobotStatusCode.MX_ST_GET_WORK_ZONE_STATUS,
                                          timeout, self._parse_response_int)
@@ -4015,13 +4023,13 @@ class _Robot:
             color = COLOR_RED
         return color + msg
 
-    def _log_trace_sanitize(self, to_sanitize: str, legacy_sanitize: bool) -> str:
+    def _log_trace_sanitize(self, to_sanitize: str, supports_json_log_trace: bool) -> str:
         """Sanitize a string so it can be printed in the robot log trace:
         - Non-printable characters replaced by .
 
         Args:
             to_sanitize (str): The string to sanitize
-            legacy_sanitize (bool): True to also sanitize characters that are only valid through JSON syntax
+            supports_json_log_traceZ (bool): True if we can use JSON format for log trace (robot version >= 11.1.5)
 
         Returns:
             The sanitized string
@@ -4034,12 +4042,12 @@ class _Robot:
         while i < length:
             c = to_sanitize[i]
 
-            # Check for ANSI escape code (keep it entirely if legacy_sanitize is False)
+            # Check for ANSI escape code (keep it entirely if supports_json_log_trace is False)
             if c == '\x1b':
                 match = _ANSI_ESCAPE_RE.match(to_sanitize, i)
                 if match:
                     # This is an ANSI color string
-                    if legacy_sanitize:
+                    if not supports_json_log_trace:
                         # Let's skip it for legacy format
                         pass
                     else:
@@ -4056,7 +4064,7 @@ class _Robot:
                 if c.isprintable() and c != '"':
                     # This character is ok in both legacy quoted string and JSON-escaped formats
                     sanitized.append(c)
-                elif legacy_sanitize:
+                elif not supports_json_log_trace:
                     # Character not allowed with the legacy API parser, but we cannot use JSON, let's
                     # replace this character by a period.
                     sanitized.append('.')
@@ -4077,8 +4085,8 @@ class _Robot:
                           trace_id=MxUserTrace.MX_USER_TRACE_USER_LOG_TRACE):
         """ Common to LogTrace and other similar functions """
         # Sanitize the string
-        is_legacy_robot = not self._robot_info.version.is_at_least(9, 2)
-        trace = self._log_trace_sanitize(trace, is_legacy_robot)
+        supports_json_log_trace = self._robot_info.version.is_at_least(11, 1, 5)
+        trace = self._log_trace_sanitize(trace, supports_json_log_trace)
 
         # Send the trace to the logger if appropriate.
         # Note: Don't send to logger if we're sidecar, the sidecar logger redirects here so it would infinite recurse!
@@ -4090,20 +4098,17 @@ class _Robot:
             # Add appropriate prefix (warning or error color, calling sidecar command, ...)
             trace = self._add_trace_prefix(trace, level)
 
-            if self._robot_info.version.is_at_least(9, 2):
-                if is_legacy_robot:
-                    # Plain log trace
-                    self._send_custom_command('-LogTrace', args=f'"{trace}"')
-                else:
-                    # Use JSON format
-                    log_args = {MX_JSON_KEY_USER_LOG_TRACE_STR: trace, MX_JSON_KEY_USER_LOG_TRACE_ID: trace_id}
-                    if level == logging.DEBUG:
-                        log_args[MX_JSON_KEY_USER_LOG_TRACE_LVL] = 2
-                    elif level == logging.ERROR:
-                        log_args[MX_JSON_KEY_USER_LOG_TRACE_LVL] = -2
-                    self._send_json_command('-LogTrace', log_args)
+            if not supports_json_log_trace:
+                # Plain log trace
+                self._send_custom_command(f'{self._silent_prefix}LogTrace', args=f'"{trace}"')
             else:
-                self._send_custom_command('-LogTrace', args=f'"{trace}"')
+                # Use JSON format
+                log_args = {MX_JSON_KEY_USER_LOG_TRACE_STR: trace, MX_JSON_KEY_USER_LOG_TRACE_ID: trace_id}
+                if level == logging.DEBUG:
+                    log_args[MX_JSON_KEY_USER_LOG_TRACE_LVL] = 2
+                elif level == logging.ERROR:
+                    log_args[MX_JSON_KEY_USER_LOG_TRACE_LVL] = -2
+                self._send_json_command('-LogTrace', log_args)
 
     def StartLogging(self,
                      monitoringInterval: float,
@@ -4942,7 +4947,7 @@ class _Robot:
                 self._tx_sync += 1
                 self._tx_sync_pending = self._tx_sync
                 self._is_sync.clear()
-                self._send_command('-SyncCmdQueue', f'{self._tx_sync}')
+                self._send_command(f'{self._silent_prefix}SyncCmdQueue', f'{self._tx_sync}')
             if event is not None and event.is_set():
                 event.clear()
             if command is not None and not is_immediate_cmd:
@@ -5178,7 +5183,7 @@ class _Robot:
         prefix = ''
         if not synchronous_update and self._must_force_sync(cyclical_cmd):
             synchronous_update = True
-            prefix = '-'  # Silent command, no robot log
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             self._send_sync_command(prefix + command, args=args, event=sync_event, timeout=timeout)
 
@@ -6049,7 +6054,12 @@ class _Robot:
         """This function will set (unblock) on_motion_cleared once motion clear is confirmed, i.e. once no more
            ClearMotion response is pending and once EOB is confirmed."""
         wait_for_eob = self._robot_info.version.is_at_least(9, 3, 0)
-        waiting_cleared_status = self._json_robot_status_received and not self._robot_status.motion_cleared_status
+        supports_cleared_json_status = self._robot_info.version.is_at_least(11, 1, 5)
+        if supports_cleared_json_status:
+            waiting_cleared_status = self._json_robot_status_received and not self._robot_status.motion_cleared_status
+        else:
+            # This robot does not report the cleared status in JSON, so we can't wait for it
+            waiting_cleared_status = False
         if not waiting_cleared_status and not self._robot_events.on_motion_cleared.is_set():
             if self._clear_motion_requests == 0:
                 if not wait_for_eob or (self._robot_status.end_of_block_status

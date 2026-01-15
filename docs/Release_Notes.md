@@ -10,9 +10,9 @@ If you have any technical questions, please visit the support section of our web
 
 Mecademic Inc.~assumes no responsibility for any errors or omissions in this document.
 
-Copyright &copy; 2025 by Mecademic Inc.
+Copyright &copy; 2026 by Mecademic Inc.
 
-## Version 3.0.0 (October 2025)
+## Version 3.0.0 (January 2026)
 
 ### Features
 
@@ -23,6 +23,7 @@ Copyright &copy; 2025 by Mecademic Inc.
 The following API changes have been made compared to previous version: Consult the detailed list below for
 specific modifications and make sure to adjust your code accordingly if needed:
 
+- Python 3.7 is no longer supported with mecademicpy 3.0.0. We recommend Python 3.13.
 - Argument names for `MoveLinVelTrf` and `MoveLinVelWrf` have been updated to
   "v_x", "v_y", "v_z", "omega_x", , "omega_y" and , "omega_z".
   If your code calls these functions using named arguments, you’ll need to update the names accordingly.

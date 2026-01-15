@@ -64,6 +64,19 @@ class RegisteredArg:
         self.min = min
         self.max = max
 
+    def copy(self) -> RegisteredArg:
+        """Return a shallow copy of this argument."""
+        return RegisteredArg(
+            name=self.name,
+            description=self.description,
+            type=self.type,
+            length=self.length,
+            units=self.units,
+            default=self.default,
+            min=self.min,
+            max=self.max,
+        )
+
     def __str__(self) -> str:
         """ Returns string representation """
         return self.name
@@ -260,6 +273,27 @@ class RegisteredVariable(RegisteredArg):
         self.cyclic_id = cyclic_id
         self._value = default
 
+    def copy(self) -> RegisteredVariable:
+        """Return a fully detached snapshot of this variable."""
+
+        new_var = RegisteredVariable(
+            name=self.name,
+            description=self.description,
+            type=self.type,
+            length=self.length,
+            units=self.units,
+            volatile=self.volatile,
+            cyclic_id=self.cyclic_id,
+            default=None,
+            min=self.min,
+            max=self.max,
+        )
+
+        # Detach value completely:
+        new_var._value = copy.deepcopy(_unwrap_mutable(self._value))
+
+        return new_var
+
     def set_value(self, value: Any) -> Any:
         """Set the variable's value. This function will attempt to "cast" the value into the expected type.
 
@@ -356,6 +390,24 @@ class _ListProxy(MutableSequence):
         del self._data[index]
         self._on_change(self._data)
 
+    def copy(self):
+        """Return a detached shallow copy as a plain list so changes to that copy don't affect the robot."""
+        # Note: Forcing deepcopy as it would not be correct if caller is modifying a nested element, causing a
+        # modification in the robot class, but no on_change callback causing the value in the robot class to be
+        # different than on the actual robot, which is inconsistent and what now we want.
+        return copy.deepcopy(self._data)
+
+    def __copy__(self):
+        """Return a detached shallow copy as a plain list so changes to that copy don't affect the robot."""
+        # Note: Forcing deepcopy as it would not be correct if caller is modifying a nested element, causing a
+        # modification in the robot class, but no on_change callback causing the value in the robot class to be
+        # different than on the actual robot, which is inconsistent and what now we want.
+        return copy.deepcopy(self._data)
+
+    def __deepcopy__(self, memo):
+        """Return a detached shallow copy as a plain list so changes to that copy don't affect the robot."""
+        return copy.deepcopy(self._data, memo)
+
     def insert(self, index: int, value: Any):
         self._data.insert(index, value)
         self._on_change(self._data)
@@ -424,6 +476,24 @@ class _DictProxy(MutableMapping):
     def __delitem__(self, key):
         del self._data[key]
         self._on_change(self._data)
+
+    def copy(self):
+        """Return a detached shallow copy as a plain dict so changes to that copy don't affect the robot."""
+        # Note: Forcing deepcopy as it would not be correct if caller is modifying a nested element, causing a
+        # modification in the robot class, but no on_change callback causing the value in the robot class to be
+        # different than on the actual robot, which is inconsistent and what now we want.
+        return copy.deepcopy(self._data)
+
+    def __copy__(self):
+        """Return a detached shallow copy as a plain dict so changes to that copy don't affect the robot."""
+        # Note: Forcing deepcopy as it would not be correct if caller is modifying a nested element, causing a
+        # modification in the robot class, but no on_change callback causing the value in the robot class to be
+        # different than on the actual robot, which is inconsistent and what now we want.
+        return copy.deepcopy(self._data)
+
+    def __deepcopy__(self, memo):
+        """Return a detached shallow copy as a plain dict so changes to that copy don't affect the robot."""
+        return copy.deepcopy(self._data, memo)
 
     def __iter__(self):
         return iter(self._data)

@@ -251,7 +251,6 @@ class Robot(_Robot):
         self._enable_synchronous_mode = sync_mode
 
     @deprecation.deprecated(deprecated_in="2.4.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'SyncCmdQueue' function instead")
     def Sync(self):
@@ -766,7 +765,6 @@ class Robot(_Robot):
         self._send_motion_command('MoveLinRelTrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'MoveLinRelTrf' function instead")
     @disconnect_on_exception_decorator
@@ -830,7 +828,6 @@ class Robot(_Robot):
         self._send_motion_command('MoveLinRelWrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'MoveLinRelWrf' function instead")
     @disconnect_on_exception_decorator
@@ -903,7 +900,6 @@ class Robot(_Robot):
         self._send_motion_command('MoveLinVelTrf', [v_x, v_y, v_z, omega_x, omega_y, omega_z])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'MoveLinVelTrf' function instead")
     @disconnect_on_exception_decorator
@@ -977,7 +973,6 @@ class Robot(_Robot):
         self._send_motion_command('MoveLinVelWrf', [v_x, v_y, v_z, omega_x, omega_y, omega_z])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'MoveLinVelWrf' function instead")
     @disconnect_on_exception_decorator
@@ -1478,7 +1473,6 @@ class Robot(_Robot):
         self._send_motion_command('SetTrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'SetTrf' function instead")
     @disconnect_on_exception_decorator
@@ -1547,7 +1541,6 @@ class Robot(_Robot):
         self._send_motion_command('SetWrf', [x, y, z, alpha, beta, gamma])
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'SetWrf' function instead")
     @disconnect_on_exception_decorator
@@ -2546,7 +2539,6 @@ class Robot(_Robot):
         super().WaitErrorReset(timeout)
 
     @deprecation.deprecated(deprecated_in="2.1.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'WaitSafetyStopReset' function instead")
     @disconnect_on_exception_decorator
@@ -2555,7 +2547,6 @@ class Robot(_Robot):
         super().WaitPStop2ResetDeprecated(timeout)
 
     @deprecation.deprecated(deprecated_in="2.1.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'WaitSafetyStopReset' function instead")
     @disconnect_on_exception_decorator
@@ -2564,7 +2555,6 @@ class Robot(_Robot):
         super().WaitPStop2ResettableDeprecated(timeout)
 
     @deprecation.deprecated(deprecated_in="2.1.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'WaitSafetyStopResettable' function instead")
     @disconnect_on_exception_decorator
@@ -2573,7 +2563,6 @@ class Robot(_Robot):
         super().WaitEStopResetDeprecated(timeout)
 
     @deprecation.deprecated(deprecated_in="2.1.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'WaitSafetyStopResettable' function instead")
     @disconnect_on_exception_decorator
@@ -2726,7 +2715,6 @@ class Robot(_Robot):
         super().ResetError()
 
     @deprecation.deprecated(deprecated_in="1.2.2",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'ResetPStop2' function instead")
     @mecascript_global_function_decorator
@@ -2903,14 +2891,13 @@ class Robot(_Robot):
         Parameters
         ----------
         name
-            Name of the program to start (optionally, an integer for legacy programs which name is a number).
+            Name of the program to start (optionally, an integer for programs which name is a number).
         timeout
             Timeout in seconds for the robot to confirm that program execution has started.
         """
         super().StartProgram(name, timeout)
 
     @deprecation.deprecated(deprecated_in="2.3.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'StartProgram' function instead")
     @disconnect_on_exception_decorator
@@ -2925,7 +2912,7 @@ class Robot(_Robot):
         """
         Stops the currently running program.
 
-        This command does not apply to legacy (.mxprog) programs, whose execution is instantaneous
+        This command does not apply to basic (non-Python) programs (.mxprog), whose execution is instantaneous
         and cannot be stopped.
 
         When ``StopProgram`` is called, the running Python MecaScript program is notified.
@@ -2974,7 +2961,6 @@ class Robot(_Robot):
         return super().ListFiles(timeout, as_dict)
 
     @deprecation.deprecated(deprecated_in="2.1.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'ListFiles' function instead")
     @mecascript_global_function_decorator
@@ -3022,7 +3008,6 @@ class Robot(_Robot):
         return super().LoadFile(name, timeout, as_dict)
 
     @deprecation.deprecated(deprecated_in="2.1.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'LoadFile' function instead")
     @mecascript_global_function_decorator
@@ -3085,7 +3070,6 @@ class Robot(_Robot):
         return super().SaveFile(name, content, timeout, allow_invalid, overwrite)
 
     @deprecation.deprecated(deprecated_in="2.1.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'SaveFile' function instead")
     @mecascript_global_function_decorator
@@ -3105,15 +3089,15 @@ class Robot(_Robot):
                 Automatically removes the ``.mxprog`` extension from the file name,
                 since only this file type was supported and the extension was hidden.
         """
-        legacy_extension = "." + MX_PROG_FILE_EXTENSION
+        mxprog_extension = "." + MX_PROG_FILE_EXTENSION
         if self._robot_info.version.is_at_least(major=11):
             # Automatically add .mxprog if no file extension is provided
             if '.' not in name:
-                name += legacy_extension
+                name += mxprog_extension
         else:
             # Automatically remove .mxprog if present in the file name
-            if name.endswith(legacy_extension):
-                name = name[:-len(legacy_extension)]
+            if name.endswith(mxprog_extension):
+                name = name[:-len(mxprog_extension)]
         return super().SaveFile(name, program, timeout, allow_invalid, overwrite)
 
     @mecascript_global_function_decorator
@@ -3147,7 +3131,6 @@ class Robot(_Robot):
         return super().DeleteFile(name, timeout)
 
     @deprecation.deprecated(deprecated_in="2.1.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'DeleteFile' function instead")
     @mecascript_global_function_decorator
@@ -3279,7 +3262,6 @@ class Robot(_Robot):
         return super().GetNetworkCfg(synchronous_update, timeout)
 
     @deprecation.deprecated(deprecated_in="2.4.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'GetNetworkCfg' function instead")
     @disconnect_on_exception_decorator
@@ -4682,7 +4664,6 @@ class Robot(_Robot):
         super().SetRtc(t)
 
     @deprecation.deprecated(deprecated_in="1.2.0",
-                            removed_in="3.0.0",
                             current_version=get_mecademicpy_version(),
                             details="Use the 'SetRtc' function instead")
     @disconnect_on_exception_decorator
@@ -5393,7 +5374,7 @@ class Robot(_Robot):
         Waits until no robot MecaScript program is executing, i.e. ``GetProgramExecutionStatus`` reports no
         running program.
 
-        This does not apply to legacy ``.mxprog`` programs.
+        This does not apply to basic (non-Python) ``.mxprog`` programs.
 
         Parameters
         ----------

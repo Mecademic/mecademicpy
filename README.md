@@ -60,8 +60,8 @@ ListFiles, SaveFile, LoadFile, DeleteFile, and StartProgram.
 [Manage robot variables](#manage-robot-variables) that can be used across all robot APIs
 (TCP/IP, cyclic protocols, or Python),
 using functions such as GetVariable, SetVariable, CreateVariable, DeleteVariable, and ListVariables.
-Variables are also automatically exposed via the robot.vars interface as easy-to-use, read/write Python attributes
-(e.g., robot.vars.myVar = [...]).
+Variables are also automatically exposed via the robot.variables interface as easy-to-use, read/write Python attributes
+(e.g., robot.variables.myVar = [...]).
 
 ### Synchronous and asynchronous modes
 
@@ -81,7 +81,7 @@ Supports Windows, Linux, and macOS environments through Python.
 
 - Supports all Mecademic robot models;
 - Compatible with robot firmware version 8.3 and newer;
-- Works with Python versions 3.7 through 3.13+.
+- Works with Python versions 3.8 through 3.13+.
 
 ## Installation
 
@@ -91,8 +91,8 @@ Please read the [programming manual](https://www.mecademic.com/res/doc/programmi
 concepts necessary for proper usage of the API.
 
 To use the `mecademicpy` library, you must have Python installed on your machine.
-Python version 3.7 or newer is required.
-We recommend using Python 3.12, as this is the version on which the module is actively tested.
+Python version 3.8 or newer is required.
+We recommend using Python 3.13, as this is the version on which the module is actively tested.
 
 [Python](https://www.python.org/) can be downloaded from the official website.
 
@@ -326,8 +326,8 @@ Example of variable management functions:
 instead of using robot.GetVariable or robot.SetVariable(). For example
 
 ```python
-robot.vars.my_pos = [10,0,10,0,0,45]
-robot.MoveJoints(*robot.vars.my_pos)
+robot.variables.my_pos = [10,0,10,0,0,45]
+robot.MoveJoints(*robot.variables.my_pos)
 ```
 
 ### File (user program) management functions
@@ -342,8 +342,10 @@ Example of file management functions:
 
 ### MecaScript Python engine management functions
 
+- `GetMecaScriptEngineStatus`
 - `GetMecaScriptCfg`
 - `SetMecaScriptCfg`
+- `WaitMecaScriptEngineReady`
 
 ### Robot configuration management
 
