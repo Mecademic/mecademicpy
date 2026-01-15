@@ -18,6 +18,7 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath
 from tempfile import TemporaryDirectory
+from typing import Callable, Optional
 
 import pandas as pd
 from dataclasses_json import dataclass_json
@@ -31,19 +32,19 @@ class TestContext:
 
     Attributes
     ----------
-    testing_function_name: string
+    testing_function_name
         Function or library in which test statistics and modified robot data was produced
-    data_origin_files: list of strings
+    data_origin_files
         Indicates file or files used to produced manipulated robot data and test results, or statistics
         Can either one or two files
-    data_columns_inspected: list of list of strings
+    data_columns_inspected
         Indicates columns in dataframes used to produce results
         Many options for data_columns_inspected:
 
-        -A function could inspect many columns, one after the other: [['col1', 'col2', 'col3']]
-        -A function could compare two columns: [['col1'],['col2']]
-        -A function could compare many columns, one after the other:
-         [['tg_col1', 'tg_col2', 'tg_col3'], ['col1', 'col2', 'col3']] (tg meaning target)
+        - A function could inspect many columns, one after the other: [['col1', 'col2', 'col3']]
+        - A function could compare two columns: [['col1'],['col2']]
+        - A function could compare many columns, one after the other:
+            [['tg_col1', 'tg_col2', 'tg_col3'], ['col1', 'col2', 'col3']] (tg meaning target)
     """
     testing_function_name: str = field(default='')
     data_origin_files: list[str] = field(default_factory=list)
@@ -57,16 +58,16 @@ class RobotContext:
 
     Attributes
     ----------
-    robot_information: list of dicts
+    robot_information
         This list, when produced by the logger, will contain one dict filled with information about a robot. Could
         contain more dicts after test on robot rt_data from many robots
-    sent_commands: list or strings
+    sent_commands
         This list, produced by the logger, should contain the commands from which the robot movement was produced.
         Tests should only compare robot rt_data that came from same set of commands
-    test_context: dict
+    test_context
         This dict should contain context on tests made on robot rt_data after data was logged. This will not
         be filled by the logger
-    test_results: dict
+    test_results
         This dict should contain results of tests made on robot rt_data after data was logged. This will not
         be filled by the logger.
     """
@@ -75,14 +76,14 @@ class RobotContext:
     test_context: TestContext = field(default_factory=TestContext)
     test_results: dict[str, dict[str, str]] = field(default_factory=dict)
 
-    def to_file(self, filename):
+    def to_file(self, filename: str):
         """ Creates a json file in which is stored relevant context
 
         Parameters
         ----------
-        robot_context: Robot_Context object
+        robot_context
             Context to store in json file
-        filename: string
+        filename
             Name given to the file in which info is stored. '.json' is added here
         """
 
@@ -94,17 +95,17 @@ class RobotContext:
             file.write(context_json)
 
     @staticmethod
-    def from_file(filepath):
+    def from_file(filepath: str) -> RobotContext:
         """ Finds robot context in a json file
 
         Parameters
         ----------
-        filepath: string
+        filepath
             Complete path to the relevant file, including its name, but excluding '.json' extension
 
         Returns
         -------
-        robot_context: RobotContext object
+        RobotContext
             Context info built from json file
         """
 
@@ -124,11 +125,11 @@ class RobotDfHist:
 
     Attributes
     ----------
-    input_dfs: list of Pandas dataframes
+    input_dfs
         Dataframes from which all processing is made
-    mid_dfs: dict of Pandas Dataframes
+    mid_dfs
         Intermediate results of processing
-    output_dfs: list of dataframes
+    output_dfs
         Final results of processing. 'RobotDfHist' should contain at least one dataframe in this list (this is the only
         attribute that is needed at the end of a function producing a 'RobotDfHist', all other attributes are optional)
     """
@@ -136,17 +137,20 @@ class RobotDfHist:
     mid_dfs: dict[str, pd.DataFrame] = field(default_factory=dict)
     output_dfs: list[pd.DataFrame] = field(default_factory=list)
 
-    def from_other(self, other, input_names=None, output_names=None):
+    def from_other(self,
+                   other: RobotDfHist,
+                   input_names: Optional[list[str]] = None,
+                   output_names: Optional[list[str]] = None):
         """This function fills this object with the contents of another 'RobotDfHist'
 
         Parameters
         ----------
-        other : RobotDfHist object
+        other
             Contains dataframes to store in this object
-        input_names : list of strings, optional
+        input_names
             If this list contains strings, it will put dataframes from input_dfs of other in the mid_dfs dict of this
             object, associating them to the strings in 'input_names'
-        output_names : list of strings, optional
+        output_names
             If this list contains strings, it will put dataframes from 'output_dfs' of other in the 'mid_dfs' dict of
             this object, associating them to the strings in 'output_names'. Otherwise, the contents of
             'other.output_dfs' will be put into this object's 'output_dfs'
@@ -161,32 +165,26 @@ class RobotDfHist:
 
         self.mid_dfs.update(other.mid_dfs)
 
-    def add_list_to_intermediate(self, dfs, names):
+    def add_list_to_intermediate(self, dfs: list[pd.DataFrame], names: list[str]):
         """Adds some dataframes to 'mid_dfs'
 
         Parameters
         ----------
-        dfs : list of Pandas dataframes
+        dfs
             Dataframes to add
-        names : list of strings
+        names
             Names to associate to each df in 'dfs'
         """
         for df, name in zip(dfs, names):
             self.mid_dfs[name] = df
 
-    def make_dict(self):
+    def make_dict(self) -> dict:
         """Creates a dictionary using all dataframes found in this object
 
         Returns
         -------
-        dict of Pandas dataframes
+        dict
             Contains all dataframes in 'input_dfs', 'mid_dfs', 'output_dfs'
-
-        Returns
-        -------
-        out_dict: dict of Pandas dataframes
-            Dataframes stored in all attributes of this object, with special names from dataframes from input_dfs and
-            output_dfs
         """
         out_dict = dict()
         out_dict.update(self.mid_dfs)
@@ -204,12 +202,12 @@ class RobotDfHist:
 
         return out_dict
 
-    def build_from_dict(self, df_dict):
+    def build_from_dict(self, df_dict: dict):
         """Recreates a 'RobotDfHist' object from a dict
 
         Parameters
         ----------
-        df_dict : dict of Pandas dataframes
+        df_dict
             Produced by method 'make_dict'
         """
 
@@ -219,25 +217,26 @@ class RobotDfHist:
             if not result:
                 self.mid_dfs[key] = df
 
-    def insert_in_list_from_dict(self, key, df, attr_list, list_prefix_func):
+    def insert_in_list_from_dict(self, key: str, df: pd.DataFrame, attr_list: list[pd.DataFrame],
+                                 list_prefix_func: Callable):
         """Identifies to which attribute a dataframe coming from a dict made by 'make_dict' belongs to and adds it to
         this attribute
 
         Parameters
         ----------
-        key : string
+        key
             Used to identify to which attribute 'df' belongs to
-        df : Pandas dataframe
+        df
             To add to an attribute
-        attr_list : list of Pandas dataframe
+        attr_list
             Attribute to add the dataframe to if it belongs to it
-        list_prefix_func : function
+        list_prefix_func
             function used to identify if 'key, and thus 'df', belongs to 'attr_list'
 
         Returns
         -------
-        list of Pandas dataframe
-            updated attribute list, containing 'df' if 'df' belonged in 'attr_list'
+        tuple[bool, list[DataFrame]]
+            Updated attribute list, containing 'df' if 'df' belonged in 'attr_list'
         """
         result = True
         if key == list_prefix_func():
@@ -256,22 +255,22 @@ class RobotDfHist:
         return result, attr_list  # It seems if we pass attribute as argument, even if attribute is passed by reference,
         # it won't update the attribute, so we have to return the list
 
-    def base_input_name(self):
+    def base_input_name(self) -> str:
         """Returns key prefix used in 'make_dict' for 'input_dfs'
         """
         return 'input_df'
 
-    def base_output_name(self):
+    def base_output_name(self) -> str:
         """Returns key prefix used in 'make_dict' for 'output_dfs'
         """
         return 'output_df'
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: RobotDfHist) -> bool:
         """Returns true if both RobotDfHist objects contain same dataframes, in same position of each attribute
 
         Parameters
         ----------
-        other : RobotDfHist object
+        other
             Object compared to self
 
         Returns
@@ -291,30 +290,30 @@ class RobotDfHist:
         return True
 
     @staticmethod
-    def to_file(df, filename):
+    def to_file(df: pd.DataFrame, filename: str):
         """ Creates a csv file in which is stored relevant data
 
         Parameters
         ----------
-        df: Pandas dataframe
+        df
             Data to store in csv file
-        filename: string
+        filename
             Name given to the file in which info is stored. '.csv' is added here
         """
         df.to_csv(f'{filename}.csv', index_label='timestamp')
 
     @staticmethod
-    def from_file(filepath):
+    def from_file(filepath: str) -> pd.DataFrame:
         """ Finds robot rt_data in a csv file
 
         Parameters
         ----------
-        filepath: string
+        filepath
             Complete path to the relevant file, including its name
 
         Returns
         -------
-        df: Pandas dataframe
+        pandas.DataFrame
             Data stored in csv file
         """
 
@@ -329,28 +328,46 @@ class RobotTrajectories:
 
     Attributes
     ----------
-    robot_context: RobotContext object
+    robot_context
         Explains how and where dfs where produced
-    robot_df_hist: RobotDfHist object
-        This object, when produced by the logger, should contain only one dataframe, in the output_dfs list, associating
-        timestamps to robot rt_data through time
+    robot_df_hist
+        This object contains the captured data as well as optional analysis data.
+
+        In the case this object is returned by robot.GetCapturedTrajectory(), then only the first element
+        in the output_dfs is used, so you can access it like this:
+        captured_df: pd.DataFrame = robot.GetCapturedTrajectory().robot_df_hist.output_dfs[0]
 
         All other dataframes in this object could be produced by subsequent tests and manipulations made on the data
         from the first dataframe
+
+        Note:   The column name prefix can be found by searching in rt_data_field_by_name (by RobotRtData field name)
+                or rt_data_field_by_status_code (by robot real-time data status code)
     """
     robot_context: RobotContext = field(default_factory=RobotContext)
     robot_df_hist: RobotDfHist = field(default_factory=RobotDfHist)
 
-    def to_file(self, filename, file_path=None):
+    def get_captured_data(self) -> Optional[pd.DataFrame]:
+        """ Return the captured trajectory as a Panda dataframe
+
+        Returns
+        -------
+        pandas.DataFrame or None
+            The captured trajectory, or None if no data was captured
+        """
+        if self.robot_df_hist.output_dfs is not None and len(self.robot_df_hist.output_dfs) > 0:
+            return self.robot_df_hist.output_dfs[0]
+        return None
+
+    def to_file(self, filename: str, file_path: str = None):
         """ Creates a zipped directory in which robot context and associated data is stored in many files
 
         Parameters
         ----------
-        robot_trajectories: RobotTrajectories object
+        robot_trajectories
             Data and context to store in zipped directory, in many files
-        filename: string
+        filename
             Name given to the zipped directory in which info is stored. '.zip' is added here
-        filepath: string
+        filepath
             Directory in which to save zipped file
         """
 
@@ -372,17 +389,17 @@ class RobotTrajectories:
             )
 
     @staticmethod
-    def from_file(filepath):
+    def from_file(filepath: str) -> RobotTrajectories:
         """ Finds robot context and rt_data data in a zip file
 
         Parameters
         ----------
-        filepath: string
+        filepath
             Complete path to the relevant zipped file, including its name, with the '.zip' extension
 
         Returns
         -------
-        robot_trajectories: RobotTrajectories object
+        RobotTrajectories
             Trajectory object built from content of zipped file
         """
         current_dir = Path.cwd()

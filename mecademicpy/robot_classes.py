@@ -6,11 +6,14 @@ RobotStatus, RobotSafetyStatus, GripperStatus, IoStatus, CollisionStatus, etc.
 """
 from __future__ import annotations
 
+import enum
 import json
 import re
 import threading
 import time
-from typing import Callable, Optional, Union
+from copy import deepcopy
+from dataclasses import InitVar, dataclass, field, fields, replace
+from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
 
 import mecademicpy.tools as tools
 
@@ -27,7 +30,7 @@ TORQUE_LIMIT_SEVERITIES = {'disabled': 0, 'warning': 1, 'pause-motion': 2, 'clea
 
 
 # Temporary location until consensus reached
-class RtDataUpdateType(IntEnum):
+class RtDataUpdateType(enum.IntEnum):
     MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE = 0  # Data is not available
     MX_RT_DATA_UPDATE_TYPE_CYCLICAL = 1  # Data is sent every cycle
     MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL = 2  # Data sent every cycle when configured through SetRealTimeMonitoring
@@ -38,25 +41,29 @@ class RtDataUpdateType(IntEnum):
 # Private utility classes and methods.
 #####################################################################################
 class Message:
-    """Class for storing a response message from a Mecademic robot.
+    """
+    Represents a response message received from a Mecademic robot.
 
     Attributes
     ----------
-    id : integer
-        The id of the message, representing the type of message.
-    data : string
-        The raw payload of the message.
-    json_data : JSON data parsed as a dictionary. None if message is not JSON format.
-                Robot JSON message format is:
-                {
-                   MX_JSON_KEY_CODE:int,
-                   MX_JSON_KEY_META_DATA:{
-                       MX_JSON_KEY_MSG_TYPE:int
-                   },
-                   MX_JSON_KEY_DATA:{
-                       (per-code JSON arguments/values)
-                   }
-"""
+    id
+        Identifier of the message, representing its type.
+    data
+        Raw payload of the message.
+    json_data
+        Parsed JSON data as a dictionary, or None if the message is not in JSON format.
+        The robot JSON message format is as follows::
+
+            {
+                "MX_JSON_KEY_CODE": int,
+                "MX_JSON_KEY_META_DATA": {
+                    "MX_JSON_KEY_MSG_TYPE": int
+                },
+                "MX_JSON_KEY_DATA": {
+                    # Per-code JSON arguments and values
+                }
+            }
+    """
 
     # pylint: disable=redefined-builtin
     def __init__(self, id: int, data: str, json_data: dict | None = None):
@@ -69,13 +76,13 @@ class Message:
 
     @classmethod
     def from_string(cls, input: str):
-        """Construct message object from raw string input.
+        """
+        Constructs a message object from a raw string input.
 
         Parameters
         ----------
-        input : string
+        input
             Input string to convert to message.
-
         """
         id = 0
         data = ""
@@ -113,14 +120,16 @@ class Message:
 
 class MecademicException(Exception):
     """Base exception class for Mecademic-related exceptions.
-"""
+    """
 
     def __init__(self, message: str):
-        """ Initialize this base exception
+        """
+        Initializes this base exception.
 
-        Args:
-            message (str):
-                User message to print
+        Parameters
+        ----------
+        message
+            User message to print
         """
         self.message = message
         super().__init__(self.message)
@@ -129,21 +138,21 @@ class MecademicException(Exception):
 
 
 class MecademicFatalException(MecademicException):
-    """Class for all mecademic exceptions that should be considered fatal (stack trace should be printed).
-"""
+    """Class for all Mecademic exceptions that should be considered fatal (stack trace should be printed).
+    """
     pass
 
 
 class MecademicNonFatalException(MecademicException):
-    """Class for all mecademic exceptions that should be considered non fatal (can be catch, error printed, and
-       application may continue).
-"""
+    """Class for all Mecademic exceptions that should be considered non fatal
+       (can be catch, error printed, and application may continue).
+    """
     pass
 
 
 class InvalidStateError(MecademicNonFatalException):
     """The internal state of the instance is invalid.
-"""
+    """
     pass
 
 
@@ -155,164 +164,218 @@ class InvalidConfigError(MecademicNonFatalException):
 
 class CommunicationError(MecademicNonFatalException):
     """There is a communication issue with the robot.
-"""
+    """
     pass
 
 
-class DisconnectError(MecademicNonFatalException):
+class MecademicInterruptBase(MecademicNonFatalException):
+    """ Base class for exceptions that signal that an operation was aborted before timeout or before completion."""
+
+
+class DisconnectError(MecademicInterruptBase):
     """A non-nominal disconnection has occurred.
-"""
+    """
     pass
 
 
-class InterruptException(MecademicNonFatalException):
-    """An event has encountered an error. Perhaps it will never be set.
-"""
+class InterruptException(MecademicInterruptBase):
+    """An event has encountered an error. Perhaps it will never be set."""
+    pass
+
+
+class StopProgramException(MecademicInterruptBase):
+    """
+    Exception raised when a program is requested to stop gracefully
+    (via a ``StopProgram`` request).
+
+    To continue controlling the robot after this exception is raised, the program can
+    catch it and call ``SetStopProgramInterruption(False)``.
+    This allows additional robot commands to be sent (for example, to move the robot
+    to a safe position) before the program exits gracefully.
+
+    Parameters
+    ----------
+    message
+        User message for this exception
+    graceful
+        - True if the exception was raised due to a ``StopProgram`` request and the program is allowed
+          time to terminate gracefully (e.g., move the robot to a safe position) after calling
+          SetStopProgramInterruption(false).
+        - False if the exception was raised due to ``ClearMotion`` or another condition where the
+          program has lost control of the robot. In this case, the program should exit shortly after
+          receiving the exception and will not be allowed to send more commands to the robot whatsoever.
+    """
+
+    def __init__(self, message: str, graceful: bool):
+        self.graceful = graceful
+        super().__init__(message)
+
+    pass
+
+
+class IllegalAfterControllingCommandException(MecademicInterruptBase):
+    """This exception is raised when a program is trying to send robot commands after calling a
+       "controlling" command. By definition, no robot commands are allowed to be queued
+       after a controlling command because the control must be handed back to the main API."""
     pass
 
 
 class TimeoutException(MecademicNonFatalException):
-    """Requested timeout during a blocking operation (synchronous mode or Wait* functions) has been reached.
-       (raised by InterruptableEvent)"""
+    """Requested timeout during a blocking operation (synchronous mode or ``Wait*`` functions) has
+    been reached (raised by InterruptableEvent)."""
     pass
 
 
 class NotFoundException(MecademicNonFatalException):
-    """A method, variable or object was not found"""
+    """A method, variable or object was not found."""
     pass
 
 
 class ArgErrorException(MecademicNonFatalException):
-    """An argument was invalid, the operation could not be completed"""
+    """An argument was invalid, the operation could not be completed."""
     pass
 
 
+class CommandFailedException(MecademicNonFatalException):
+    """The robot refused a command for some reason. See the exception message for details."""
+    pass
+
+
+class SetRtcMode(enum.IntEnum):
+    """
+    RTC (real-time clock, i.e. date/time) options when connecting to the robot
+    """
+    DONT_SET_RTC = 0,
+    """Do not change the robot's date/time (RTC)"""
+
+    ALWAYS_SET_RTC = 1,
+    """Update the robot's date/time (RTC) with current time on this PC"""
+
+    SET_ONLY_IF_NEEDED = 2,
+    """Update the robot's date/time (RTC) only for robot models that loose date/time upon reboot"""
+
+
 class RobotCallbacks:
-    """Class for storing possible status events for the Mecademic robot.
+    """
+    Class for storing possible status event callbacks for the Mecademic robot.
 
     Attributes
     ----------
-        on_connected : function object
-            Function to be called once connected.
-        on_disconnected : function object
-            Function to be called once disconnected.
-        on_status_updated : function object
-            Function to be called once robot status is updated.
-
-        on_status_gripper_updated : function object
-            Function to be called once gripper status is updated (legacy, use following external tools callbacks).
-        on_external_tool_status_updated: function object
-            Function to be called once external tool status is updated.
-        on_gripper_state_updated: function object
-            Function to be called once gripper state is updated.
-        on_valve_state_updated: function object
-            Function to be called once valve state is updated.
-
-        on_output_state_updated: function object
-            Function to be called when digital outputs changed.
-        on_input_state_updated: function object
-            Function to be called when digital inputs changed.
-        on_vacuum_state_updated: function object
-            Function to be called once vacuum state is updated.
-
-        on_activated : function object
-            Function to be called once activated.
-        on_deactivated : function object
-            Function to be called once deactivated.
-        on_homed : function object
-            Function to be called once homing is complete.
-        on_error : function object
-            Function to be called if robot enters an error state.
-        on_error_reset : function object
-            Function to be called once error is reset.
-
-        on_safety_stop : function object
-            Function to be called when the robot enters safety stop state following a raised safety stop conditions
-            (EStop, PStop1, PStop2, etc.).
-            Note that on_safety_stop_state_change can be used to be notified of more safety stop conditions that change
-            while the robot is already in safety stop.
-        on_safety_stop_reset : function object
-            Function to be called when all safety stop conditions (EStop, PStop1, PStop2, ...) are cleared (reset)
-        on_safety_stop_resettable : function object
-            Function to be called when all safety stop conditions (EStop, PStop1, PStop2, ...) can be reset
-            i.e. the safety stop conditions are no more present and need a reset (Power supply reset button in some
-            cases, or simply ResumeMotion in other cases)
-        on_safety_stop_state_change : function object
-            Function to be called when any safety stop state change (see RobotSafetyStatus)
-
-        on_pstop2 : function object
-            Function to be called if PStop2 is activated.
-            *** DEPRECATED (replaced by on_safety_stop_state)
-        on_pstop2_resettable : function object
-            Function to be called when PStop2 condition can be reset
-            (i.e. the power supply PStop2 signal is no more asserted)
-            *** DEPRECATED (replaced by on_safety_stop_state)
-        on_pstop2_reset : function object
-            Function to be called if PStop2 is reset.
-            *** DEPRECATED (replaced by on_safety_stop_state)
-        on_estop : function object
-            Function to be called if EStop is activated.
-            *** DEPRECATED (replaced by on_safety_stop_state)
-        on_estop_reset : function object
-            Function to be called if EStop is reset.
-            *** DEPRECATED (replaced by on_safety_stop_state)
-        on_estop_resettable : function object
-            Function to be called when EStop condition can be reset
-            (i.e. the power supply EStop signal is no more asserted)
-            *** DEPRECATED (replaced by on_safety_stop_state)
-
-        on_motion_paused : function object
-            Function to be called once motion is paused.
-        on_motion_cleared : function object
-            Function to be called once motion is cleared.
-        on_motion_resumed : function object
-            Function to be called once motion is resumed.
-        on_checkpoint_reached : function object
-            Function to be called if a checkpoint is reached.
-        on_checkpoint_discarded : function object
-            Function to be called if a checkpoint is discarded
-            (due to motion cleared, robot deactivated, robot in error, safety stop, etc.).
-
-        on_activate_sim : function object
-            Function to be called once sim mode is activated.
-        on_deactivate_sim : function object
-            Function to be called once sim mode is deactivated.
-        on_activate_ext_tool_sim : function object
-            Function to be called once gripper sim mode is activated.
-        on_deactivate_ext_tool_sim : function object
-            Function to be called once gripper sim mode is deactivated.
-        on_io_sim_enabled : function object
-            Function to be called once IO simulation mode is enabled.
-        on_io_sim_disabled : function object
-            Function to be called once IO simulation mode is disabled.
-
-        on_activate_recovery_mode : function object
-            Function to be called once recovery mode is activated.
-        on_deactivate_recovery_mode : function object
-            Function to be called once recovery mode is deactivated.
-
-        on_command_message : function object
-            Function to be called each time a command response is received.
-        on_monitor_message : function object
-            Function to be called each time an event is received on the monitoring port.
-            Only available when connected to the robot in monitoring mode.
-            Note that on_monitor_message may not be very useful. We suggest to use on_end_of_cycle instead
-            (which works for both monitoring or control mode connections).
-
-        on_offline_program_state : function object
-            Function to be called each time an offline program starts or fails to start.
-
-        on_end_of_cycle : function object
-            Function to be called each time end of cycle is reached.
-            It's called once all real-time data for current monitoring interval has been received.
-            At this moment, all robot real-time data is coherent (belongs to the same cycle).
-            """
+    on_connected
+        Function called once the robot is connected.
+    on_disconnected
+        Function called once the robot is disconnected.
+    on_status_updated
+        Function called once the robot status is updated.
+    on_mecascript_engine_status_updated
+        Function called once the MecaScript engine status is updated.
+    on_program_execution_status_updated
+        Function called once a MecaScript program execution status is updated.
+    on_status_gripper_updated
+        Function called once the gripper status is updated (legacy, use external tool callbacks instead).
+    on_external_tool_status_updated
+        Function called once the external tool status is updated.
+    on_gripper_state_updated
+        Function called once the gripper state is updated.
+    on_valve_state_updated
+        Function called once the valve state is updated.
+    on_output_state_updated
+        Function called when digital outputs change.
+    on_input_state_updated
+        Function called when digital inputs change.
+    on_vacuum_state_updated
+        Function called once the vacuum state is updated.
+    on_activated
+        Function called once the robot is activated.
+    on_deactivated
+        Function called once the robot is deactivated.
+    on_homed
+        Function called once homing is complete.
+    on_error
+        Function called when the robot enters an error state.
+    on_error_reset
+        Function called once the error state is reset.
+    on_safety_stop
+        Function called when the robot enters safety stop state following raised safety stop conditions
+        (EStop, PStop1, PStop2, etc.).
+        Note that `on_safety_stop_state_change` can be used to be notified of additional safety stop
+        condition changes while the robot is already in safety stop.
+    on_safety_stop_reset
+        Function called when all safety stop conditions (EStop, PStop1, PStop2, etc.) are cleared
+        (reset).
+    on_safety_stop_resettable
+        Function called when all safety stop conditions (EStop, PStop1, PStop2, etc.) can be reset,
+        i.e., when the safety stop conditions are no longer present and require a reset (via the power
+        supply reset button or ``ResumeMotion``).
+    on_safety_stop_state_change
+        Function called when any safety stop state changes (see ``RobotSafetyStatus``).
+    on_pstop2
+        Function called if PStop2 is activated.
+        *** DEPRECATED *** (replaced by `on_safety_stop_state`)
+    on_pstop2_resettable
+        Function called when the PStop2 condition can be reset (i.e., the PStop2 signal is no longer asserted).
+        *** DEPRECATED *** (replaced by `on_safety_stop_state`)
+    on_pstop2_reset
+        Function called if PStop2 is reset.
+        *** DEPRECATED *** (replaced by `on_safety_stop_state`)
+    on_estop
+        Function called if EStop is activated.
+        *** DEPRECATED *** (replaced by `on_safety_stop_state`)
+    on_estop_reset
+        Function called if EStop is reset.
+        *** DEPRECATED *** (replaced by `on_safety_stop_state`)
+    on_estop_resettable
+        Function called when the EStop condition can be reset (i.e., the EStop signal is no longer asserted).
+        *** DEPRECATED *** (replaced by `on_safety_stop_state`)
+    on_motion_paused
+        Function called once motion is paused.
+    on_motion_cleared
+        Function called once motion is cleared.
+    on_motion_resumed
+        Function called once motion is resumed.
+    on_checkpoint_reached
+        Function called when a checkpoint is reached.
+    on_checkpoint_discarded
+        Function called when a checkpoint is discarded (due to motion cleared, robot deactivated,
+        robot error, or safety stop).
+    on_activate_sim
+        Function called once simulation mode is activated.
+    on_deactivate_sim
+        Function called once simulation mode is deactivated.
+    on_activate_ext_tool_sim
+        Function called once gripper simulation mode is activated.
+    on_deactivate_ext_tool_sim
+        Function called once gripper simulation mode is deactivated.
+    on_io_sim_enabled
+        Function called once I/O simulation mode is enabled.
+    on_io_sim_disabled
+        Function called once I/O simulation mode is disabled.
+    on_activate_recovery_mode
+        Function called once recovery mode is activated.
+    on_deactivate_recovery_mode
+        Function called once recovery mode is deactivated.
+    on_command_message
+        Function called each time a command response is received.
+    on_monitor_message
+        Function called each time an event is received on the monitoring port.
+        Available only when connected to the robot in monitoring mode.
+        Note: ``on_monitor_message`` may not be very useful; ``on_end_of_cycle`` is generally
+        preferred, as it works in both monitoring and control modes.
+    on_program_state
+        Function called each time a program starts or fails to start.
+    on_end_of_cycle
+        Function called each time the end of cycle is reached.
+        It is triggered once all real-time data for the current monitoring interval has been received.
+        At this moment, all robot real-time data is coherent (i.e., from the same cycle).
+    """
 
     def __init__(self):
         self.on_connected: Callable[[], None] = None
         self.on_disconnected: Callable[[], None] = None
 
         self.on_status_updated: Callable[[], None] = None
+        self.on_mecascript_engine_status_updated: Callable[[], None] = None
+        self.on_program_execution_status_updated: Callable[[], None] = None
         self.on_status_gripper_updated: Callable[[], None] = None
 
         self.on_external_tool_status_updated: Callable[[], None] = None
@@ -329,6 +392,7 @@ class RobotCallbacks:
 
         self.on_error: Callable[[], None] = None
         self.on_error_reset: Callable[[], None] = None
+        self.on_safety_stop: Callable[[], None] = None
         self.on_safety_stop_resettable: Callable[[], None] = None
         self.on_safety_stop_reset: Callable[[], None] = None
         self.on_safety_stop_state_change: Callable[[], None] = None
@@ -361,134 +425,186 @@ class RobotCallbacks:
         self.on_command_message: Callable[[Message], None] = None
         self.on_monitor_message: Callable[[Message], None] = None
 
-        self.on_offline_program_state: Callable[[], None] = None
+        self.on_program_state: Callable[[], None] = None
 
         self.on_end_of_cycle: Callable[[], None] = None
 
 
+# pylint: disable=invalid-name
+TmpInterruptType = TypeVar('TmpInterruptType', bound='MecademicInterruptBase')
+
+
 class InterruptableEvent:
-    """Extend default event class to also be able to unblock and raise an exception in case the event becomes
-       irrelevant and will not occur (for example: Waiting on a checkpoint when robot is in error)
+    """
+    Extends the default event class to support unblocking and raising an exception when the event
+    becomes irrelevant and will not occur (e.g., waiting on a checkpoint while the robot is in an
+    error state).
 
     Attributes
     ----------
-    id : int or None
+    id
         Id for event.
-    _event : event object
-        A standard event-type object.
-    _lock : lock object
-        Used to ensure atomic operations.
-    _interrupted : boolean
-        If true, event is in an error state.
-    _interrupted_msg : string
+    _cond
+        A standard condition-variable object.
+    _is_set
+        If True, event is set (non-blocking), else it's cleared (blocking).
+    _interrupted
+        If True, event is in an error state.
+    _interrupted_msg
         User message that explains the reason of interruption.
-    _abort_on_error : bool
+    _abort_on_error
         Tells if this event must be awakened if the robot falls into error state, by default False
-    _abort_on_clear_motion : bool
+    _abort_on_clear_motion
         Tells if this event must be awakened if the robot's motion queue is cleared
-        Note that this also includes PStop2 condition and robot deactivation (which also cause the motion queue
-        to be cleared)
+        Note that this also includes PStop2 condition and robot deactivation (which also cause the
+        motion queue to be cleared).
+    _wait_callback
+        Optional callback function that is called periodically while the user code is awaiting on this event.
+        This is mainly used for calling user callbacks while the user thread is awaiting, which simplifies usage
+        of callbacks and avoids having to explicitly call RunCallbacks() in many cases.
 """
 
     # pylint: disable=redefined-builtin
-    def __init__(self, id=None, data=None, abort_on_error=False, abort_on_clear_motion=False):
+    def __init__(self,
+                 id=None,
+                 data=None,
+                 abort_on_error=False,
+                 abort_on_clear_motion=False,
+                 wait_callback: Optional[Callable] = None):
         self._id = id
         self._data = data
-        self._event = threading.Event()
-        self._lock = threading.Lock()
+        self._cond = threading.Condition()
+        self._is_set = False
+        self._set_count = 0  # This is used to detect event.set() then event.clear() before it had time to awake
         self._interrupted = False
         self._interrupted_msg = ""
+        self._tmp_interrupt_causes: dict[str, MecademicInterruptBase] = {}
         self._abort_on_error = abort_on_error
         self._abort_on_clear_motion = abort_on_clear_motion
+        self._wait_callback = wait_callback
 
     def check_interrupted(self):
+        """ Check if this interruptable event was interrupted, and raise exception if appropriate."""
+        with self._cond:  # Lock the condition (like a mutex)
+            self._check_interrupted_internal()
+
+    def _check_interrupted_internal(self):
+        """ Internal implementation of check_interrupted, assuming the lock is already taken."""
         if self._interrupted:
             if self._interrupted_msg != "":
                 raise InterruptException(self._interrupted_msg)
-            else:
-                raise InterruptException('Event interrupted, possibly because event will never be triggered.')
+            raise InterruptException('Event interrupted, possibly because event will never be triggered.')
+        if len(self._tmp_interrupt_causes) != 0:
+            first_key = next(iter(self._tmp_interrupt_causes))
+            raise self._tmp_interrupt_causes[first_key]
+        # Call the wait callback if any
+        if self._wait_callback is not None:
+            self._wait_callback()
 
     def wait(self, timeout: float = None) -> Message:
-        """Block until event is set or should raise an exception (InterruptException or TimeoutException).
-           InterruptException is raised if waiting for the event has become irrelevant, like waiting for
-           a checkpoint while robot is in error.
+        """
+        Blocks until the event is set or until an exception must be raised (``InterruptException`` or
+        ``TimeoutException``). ``InterruptException`` is raised if waiting for the event becomes
+        irrelevant, for example, waiting for a checkpoint while the robot is in an error state.
 
-        Attributes
+        Parameters
         ----------
-        timeout : float
+        timeout
             Maximum duration to wait in seconds.
 
         Return
         ------
-        data : object
+        data
             Return the data object (or None for events not returning any data)
-
         """
-        with self._lock:
+        with self._cond:
+            initial_set_count = self._set_count
             self.check_interrupted()
-        start_time = time.monotonic()
-        # Wait by smaller chunks to we can get interrupted by OS signals (like SIGINT)
-        partial_timeout = 0.1 if timeout is None else min(timeout, 0.1)
-        while True:
-            is_set = self._event.wait(timeout=partial_timeout)
-            if is_set:
-                break
-            self.check_interrupted()
-            if timeout is not None and time.monotonic() - start_time > timeout:
-                raise TimeoutException("Timeout waiting for interruptable event")
-        with self._lock:
-            self.check_interrupted()
-            return self._data
+            if self._is_set or self._set_count != initial_set_count:
+                return self._data
+
+            start_time = time.monotonic()
+            # Wait by smaller chunks to we can get interrupted by OS signals (like SIGINT)
+            partial_timeout = 0.1 if timeout is None else min(timeout, 0.1)
+
+            while True:
+                # Wait until we're awakened
+                self.check_interrupted()
+                if self._is_set or self._set_count != initial_set_count:
+                    return self._data
+
+                self._cond.wait(timeout=partial_timeout)
+                if timeout is not None and time.monotonic() - start_time > timeout:
+                    raise TimeoutException("Timeout waiting for interruptable event")
 
     def set(self, data: Message = None):
         """Set the event and unblock all waits. Optionally modify data before setting.
-
         """
-        with self._lock:
+        with self._cond:
             self._data = data
-            self._event.set()
+            self._is_set = True
+            self._set_count += 1
+            self._cond.notify_all()
 
     def abort(self, message=""):
         """Unblock any waits and raise an exception.
-
         """
-        with self._lock:
-            if not self._event.is_set():
+        with self._cond:
+            if not self._is_set:
                 self._interrupted_msg = message
                 self._interrupted = True
-                self._event.set()  # Awake all threads
-                self._event.clear()  # Restore previous state (important to keep state even if interrupted)
+                self._cond.notify_all()
+
+    def add_tmp_interrupt(self, cause: str, exception: MecademicException):
+        """
+        Adds a temporary exception cause to this interruptable event.
+        The event is considered interrupted until ``remove_tmp_interrupt`` is called with the same
+        exception cause string. Only one temporary exception per cause is allowed.
+
+        Parameters
+        ----------
+        cause
+            Identifier for this interrupt. This avoids adding multiple time an interrupt for the same
+            cause on this interruptable event.
+        exception
+            Exception instance to associate temporarily with this interruptable event.
+        """
+        with self._cond:
+            # Add the interrupt cause to the dictionary
+            self._tmp_interrupt_causes[cause] = exception
+            self._cond.notify_all()
+
+    def remove_tmp_interrupt(self, cause: str):
+        """ Remove a temporary exception of the specified cause, if any. """
+        with self._cond:
+            if cause in self._tmp_interrupt_causes:
+                del self._tmp_interrupt_causes[cause]
 
     def clear(self):
         """Reset the event to its initial state.
-
         """
-        with self._lock:
+        with self._cond:
             self._interrupted = False
-            self._event.clear()
+            self._is_set = False
+            self._tmp_interrupt_causes = {}
 
     def is_set(self) -> bool:
         """Checks if the event is set.
 
-        Return
-        ------
-        boolean
-            False if event is not set or instance should '_interrupted'. True otherwise.
-
+        Returns
+        -------
+        bool
+            False if event is not set or instance should be `_interrupted`. True otherwise.
         """
-        with self._lock:
-            if self._interrupted:
-                return False
-            else:
-                return self._event.is_set()
+        with self._cond:
+            return self._is_set and not self._interrupted
 
     def clear_abort(self):
         """Clears the abort to make waiting for the event blocking again.
 
         """
-        with self._lock:
-            if self._interrupted:
-                self._interrupted = False
+        with self._cond:
+            self._interrupted = False
 
     @property
     def id(self) -> int:
@@ -499,51 +615,64 @@ class InterruptableEvent:
 
     @property
     def data(self) -> Message:
-        """Make data a read-only property and enforce that it is only assignable at construction or using set().
-
+        """Make data a read-only property and enforce that it is only assignable at construction or
+        using ``set``.
         """
         return self._data
 
 
-class RobotVersion:
+class RobotCopyable:
+
+    def copy(self) -> Any:
+        """Shallow copy using `replace`. Override `_copy_mutable_fields` if needed."""
+        copied = replace(self)
+        self._copy_mutable_fields(copied)
+        return copied
+
+    def _copy_mutable_fields(self, copied: Any):
+        """Override in subclasses to deep-copy mutable fields."""
+        pass
+
+    def __deepcopy__(self, memo) -> Any:
+        """Ensures ``copy.deepcopy`` uses the optimized copy method."""
+        return self.copy()
+
+
+@dataclass
+class RobotVersion(RobotCopyable):
     """
-        Robot utility class to handle firmware version.
+    Robot utility class to handle firmware version.
 
     Attributes
     ----------
-
-    build : integer
+    build
         Firmware build number, None if unavailable
-
-    extra : string
+    extra
         Firmware version 'extra' name, None if unavailable
-
-    full_version : string
+    full_version
         Full firmware version containing major.minor.patch.build-extra
-
-    major : integer
+    major
         Major firmware version value
-
-    minor : integer
+    minor
         Minor firmware version value
-
-    patch : integer
+    patch
         Patch firmware version value
-
-    short_version : string
+    short_version
         Firmware version containing major.minor.patch only
-
     """
+    full_version: str
+    short_version: str
+    major: int
+    minor: int
+    patch: int
+    build: Optional[int] = None
+    extra: Optional[str] = None
 
     REGEX_VERSION_BUILD = r"(?P<version>\d+\.\d+\.\d+)\.?(?P<build>\d+)?-?(?P<extra>.*)"
 
-    def __init__(self, version: str):
-        """Creates
-
-        :param version: version of firmware. See update_version for supported formats
-        """
-        self.full_version = version
-        self.update_version(self.full_version)
+    def _copy_mutable_fields(self, copied: RobotVersion):
+        # No mutable fields to copy in this class
+        pass
 
     def __str__(self) -> str:
         return self.full_version
@@ -554,19 +683,20 @@ class RobotVersion:
         return not self.is_at_least(other.major, other.minor, other.patch, other.build)
 
     def get_str(self, build=False, extra=False) -> str:
-        """Get version string
+        """
+        Get version string.
 
         Parameters
         ----------
-        build : bool, optional
-            Include the build number in the version (ex:9.3.0.4739), by default False
-        extra : bool, optional
-            Include the build 'extra in the version (ex:9.3.0.4739-master), by default False
+        build
+            Include the build number in the version (e.g., 9.3.0.4739).
+        extra
+            Include the build extra in the version (e.g., 9.3.0.4739-master).
 
         Returns
         -------
         str
-            Formatted version string
+            Formatted version string.
         """
         version_to_return = self.short_version
         if build and self.build:
@@ -575,52 +705,69 @@ class RobotVersion:
             version_to_return += f'-{self.extra}'
         return version_to_return
 
-    def update_version(self, version: str):
-        """Update object firmware version values by parsing a version string.
-
-        :param version: string
-            New version of firmware. Supports multiple version formats
-            ie. 8.1.9, 8.4.3.1805-official
+    @classmethod
+    def from_version_string(cls, version_str: str) -> 'RobotVersion':
         """
-        self.short_version = '0.0.0'
+        Build a ``RobotVersion`` object from a version string.
 
-        regex_version = re.search(self.REGEX_VERSION_BUILD, version)
+        Parameters
+        ---------
+        version_str
+            String that contains the version (e.g., ``'v11.1.6.12310-official'``)
+
+        Raises
+        ------
+        ValueError
+            The string does not contain a valid version to parse
+
+        Returns
+        -------
+        RobotVersion
+            The built object that contains the parsed version
+        """
+        regex_version = re.search(cls.REGEX_VERSION_BUILD, version_str)
         if regex_version is None:
-            raise ValueError(f'Invalid version format: "{version}"')
-        if regex_version.group("version"):
-            self.short_version = regex_version.group("version")
+            raise ValueError(f'Invalid version format: "{version_str}"')
 
-        splitted_version = self.short_version.split(".")
-        self.major = int(splitted_version[0])
-        self.minor = int(splitted_version[1])
-        self.patch = int(splitted_version[2])
-        self.build = None
-        self.extra = None
-        if regex_version.group("build"):
-            self.build = int(regex_version.group("build"))
-        if regex_version.group("extra"):
-            self.extra = regex_version.group("extra")
+        short_version = regex_version.group("version") or "0.0.0"
+        major, minor, patch = map(int, short_version.split("."))
 
-        self.full_version = self.get_str(build=True, extra=True)
+        build = int(regex_version.group("build")) if regex_version.group("build") else None
+        extra = regex_version.group("extra") if regex_version.group("extra") else None
+
+        full_version = f"{short_version}"
+        if build is not None:
+            full_version += f".{build}"
+        if extra:
+            full_version += f"-{extra}"
+
+        return cls(full_version=full_version,
+                   short_version=short_version,
+                   major=major,
+                   minor=minor,
+                   patch=patch,
+                   build=build,
+                   extra=extra)
 
     def is_at_least(self, major, minor=0, patch=0, build=0) -> bool:
-        """Tells if this RobotInfo instance's version is at least the specified version
+        """
+        Tells if this ``RobotInfo`` instance's version is at least the specified version.
 
         Parameters
         ----------
-        major : integer
+        major
             Minimum desired major version
-        minor : integer
+        minor
             Minimum desired minor version
-        patch : integer
+        patch
             Minimum desired patch version
-        build : integer
+        build
             Minimum desired build version
 
         Returns
         -------
-        boolean
-            True if this RobotInfo instance's version is at least the specified version
+        bool
+            True if this ``RobotInfo`` instance's version is at least the specified version
         """
         # Check major
         if self.major > major:
@@ -655,99 +802,108 @@ class RobotVersion:
         return False
 
 
-class RobotInfo:
-    """Class for storing metadata about a robot.
+@dataclass
+class RobotInfo(RobotCopyable):
+    """
+    Class for storing metadata about a robot.
 
     Attributes
     ----------
     robot_model: MxRobotModel
         Model of robot
-    model : string
-        Model of robot (legacy, use robot_model instead since it's an enum with well-known values)
-    revision : int
+    model
+        Model of robot as a string (legacy, use robot_model instead since it's an enum with well-known values)
+    revision
         Robot revision.
-    is_virtual : bool
+    is_virtual
         True if is a virtual robot.
-    is_safe_boot : bool
+    is_safe_boot
         True if is booted in safe-boot mode.
-    version : str
+    version
         robot firmware revision number as received from the connection string.
-    serial : string
+    serial
         Serial identifier of robot.
-    ip_address : string
+    ip_address
         IP address of this robot.
-    rt_message_capable : bool
+    rt_message_capable
         True if robot is capable of sending real-time monitoring messages.
-    rt_on_ctrl_port_capable : bool
+    rt_on_ctrl_port_capable
         True if robot is capable of sending real-time monitoring messages on control port (SetCtrlPortMonitoring).
-    sidecar_capable : bool
-        True if robot supports running the sidecar scripting engine.
-    num_joints : int
+    variables_capable
+        True if robot supports saving variables.
+    mecascript_capable
+        True if robot supports running the MecaScript (Python) engine.
+    num_joints
         Number of joints on the robot.
-    requires_homing : bool
+    requires_homing
         Tells if this robot requires homing.
-    supports_ext_tool : bool
+    supports_ext_tool
         Tells if this robot supports connecting external tools (gripper or valve box).
-    supports_io_module : bool
+    supports_io_module
         Tells if this robot supports IO expansion module.
-    supports_manual_mode : bool
+    supports_manual_mode
         Tells if this robot supports manual mode.
-    gripper_pos_ctrl_capable : bool
+    gripper_pos_ctrl_capable
         Tells if this robot supports gripper position control.
-    ext_tool_version_capable : bool
+    ext_tool_version_capable
         Tells if this robot supports external tool fw version fetch.
-    ext_tool_version : str
+    ext_tool_version
         External tool firmware revision number as received from the connection string.
         Version 0.0.0.0 if device isn't connected or ext_tool_version_capable == False.
-    supports_joint_vel_limit : bool
+    supports_joint_vel_limit
         Tells if this robot supports SetJointVelLimit
-    supports_set_payload : bool
+    supports_set_payload
         Tells if this robot supports SetPayload
-    supports_torque_limits : bool
+    supports_torque_limits
         Tells if this robot supports SetTorqueLimits and SetTorqueLimitsCfg
-    supports_conf_turn : bool
+    supports_conf_turn
         Tells if this robot supports SetConfTurn
-    supports_time_scaling : bool
+    supports_time_scaling
         Tells if this robot supports SetTimeScaling
-    supports_checkpoint_discarded : bool
+    supports_checkpoint_discarded
         Tells if this robot supports reporting discarded checkpoints (MX_ST_CHECKPOINT_DISCARDED)
-    supports_move_duration : bool
+    supports_move_duration
         Tells if this robot supports time-based movements (SetMoveDuration, SetMoveMode, ...)
 """
 
-    def __init__(self,
-                 model: str = 'Unknown',
-                 revision: int = 0,
-                 is_virtual: bool = False,
-                 is_safe_boot: bool = False,
-                 version: str = '0.0.0',
-                 serial: str = '',
-                 ext_tool_version: str = '0.0.0.0'):
-        self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
-        self.model = model
-        self.revision = revision
-        self.is_virtual = is_virtual
-        self.is_safe_boot = is_safe_boot
-        self.version = RobotVersion(version)
-        self.serial = serial
-        self.ip_address = None  # Set later
-        self.rt_message_capable = False
-        self.rt_on_ctrl_port_capable = False
-        self.sidecar_capable = False
-        self.gripper_pos_ctrl_capable = False
-        self.ext_tool_version_capable = False
-        self.ext_tool_version = RobotVersion(ext_tool_version)
-        self.supports_io_module = False
-        self.supports_manual_mode = False
-        self.supports_joint_vel_limit = False
-        self.supports_set_payload = False
-        self.supports_torque_limits = False
-        self.supports_conf_turn = False
-        self.supports_time_scaling = False
-        self.supports_checkpoint_discarded = False
-        self.supports_move_duration = False
+    model: str = 'Unknown'
+    revision: int = 0
+    is_virtual: bool = False
+    is_safe_boot: bool = False
+    version: RobotVersion = field(default_factory=lambda: RobotVersion.from_version_string('0.0.0'))
+    serial: str = ''
+    ext_tool_version: RobotVersion = field(default_factory=lambda: RobotVersion.from_version_string('0.0.0.0'))
+    ip_address: Optional[str] = None
 
-        if self.model.upper() == MX_ROBOT_MODEL_OFFICIAL_NAME_M500.upper():
+    # Set in __post_init__
+    robot_model: MxRobotModel = field(init=False)
+    num_joints: int = field(init=False)
+    requires_homing: bool = field(init=False)
+    supports_ext_tool: bool = field(init=False)
+    rt_message_capable: bool = field(init=False, default=False)
+    rt_on_ctrl_port_capable: bool = field(init=False, default=False)
+    variables_capable: bool = field(init=False, default=False)
+    mecascript_capable: bool = field(init=False, default=False)
+    gripper_pos_ctrl_capable: bool = field(init=False, default=False)
+    ext_tool_version_capable: bool = field(init=False, default=False)
+    supports_io_module: bool = field(init=False, default=False)
+    supports_manual_mode: bool = field(init=False, default=False)
+    supports_joint_vel_limit: bool = field(init=False, default=False)
+    supports_set_payload: bool = field(init=False, default=False)
+    supports_torque_limits: bool = field(init=False, default=False)
+    supports_conf_turn: bool = field(init=False, default=False)
+    supports_time_scaling: bool = field(init=False, default=False)
+    supports_checkpoint_discarded: bool = field(init=False, default=False)
+    supports_move_duration: bool = field(init=False, default=False)
+
+    def _copy_mutable_fields(self, copied: RobotInfo):
+        copied.version = self.version.copy()  # Make sure to create a copy instead of a reference
+        copied.ext_tool_version = self.ext_tool_version.copy()  # Make sure to create a copy instead of a reference
+
+    def __post_init__(self):
+        model_upper = self.model.upper()
+
+        if model_upper == MX_ROBOT_MODEL_OFFICIAL_NAME_M500.upper():
             if self.revision == 1:
                 self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R1
             elif self.revision == 2:
@@ -756,55 +912,53 @@ class RobotInfo:
                 self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R3
             elif self.revision == 4:
                 self.robot_model = MxRobotModel.MX_ROBOT_MODEL_M500_R4
+            else:
+                self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
             self.num_joints = 6
             self.requires_homing = True
             self.supports_ext_tool = True
-            self.supports_io_module = False
-        elif self.model.upper() == MX_ROBOT_MODEL_OFFICIAL_NAME_MCS500.upper():
+        elif model_upper == MX_ROBOT_MODEL_OFFICIAL_NAME_MCS500.upper():
             self.robot_model = MxRobotModel.MX_ROBOT_MODEL_MCS500_R1
             self.num_joints = 4
             self.requires_homing = False
             self.supports_ext_tool = False
             self.supports_io_module = True
             self.supports_manual_mode = True
-        elif self.model.upper() == MX_ROBOT_MODEL_OFFICIAL_NAME_MCA250.upper():
+        elif model_upper == MX_ROBOT_MODEL_OFFICIAL_NAME_MCA250.upper():
             self.robot_model = MxRobotModel.MX_ROBOT_MODEL_MCA250_R1
             self.num_joints = 6
             self.requires_homing = False
             self.supports_ext_tool = False
             self.supports_io_module = True
             self.supports_manual_mode = True
-        elif self.model.upper() == MX_ROBOT_MODEL_OFFICIAL_NAME_MCA1000.upper():
+        elif model_upper == MX_ROBOT_MODEL_OFFICIAL_NAME_MCA1000.upper():
             self.robot_model = MxRobotModel.MX_ROBOT_MODEL_MCA1000_R1
             self.num_joints = 6
             self.requires_homing = False
             self.supports_ext_tool = False
             self.supports_io_module = True
             self.supports_manual_mode = True
-        elif self.model.upper() == 'UNKNOWN':
+        elif model_upper == 'UNKNOWN':
             self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
             self.num_joints = 1
             self.requires_homing = False
-            self.supports_ext_tool = False
             self.supports_ext_tool = False
         else:
             self.robot_model = MxRobotModel.MX_ROBOT_MODEL_UNKNOWN
             raise ValueError(f'Invalid robot model: {self.model}')
 
-        # Check if this robot supports real-time monitoring events
+        # Capabilities based on version
         if self.version.is_at_least(8, 4):
             self.rt_message_capable = True
-        # Check if this robot supports real-time monitoring on control port
         if self.version.is_at_least(9, 0):
             self.rt_on_ctrl_port_capable = True
-        # Check if this robot supports the sidecar scripting engine
-        if self.version.is_at_least(11, 1, 3):
-            self.sidecar_capable = True
-        # Check if this robot supports gripper position control
+        if self.version.is_at_least(11, 1, 5):
+            self.variables_capable = True
+        if self.version.is_at_least(12, 1, 0):
+            self.mecascript_capable = True
         if self.version.is_at_least(9, 1):
             self.gripper_pos_ctrl_capable = True
         if self.version.is_at_least(9, 1, 5):
-            # Check if this robot supports external tool version
             self.ext_tool_version_capable = True
         if self.version.is_at_least(9, 3):
             self.supports_joint_vel_limit = True
@@ -828,13 +982,14 @@ class RobotInfo:
 
     @classmethod
     def from_command_response_string(cls, input_string: str):
-        """Generate robot information from standard robot connection response string.
+        """
+        Generate robot information from standard robot connection response string.
 
         String format should be "Connected to {model} R{revision}{-virtual} v{fw_major_num}.{fw_minor_num}.{patch_num}"
 
         Parameters
         ----------
-        input_string : string
+        input_string
             Input string to be parsed.
 
         """
@@ -862,20 +1017,24 @@ class RobotInfo:
                        revision=revision,
                        is_virtual=virtual,
                        is_safe_boot=safe_boot,
-                       version=robot_info_regex.group('version'))
+                       version=RobotVersion.from_version_string(robot_info_regex.group('version')))
         except Exception as exception:
             raise ValueError(f'Could not parse robot info string "{input_string}", error: {exception}') from exception
 
+    @tools.deprecation.deprecated(
+        deprecated_in="2.4.0",
+        current_version=tools.get_mecademicpy_version(),
+        details="The serial number should always be considered a string with letters and digits")
     def get_serial_digit(self) -> int:
-        """Returns robot serial digits.
-           ie. M500-0123 -> 123 (for Meca500)
-            or
-           ie. 0123 -> 123 (for other)
+        """"
+        Returns robot serial digits.
+
+        For example, for Meca500, a serial number M500-0123 is converted to 123.
 
         Returns
         -------
         int
-            Returns robot serial digits
+            Robot serial number digits
         """
         if self.robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4:
             serial_digit = self._get_meca500_serial_digits()
@@ -889,13 +1048,15 @@ class RobotInfo:
         return serial_digit
 
     def _get_meca500_serial_digits(self) -> int:
-        """Returns robot serial digits.
-           ie. M500-0123 -> 123
+        """
+        Returns robot serial digits.
+
+        For example, a serial number M500-0123 is converted to 123.
 
         Returns
         -------
         int
-            Returns robot serial digits
+            Robot serial number digits
         """
         serial_split = self.serial.split('-')
 
@@ -905,64 +1066,74 @@ class RobotInfo:
         return int(serial_split[1])
 
 
-class UpdateProgress:
+@dataclass
+class UpdateProgress(RobotCopyable):
     """Class for storing the robot's firmware update status.
 
     Attributes
     ----------
-    in_progress : bool
+    in_progress
         Firmware update is in progress
-    complete : bool
+    complete
         Firmware update has completed
-    version : str
+    version
         The firmware version being installed
-    error : boolean
+    error
         Tells if the update failed
-    error_msg : str
+    error_msg
         Message that explains why the update failed
-    progress : str
+    progress
         Update progress message received from robot
-    step : str
+    step
         String that describes the current firmware update step being performed
 
-    _last_print_timestamp : float
+    _last_print_timestamp
         Last time we have printed the firmware update status
 """
+    in_progress: bool = False
+    complete: bool = False
+    version: str = ""
+    error: bool = False
+    error_msg: str = ""
+    progress: float = 0.0
+    progress_str: str = ""
+    step: str = ""
+    _last_print_timestamp: float = field(default=0.0, repr=False, compare=False)
 
-    def __init__(self):
-        # The following are status fields.
-        self.in_progress = False
-        self.complete = False
-        self.version = ""
-        self.error = False
-        self.error_msg = ""
-        self.progress = 0.0
-        self.progress_str = ""  # For legacy update
-        self.step = ""
-
-        self._last_print_timestamp = 0.0
+    def _copy_mutable_fields(self, copied: UpdateProgress):
+        # No mutable fields to copy in this class
+        pass
 
 
-class TimestampedData:
-    """ Class for storing timestamped data (real-time data received from the robot)
+@dataclass
+class TimestampedData(RobotCopyable):
+    """
+    Class for storing timestamped data (real-time data received from the robot).
 
     Attributes
     ----------
-    timestamp : number-like
+    timestamp
         Monotonic timestamp associated with data (in microseconds since robot last reboot)
         This timestamp is stamped by the robot so it is not affected by host/network jitter
-    data : object
+    data
         Data to be stored.
-    update_type : RtDataUpdateType
-        Update type of the TimestampedData. Refer to RtDataUpdateType for the various update types.
+    update_type
+        Update type of the ``TimestampedData``. Refer to ``RtDataUpdateType`` for the various
+        update types.
 """
+    timestamp: int
+    data: List[float]
+    update_type: RtDataUpdateType
+    enabled: Optional[bool] = None
+    _updated: bool = True  # Set when data was updated (at construction or upon set_data), until 'copy_from_if_updated'
 
-    def __init__(self, timestamp: int, data: list[float], update_type: RtDataUpdateType):
-        self.timestamp = timestamp
-        self.data = data
-        self.update_type = update_type
-        self.enabled = False if (update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL
-                                 or update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE) else True
+    def __post_init__(self):
+        if self.enabled is None:
+            is_enabled = self.update_type not in {
+                RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL,
+                RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE
+            }
+            object.__setattr__(self, 'enabled', is_enabled)
 
     def __str__(self):
         return str([self.timestamp] + self.data)
@@ -970,32 +1141,57 @@ class TimestampedData:
     def __repr__(self):
         return str(self)
 
+    def _copy_mutable_fields(self, copied: TimestampedData):
+        copied.data = self.data.copy()  # Make sure to create a copy instead of a reference
+
+    def set_enabled(self, enabled: bool):
+        """ Set the enabled flag  """
+        self.enabled = enabled
+
+    def set_timestamp(self, timestamp: int):
+        """ Set the timestamp """
+        self.timestamp = timestamp
+        self._updated = True
+
+    def set_data(self, data: List[float]):
+        """ Set the data """
+        self.data = data
+        self._updated = True
+
+    def was_updated(self):
+        """ Tell if this ``TimestampedData`` was updated since last call to clear_updated """
+        return self._updated
+
+    def clear_updated(self):
+        """ Clear the '_updated' flag """
+        self._updated = False
+
     def clear_if_disabled(self):
         """Clear timestamp and data if not reported by the robot (not part of enabled real-time monitoring events)
         """
         if not self.enabled:
-            self.timestamp = 0
-            self.data = TimestampedData.zeros(len(self.data), self.update_type).data
+            self.set_timestamp(0)
+            self.set_data([0.] * len(self.data))
 
     def update_from_csv(self, input_string: str, allowed_nb_val: list[int] = None):
-        """Update from comma-separated string, only if timestamp is newer.
+        """
+        Update from comma-separated string, only if timestamp is newer.
 
         Parameters
         ----------
-        input_string : string
+        input_string
             Comma-separated string. First value is timestamp, rest is data.
-        allowed_nb_val : list[int]
-            Optional list of accepted number of values. If not provided, input_string must contain at least as many
-            values as current contents of self.data.
-
+        allowed_nb_val
+            List of accepted number of values. If not provided, `input_string` must contain at
+            least as many values as current contents of ``TimestampedData.data``.
         """
         numbs = tools.string_to_numbers(input_string)
         nb_values = len(numbs) - 1
 
         if allowed_nb_val is None:
-            if (nb_values) < len(self.data):
+            if nb_values < len(self.data):
                 raise ValueError(f'Cannot update TimestampedData, too few values received ({nb_values}).')
-            elif (nb_values) > len(self.data):
+            elif nb_values > len(self.data):
                 numbs = numbs[0:len(self.data) + 1]
         else:
             if nb_values not in allowed_nb_val:
@@ -1005,298 +1201,596 @@ class TimestampedData:
             self.timestamp = numbs[0]
             self.data = numbs[1:]
             self.enabled = True
+            self._updated = True
 
     def update_from_data(self, timestamp: int, data: list[float]):
-        """Update with data unless timestamp is older
+        """
+        Update with data unless timestamp is older.
 
         Parameters
         ----------
-        timestamp : number-like
+        timestamp
             Timestamp associated with data.
-        data : object
+        data
             Data to be stored if timestamp is newer.
-
         """
         if timestamp >= self.timestamp:
             self.timestamp = timestamp
             self.data = data
             self.enabled = True
+            self._updated = True
 
     @classmethod
-    def zeros(cls, length: int, update_type: RtDataUpdateType):
-        """ Construct empty TimestampedData object of specified length.
+    def zeros(cls, length: int, update_type: RtDataUpdateType) -> TimestampedData:
+        """
+        Construct empty ``TimestampedData`` object of specified length.
 
         Parameters
         ----------
-        length : int
+        length
             Length of data to construct.
-        update_type : RtDataUpdateType
-            Update type of monitored data. Refer to RtDataUpdateType for the various update types
+        update_type
+            Update type of monitored data. Refer to ``RtDataUpdateType`` for the various update types.
 
-        Return
-        ------
-        TimestampedData object
-
+        Returns
+        -------
+        TimestampedData
+            A TimestampedData with all values set to 0
         """
         return cls(0, [0.] * length, update_type)
 
     def __eq__(self, other):
-        """ Return true if other object has identical timestamp and data.
+        """
+        Returns True if the other object has an identical timestamp and data.
 
         Parameters
         ----------
-        other : object
+        other
             Object to compare against.
 
         Return
         ------
         bool
-            True if objects have same timestamp and data.
-
+            True if both objects have the same timestamp and data.
         """
-        return other.timestamp == self.timestamp and other.data == self.data and other.update_type == self.update_type
+        if isinstance(other, TimestampedData):
+            return (other.timestamp == self.timestamp and other.data == self.data
+                    and other.update_type == self.update_type)
+        else:
+            return self.data == other
 
     def __ne__(self, other):
-        """ Return true if other object has different timestamp or data.
+        """
+        Returns True if the other object has a different timestamp or data.
 
         Parameters
         ----------
-        other : object
+        other
             Object to compare against.
 
         Return
         ------
         bool
-            True if objects have different timestamp or data.
-
+            True if the objects have different timestamps or data.
         """
         return not self == other
 
 
-class RobotRtData:
-    """Class for storing the internal real-time data of a Mecademic robot.
+@dataclass
+class RobotRtDataField(RobotCopyable):
+    """
+    Represents a robot real-time data field that can be enabled using
+    ``SetRealTimeMonitoring()``, retrieved in ``RobotRtData``, and captured with
+    ``StartLogging()``.
 
-    Most real-time data query methods from the programming guide were not implemented explicitly in Python.
-    The information, however, are available using the GetRobotRtData() method.
-    The attribute corresponding programming method is shown between parentheses.
+    Parameters
+    ----------
+    field_name
+        Name of this field in the ``RobotRtData`` class.
+        Example: rt_target_joint_pos
+    status_code
+        Robot status code that provides this value.
+        This can be used as an argument for ``SetRealTimeMonitoring`` or
+        ``StartLogging`` to select which fields to capture.
+        Example: MxRobotStatusCode.MX_ST_RT_TARGET_JOINT_POS
+    col_prefix
+        Column name prefix for this real-time data when stored in a captured dataframe.
+        The column name suffix depends on the data type: for joint positions, it is the joint
+        number; for Cartesian positions, it may be x, y, z, alpha, etc.
+    """
 
-    The frequency and availability of real-time data depends on the monitoring interval and which monitoring
-    events are enabled. Monitoring events can be configured using SetMonitoringInterval() and SetRealTimeMonitoring().
+    field_name: str
+    status_code: MxRobotStatusCode
+    col_prefix: str
+
+
+ROBOT_RT_DATA_FIELDS: list[RobotRtDataField] = [
+    #         RobotRtData attribute name,   robot status code,                           captured column name prefix
+    RobotRtDataField('rt_target_joint_pos', MxRobotStatusCode.MX_ST_RT_TARGET_JOINT_POS, 'TargetJointPos'),
+    RobotRtDataField('rt_target_cart_pos', MxRobotStatusCode.MX_ST_RT_TARGET_CART_POS, 'TargetCartPos'),
+    RobotRtDataField('rt_target_joint_vel', MxRobotStatusCode.MX_ST_RT_TARGET_JOINT_VEL, 'TargetJointVel'),
+    RobotRtDataField('rt_target_joint_torq', MxRobotStatusCode.MX_ST_RT_TARGET_JOINT_TORQ, 'TargetJointTorq'),
+    RobotRtDataField('rt_target_cart_vel', MxRobotStatusCode.MX_ST_RT_TARGET_CART_VEL, 'TargetCartVel'),
+    RobotRtDataField('rt_target_conf', MxRobotStatusCode.MX_ST_RT_TARGET_CONF, 'TargetConf'),
+    RobotRtDataField('rt_target_conf_turn', MxRobotStatusCode.MX_ST_RT_TARGET_CONF_TURN, 'TargetConfTurn'),
+    RobotRtDataField('rt_joint_pos', MxRobotStatusCode.MX_ST_RT_JOINT_POS, 'JointPos'),
+    RobotRtDataField('rt_cart_pos', MxRobotStatusCode.MX_ST_RT_CART_POS, 'CartPos'),
+    RobotRtDataField('rt_joint_vel', MxRobotStatusCode.MX_ST_RT_JOINT_VEL, 'JointVel'),
+    RobotRtDataField('rt_joint_torq', MxRobotStatusCode.MX_ST_RT_JOINT_TORQ, 'JointTorq'),
+    RobotRtDataField('rt_cart_vel', MxRobotStatusCode.MX_ST_RT_CART_VEL, 'CartVel'),
+    RobotRtDataField('rt_conf', MxRobotStatusCode.MX_ST_RT_CONF, 'Conf'),
+    RobotRtDataField('rt_conf_turn', MxRobotStatusCode.MX_ST_RT_CONF_TURN, 'ConfTurn'),
+    RobotRtDataField('rt_abs_joint_pos', MxRobotStatusCode.MX_ST_RT_ABS_JOINT_POS, 'AbsJointPos'),
+    RobotRtDataField('rt_accelerometer', MxRobotStatusCode.MX_ST_RT_ACCELEROMETER, 'Accel'),
+    RobotRtDataField('rt_effective_time_scaling', MxRobotStatusCode.MX_ST_RT_EFFECTIVE_TIME_SCALING,
+                     'EffectiveTimeScaling'),
+    RobotRtDataField('rt_vl', MxRobotStatusCode.MX_ST_RT_VL, 'Vl'),
+    RobotRtDataField('rt_vm', MxRobotStatusCode.MX_ST_RT_VM, 'Vm'),
+    RobotRtDataField('rt_current', MxRobotStatusCode.MX_ST_RT_CURRENT, 'Current'),
+    RobotRtDataField('rt_temperature', MxRobotStatusCode.MX_ST_RT_TEMPERATURE, 'Temperature'),
+    RobotRtDataField('rt_i2t', MxRobotStatusCode.MX_ST_RT_I2T, 'I2t'),
+    RobotRtDataField('rt_wrf', MxRobotStatusCode.MX_ST_RT_WRF, 'Wrf'),
+    RobotRtDataField('rt_trf', MxRobotStatusCode.MX_ST_RT_TRF, 'Trf'),
+    RobotRtDataField('rt_checkpoint', MxRobotStatusCode.MX_ST_RT_CHECKPOINT, 'Checkpoint'),
+    RobotRtDataField('rt_external_tool_status', MxRobotStatusCode.MX_ST_RT_EXTTOOL_STATUS, 'ExtToolStatus'),
+    RobotRtDataField('rt_valve_state', MxRobotStatusCode.MX_ST_RT_VALVE_STATE, 'ValveState'),
+    RobotRtDataField('rt_gripper_state', MxRobotStatusCode.MX_ST_RT_GRIPPER_STATE, 'GripperState'),
+    RobotRtDataField('rt_gripper_force', MxRobotStatusCode.MX_ST_RT_GRIPPER_FORCE, 'GripperForce'),
+    RobotRtDataField('rt_gripper_pos', MxRobotStatusCode.MX_ST_RT_GRIPPER_POS, 'GripperPos'),
+    RobotRtDataField('rt_io_module_status', MxRobotStatusCode.MX_ST_RT_IO_STATUS, 'IoModuleStatus'),
+    RobotRtDataField('rt_io_module_outputs', MxRobotStatusCode.MX_ST_RT_OUTPUT_STATE, 'IoModuleOutputState'),
+    RobotRtDataField('rt_io_module_inputs', MxRobotStatusCode.MX_ST_RT_INPUT_STATE, 'IoModuleInputState'),
+    RobotRtDataField('rt_sig_gen_status', MxRobotStatusCode.MX_ST_RT_IO_STATUS, 'SigGenStatus'),
+    RobotRtDataField('rt_sig_gen_outputs', MxRobotStatusCode.MX_ST_RT_OUTPUT_STATE, 'SigGenOutputState'),
+    RobotRtDataField('rt_sig_gen_inputs', MxRobotStatusCode.MX_ST_RT_INPUT_STATE, 'SigGenInputState'),
+    RobotRtDataField('rt_vacuum_state', MxRobotStatusCode.MX_ST_RT_VACUUM_STATE, 'VacuumState'),
+    RobotRtDataField('rt_vacuum_pressure', MxRobotStatusCode.MX_ST_RT_VACUUM_PRESSURE, 'VacuumPressure'),
+    # Should not be used, handled by Robot class when it uses the logger
+    RobotRtDataField('', MxRobotStatusCode.MX_ST_RT_CYCLE_END, 'CycleEnd'),
+]
+"""Map that returns the ``RobotRtDataField`` object corresponding to a field name in ``RobotRtData`` class """
+rt_data_field_by_name: dict[str, RobotRtDataField] = {}
+rt_data_field_by_status_code: dict[MxRobotStatusCode, RobotRtDataField] = {}
+rt_data_field_by_col_name: dict[str, RobotRtDataField] = {}
+
+# Populate the maps above
+for robot_rt_data_field in ROBOT_RT_DATA_FIELDS:
+    # Fill map by field name
+    if robot_rt_data_field.field_name in rt_data_field_by_name:
+        raise ValueError(f'Duplicate field name {robot_rt_data_field.field_name} in robot_rt_data_field')
+    else:
+        rt_data_field_by_name[robot_rt_data_field.field_name] = robot_rt_data_field
+
+    # Fill map by status code
+    if robot_rt_data_field.status_code in rt_data_field_by_status_code:
+        # Note: These are indeed duplicates, but it's ok
+        if (robot_rt_data_field.status_code != MxRobotStatusCode.MX_ST_RT_IO_STATUS
+                and robot_rt_data_field.status_code != MxRobotStatusCode.MX_ST_RT_OUTPUT_STATE
+                and robot_rt_data_field.status_code != MxRobotStatusCode.MX_ST_RT_INPUT_STATE):
+            raise ValueError(f'Duplicate status code {robot_rt_data_field.status_code} in robot_rt_data_field')
+    else:
+        rt_data_field_by_status_code[robot_rt_data_field.status_code] = robot_rt_data_field
+
+    # Fill map by col prefix
+    if robot_rt_data_field.col_prefix in rt_data_field_by_col_name:
+        raise ValueError(f'Duplicate col prefix {robot_rt_data_field.col_prefix} in robot_rt_data_field')
+    else:
+        rt_data_field_by_col_name[robot_rt_data_field.col_prefix] = robot_rt_data_field
+
+
+def normalize_robot_rt_data_field(field_list: list[Union[MxRobotStatusCode, str]]) -> list[MxRobotStatusCode]:
+    """
+    Normalizes a list of fields to capture (from ``SetRealTimeMonitoring`` or ``StartLogging``)
+    into a list of robot status codes.
+
+    Parameters
+    ----------
+    field_list
+        List of fields to capture, containing either:
+
+          - an ``MxRobotStatusCode`` object,
+          - a string representing the corresponding field name in the ``RobotRtData`` class, or
+          - a captured file column prefix, as defined in ``ROBOT_RT_DATA_FIELDS``.
+
+    Returns
+    -------
+    list of MxRobotStatusCode
+        The normalized list of robot status codes.
+    """
+    fields_normalized: list[MxRobotStatusCode] = []
+    if isinstance(field_list, str) and field_list.lower() == 'all':
+        return [field.status_code for field in ROBOT_RT_DATA_FIELDS if field.field_name]
+    for event in field_list:
+        if isinstance(event, MxRobotStatusCode):
+            fields_normalized.append(event)
+        elif event in rt_data_field_by_name:
+            fields_normalized.append(rt_data_field_by_name[event].status_code)
+        elif event in rt_data_field_by_col_name:
+            fields_normalized.append(rt_data_field_by_col_name[event].status_code)
+        else:
+            fields_normalized.append(event)
+    return fields_normalized
+
+
+@dataclass
+class RobotRtData(RobotCopyable):
+    """
+    Holds real-time internal data from a Mecademic robot, updated automatically as the robot
+    reports new values.
+
+    This class provides a consistent snapshot of various internal robot states, updated
+    either cyclically or through event-based notifications. While many individual values can
+    be queried via specific API calls such as ``GetRtTargetJointPos``, using ``GetRobotRtData``
+    ensures that all fields are captured atomically, i.e., at the same instant in time.
+
+    Notes
+    -----
+    **Data availability**
+    Not all real-time data fields are reported by the robot by default. To control which
+    optional fields are available:
+
+      - Use ``SetRealTimeMonitoring`` to enable specific data streams.
+      - Use the ``TimestampedData.enabled`` property of each field to verify whether the
+        data is currently being reported.
+
+    Some fields (such as ``rt_target_joint_pos``) are always enabled. Others require explicit
+    activation. The description of each field below indicates which are optional.
+
+    **Update types**
+    Fields in this class fall into two categories based on how the robot updates them:
+
+      - Event-based updates (``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``):
+        The robot pushes updates when values change.
+        Example fields: ``rt_external_tool_status``, ``rt_wrf``, ``rt_checkpoint``.
+      - Cyclic updates (``MX_RT_DATA_UPDATE_TYPE_CYCLICAL`` or
+        ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``):
+        The robot sends updated values at a fixed rate.
+        Example fields: ``rt_joint_pos``, ``rt_cart_vel``.
+
+    **Cyclic data interval**
+    By default, the robot sends cyclic data 60 times per second (every 16.6 ms). This
+    interval can be adjusted to any value between 1 and 1000 ms using
+    ``SetMonitoringInterval``.
 
     Attributes
     ----------
-    cycle_count : int
-        Number of real-time data updates received from the robot. The robot will send real-time data updates at
-        the interval defined by SetMonitoringInterval (16.6 milliseconds by default)
-    rt_target_joint_pos : TimestampedData
-        Controller desired joint positions in degrees [theta_1...6] (GetRtTargetJointPos).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_target_cart_pos : TimestampedData
-        Controller desired end effector pose [x, y, z, alpha, beta, gamma] (GetRtTargetCartPos).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_target_joint_vel : TimestampedData
-        Controller desired joint velocity in degrees/second [theta_dot_1...6] (GetRtTargetJointVel).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_TARGET_JOINT_VEL).
-    rt_target_cart_vel : TimestampedData
-        Controller desired end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
-        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z] (GetRtTargetCartVel).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_TARGET_CART_VEL).
-    rt_target_joint_torq : TimestampedData
-        Controller estimated torque ratio as a percent of maximum [torque_1...6] (GetRtJointTorq).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_TARGET_JOINT_TORQ).
-    rt_target_conf : TimestampedData
-        Controller joint configuration that corresponds to desired joint positions (GetRtTargetConf).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_target_conf_turn : TimestampedData
-        Controller last joint turn number that corresponds to desired joint positions (GetRtTargetConfTurn).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
+    cycle_count
+        Number of real-time updates received so far. Increments each time new data is
+        received at the configured interval.
 
-    rt_joint_pos : TimestampedData
-        Drive-measured joint positions in degrees [theta_1...6] (GetRtJointPos).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_JOINT_POS).
-    rt_cart_pos : TimestampedData
-        Drive-measured end effector pose [x, y, z, alpha, beta, gamma] (GetRtCartPos).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_CART_POS).
-    rt_joint_vel : TimestampedData
-        Drive-measured joint velocity in degrees/second [theta_dot_1...6] (GetRtJointVel).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_JOINT_VEL).
-    rt_joint_torq : TimestampedData
-        Drive-measured torque ratio as a percent of maximum [torque_1...6] (GetRtJointTorq).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_JOINT_TORQ).
-    rt_cart_vel : TimestampedData
-        Drive-measured end effector velocity with timestamp. Linear values in mm/s, angular in deg/s.
-        [linear_velocity_vector x, y, z, angular_velocity_vector omega-x, omega-y, omega-z] (GetRtCartVel).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_CART_VEL).
-    rt_conf : TimestampedData
-        Controller joint configuration that corresponds to drives-measured joint positions (GetRtConf).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_CONF).
-    rt_conf_turn : TimestampedData
-        Controller last joint turn number that corresponds to drives-measured joint positions (GetRtConfTurn).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_CONF_TURN).
+    rt_target_joint_pos
+        Desired joint positions from the controller [theta_1...6] in degrees.
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL``.
+        Also available with``GetRtTargetJointPos``.
 
-    rt_accelerometer : TimestampedData
-        Raw accelerometer measurements [accelerometer_id, x, y, z]. 16000 = 1g (GetRtAccelerometer).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_ACCELEROMETER).
-    rt_effective_time_scaling : TimestampedData
-        Effective time scaling ratio (GetRtEffectiveTimeScaling).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_EFFECTIVE_TIME_SCALING).
-    rt_vm : TimestampedData
-        Motor voltage readings (GetRtVm).
-        Contains: [Baseboard VM, Psu VM, SafeMcu VM, Drive 1 VM, Drive 1 VM, ..., Drive N VM]
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_VM).
-    rt_current : TimestampedData
-        Motor current readings (GetRtIm).
-        Contains: [Baseboard current]
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_CURRENT).
+    rt_target_cart_pos
+        Desired end effector pose [x, y, z, alpha, beta, gamma].
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL``.
+        Also available with ``GetRtTargetCartPos``.
 
-    rt_external_tool_status : TimestampedData
-        External tool status [sim_tool_type, physical_tool_type, homing_state, error_status, overload_error]
-        (GetRtExtToolStatus).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_valve_state : TimestampedData
-        Valve state [valve_opened[0], valve_opened[1]] (GetRtValveState).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_gripper_state : TimestampedData
-        Gripper state [holding_part, target_pos_reached, opened, closed] (GetRtGripperState).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_gripper_force : TimestampedData
-        Gripper force in % of maximum force (GetRtGripperForce).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_GRIPPER_FORCE).
-    rt_gripper_pos : TimestampedData
-        Gripper position in mm. (GetRtGripperPos)
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_GRIPPER_POS).
+    rt_target_joint_vel
+        Desired joint velocities [j_1...6] in deg/s.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Enable via ``SetRealTimeMonitoring`` with ``MX_ST_RT_TARGET_JOINT_VEL``.
+        Also available with ``GetRtTargetJointVel``.
 
-    rt_io_module_status : TimestampedData
-        IO module status [bank_id, present, sim_mode, error_code] (GetRtIoStatus).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_io_module_outputs : TimestampedData
-        IO module's digital outputs state [output[0], output[1], ...] (GetRtOutputState).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_io_module_inputs : TimestampedData
-        IO module's digital inputs state [input[0], input[1], ...] (GetRtInputState).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_vacuum_state : TimestampedData
-        IO module's vacuum gripper state [vacuum_on, purge_on, holding_part] (GetRtVacuumState).
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_vacuum_pressure: TimestampedData
-        IO module's vacuum current pressure in kPa (GetRtVacuumPressure).
-        *** Not enabled by default. To enable it, use SetRealTimeMonitoring(MX_ST_RT_VACUUM_PRESSURE).
+    rt_target_cart_vel
+        Desired end effector velocity: [x, y, z] mm/s linear and [omega_x, omega_y, omega_z]deg/s angular.
+        Not enabled by default, type``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with``GetRtTargetCartVel``.
 
-    rt_wrf : TimestampedData
-        Current definition of the WRF w.r.t. the BRF with timestamp. Cartesian data are in mm, Euler angles in degrees.
-        [cartesian coordinates x, y, z, Euler angles omega-x, omega-y, omega-z] (GetRtWrf)
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_trf : TimestampedData
-        Current definition of the TRF w.r.t. the FRF with timestamp. cartesian data are in mm, Euler angles in degrees.
-        [cartesian coordinates x, y, z, Euler angles omega-x, omega-y, omega-z] (GetRtTrf)
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-    rt_checkpoint : TimestampedData
-        Last executed checkpoint with timestamp. (GetCheckpoint)
-        Always enabled and available (regardless of SetRealTimeMonitoring options).
-"""
+    rt_target_joint_torq
+        Estimated joint torque as % of max per joint [tau_1...6].
+        Not enabled by default,type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtJointTorq``.
 
-    def __init__(self, num_joints: int):
-        self._init_timestamped_data(num_joints)
-        self.max_queue_size = 0
-        self.cycle_count = 0
+    rt_target_conf
+        Joint configuration that corresponds to desired joint positions.
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtTargetConf``.
 
-    def _init_timestamped_data(self, num_joints: int):
-        """Initialize timestamped data class members according to detected robot model (number of joints)"""
-        nb_cart_val = num_joints  # 4 degrees of liberty for 4 joints robots, 6 for 6 joint robots
-        nb_conf_val = 3 if num_joints == 6 else 1  # 4 degrees of liberty for 4 joints robots, 6 for 6 joint robots
+    rt_target_conf_turn
+        Joint turn numbers corresponding to desired joint positions.
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtTargetConfTurn``.
 
-        self.rt_target_joint_pos = TimestampedData.zeros(
-            num_joints, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)  # microseconds timestamp, degrees
-        self.rt_target_cart_pos = TimestampedData.zeros(
-            nb_cart_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)  # microseconds timestamp, mm and degrees
-        self.rt_target_joint_vel = TimestampedData.zeros(
-            num_joints,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, degrees/second
-        self.rt_target_cart_vel = TimestampedData.zeros(
-            nb_cart_val,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, mm/s and deg/s
-        self.rt_target_joint_torq = TimestampedData.zeros(
-            num_joints,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, percent of maximum
-        self.rt_target_conf = TimestampedData.zeros(nb_conf_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
-        self.rt_target_conf_turn = TimestampedData.zeros(1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+    rt_joint_pos
+        Actual joint positions from drives [j_1...6] in degrees.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtJointPos``.
 
-        self.rt_joint_pos = TimestampedData.zeros(
-            num_joints, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, degrees
-        self.rt_cart_pos = TimestampedData.zeros(
-            nb_cart_val,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, mm and degrees
-        self.rt_joint_vel = TimestampedData.zeros(
-            num_joints,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, degrees/second
-        self.rt_joint_torq = TimestampedData.zeros(
-            num_joints,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, percent of maximum
-        self.rt_cart_vel = TimestampedData.zeros(
-            nb_cart_val,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, mm/s and deg/s
-        self.rt_conf = TimestampedData.zeros(nb_conf_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
-        self.rt_conf_turn = TimestampedData.zeros(1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+    rt_cart_pos
+        Actual end effector pose [x, y, z, alpha, beta, gamma].
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtCartPos``.
 
-        self.rt_effective_time_scaling = TimestampedData.zeros(1,
-                                                               RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL
-                                                               )  # microseconds timestamp, effective time scaling ratio
-        self.rt_vm = TimestampedData.zeros(
-            num_joints + 3, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL
-        )  # microseconds timestamp, Baseboard VM, Psu VM, SafeMcu Vm, Drive 1 VM, Drive 2 Vm, ...
-        self.rt_current = TimestampedData.zeros(
-            1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, Baseboard current
+    rt_joint_vel
+        Actual joint velocities [j_1...6] in deg/s.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtJointVel``.
 
-        # Another way of getting robot joint position using less-precise encoders.
-        # For robot production testing (otherwise use rt_joint_pos which is much more precise)
-        self.rt_abs_joint_pos = TimestampedData.zeros(
-            num_joints, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, degrees
+    rt_joint_torq
+        Actual joint torque ratio [% of max].
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtJointTorq``.
 
-        # Contains dictionary of accelerometers stored in the robot indexed by joint number.
-        # For example, Meca500 currently only reports the accelerometer in joint 5.
-        self.rt_accelerometer: dict[int, TimestampedData] = dict()  # 16000 = 1g
+    rt_cart_vel
+        Actual end effector velocity: [x, y, z] mm/s and [omega_x, omega_y, omega_z] deg/s.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtCartVel``.
 
-        self.rt_external_tool_status = TimestampedData.zeros(
-            5, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED
-        )  # microseconds timestamp, sim tool type, physical tool type, homed, error, overload
-        self.rt_valve_state = TimestampedData.zeros(
-            MX_EXT_TOOL_MPM500_NB_VALVES,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # microseconds timestamp, valve1 opened, valve2 opened
-        self.rt_gripper_state = TimestampedData.zeros(
-            4, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED
-        )  # microseconds timestamp, holding part, target pos reached, closed, opened
-        self.rt_gripper_force = TimestampedData.zeros(
-            1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, gripper force [%]
-        self.rt_gripper_pos = TimestampedData.zeros(
-            1,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, gripper position [mm]
+    rt_conf
+        Joint configuration corresponding to measured joint positions.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtConf``.
 
-        self.rt_io_module_status = TimestampedData.zeros(4, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
-        self.rt_io_module_outputs = TimestampedData.zeros(
-            0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # Resized later
-        self.rt_io_module_inputs = TimestampedData.zeros(
-            0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # Resized later
-        self.rt_vacuum_state = TimestampedData.zeros(3, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED
-                                                     )  # microseconds timestamp, vacuum on/off, purge on/off, holding
-        self.rt_vacuum_pressure = TimestampedData.zeros(
-            1,
-            RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)  # microseconds timestamp, vacuum pressure [kPa]
+    rt_conf_turn
+        Joint turn numbers corresponding to measured joint positions.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtConfTurn``.
 
-        self.rt_sig_gen_status = TimestampedData.zeros(4, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
-        self.rt_sig_gen_outputs = TimestampedData.zeros(
-            0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # Resized later
-        self.rt_sig_gen_inputs = TimestampedData.zeros(
-            0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # Resized later
+    rt_accelerometer
+        Raw accelerometer values [sensor_id, x, y, z].
+        Unit: 16000 = 1g.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtAccelerometer``.
 
-        self.rt_wrf = TimestampedData.zeros(
-            nb_cart_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # microseconds timestamp, mm and degrees
-        self.rt_trf = TimestampedData.zeros(
-            nb_cart_val, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # microseconds timestamp, mm and degrees
-        self.rt_checkpoint = TimestampedData.zeros(
-            1, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)  # microseconds timestamp, checkpointId
+    rt_effective_time_scaling
+        Time scaling ratio (e.g., for slow-motion execution).
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+
+    rt_vl
+        VL (logic voltage) readings from components.
+        Format: [Baseboard VL, PSU VL, Safe MCU VL, Drive 1 VL, ..., Drive N VL].
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+
+    rt_vm
+        VM (motor voltage) readings from components.
+        Format: [Baseboard VM, PSU VM, Safe MCU VM, Drive 1 VM, ..., Drive N VM].
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+
+    rt_current
+        Motor current readings [Baseboard current,].
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+
+    rt_temperature
+        Robot temperature readings in Celsius [Baseboard, PSU, Safe MCU, Drive 1, ... Drive N].
+        Not available on the Meca500 robots.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+
+    rt_i2t
+        Motor i2t readings [Drive 1, ... Drive N].
+        This is a measure of how close to overload the motor is. The motor robot will enter motion error if one or
+        more motors have an i2t value greater or equal to 0 (negative values mean the motor is OK).
+        When a motor is getting near overload, the robot will report event MX_ST_DRIVES_NEAR_OVERLOAD.
+        Not available on the Meca500 robots.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+
+    rt_external_tool_status
+        Tool status: [sim_tool_type, physical_tool_type, homing_state, error_status, overload_error].
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtExtToolStatus``.
+
+    rt_valve_state
+        Pneumatic valve state [valve_opened[0], valve_opened[1]].
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtValveState``.
+
+    rt_gripper_state
+        Gripper status: [holding_part, target_pos_reached, opened, closed].
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtGripperState``.
+
+    rt_gripper_force
+        Gripper force as % of max.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtGripperForce``.
+
+    rt_gripper_pos
+        Gripper position in mm.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtGripperPos``.
+
+    rt_io_module_status
+        IO module status: [bank_id, present, sim_mode, error_code].
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtIoStatus``.
+
+    rt_io_module_outputs
+        Digital output states: [output[0], output[1], ...].
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtOutputState``.
+
+    rt_io_module_inputs
+        Digital input states: [input[0], input[1], ...].
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtInputState``.
+
+    rt_vacuum_state
+        Vacuum gripper state: [vacuum_on, purge_on, holding_part].
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtVacuumState``.
+
+    rt_vacuum_pressure
+        Vacuum pressure in kPa.
+        Not enabled by default, type ``MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL``.
+        Also available with ``GetRtVacuumPressure``.
+
+    rt_wrf
+        WRF (World Reference Frame) definition w.r.t.
+        BRF (Base Reference Frame).
+        Format: [x, y, z, omega_x, omega_y, omega_z].
+        Units: mm and degrees.
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtWrf``.
+
+    rt_trf
+        TRF (Tool Reference Frame) definition w.r.t.
+        FRF (Flange Reference Frame).
+        Format: [x, y, z, omega_x, omega_y, omega_z].
+        Units: mm and degrees.
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetRtTrf``.
+
+    rt_checkpoint
+        Last executed checkpoint ID with timestamp.
+        Always available, type ``MX_RT_DATA_UPDATE_TYPE_EVENT_BASED``.
+        Also available with ``GetCheckpoint``.
+
+    """
+    num_joints: InitVar[int]
+
+    rt_target_joint_pos: TimestampedData = field(init=False)  # degrees
+    rt_target_cart_pos: TimestampedData = field(init=False)  # mm and degrees
+    rt_target_joint_vel: TimestampedData = field(init=False)  # degrees/second
+    rt_target_cart_vel: TimestampedData = field(init=False)  # mm/s and deg/s
+    rt_target_joint_torq: TimestampedData = field(init=False)  # percent of maximum
+    rt_target_conf: TimestampedData = field(init=False)
+    rt_target_conf_turn: TimestampedData = field(init=False)
+    rt_joint_pos: TimestampedData = field(init=False)  # degrees
+    rt_cart_pos: TimestampedData = field(init=False)  # mm and degrees
+    rt_joint_vel: TimestampedData = field(init=False)  # degrees/second
+    rt_joint_torq: TimestampedData = field(init=False)  # percent of maximum
+    rt_cart_vel: TimestampedData = field(init=False)  # mm/s and deg/s
+    rt_conf: TimestampedData = field(init=False)
+    rt_conf_turn: TimestampedData = field(init=False)
+    rt_effective_time_scaling: TimestampedData = field(init=False)  # effective time scaling ratio
+    rt_vl: TimestampedData = field(init=False)  # Baseboard VL, Psu VL, SafeMcu VL, Drive 1 VL, Drive 2 VL, ...
+    rt_vm: TimestampedData = field(init=False)  # Baseboard VM, Psu VM, SafeMcu Vm, Drive 1 VM, Drive 2 Vm, ...
+    rt_current: TimestampedData = field(init=False)  # Baseboard current
+    rt_temperature: TimestampedData = field(init=False)  # Baseboard, PSU, SafeMcu, Drive 1, Drive 2, ...
+    rt_i2t: TimestampedData = field(init=False)  # For each drive
+    rt_abs_joint_pos: TimestampedData = field(init=False)  # degrees (less-precise encoders)
+    rt_accelerometer: Dict[int, TimestampedData] = field(default_factory=dict)  # 16000 = 1g
+    rt_external_tool_status: TimestampedData = field(init=False)  # sim type, physical  type, homed, error, overload
+    rt_valve_state: TimestampedData = field(init=False)  # valve1 opened, valve2 opened
+    rt_gripper_state: TimestampedData = field(init=False)  # holding part, target pos reached, closed, opened
+    rt_gripper_force: TimestampedData = field(init=False)  # gripper force [%]
+    rt_gripper_pos: TimestampedData = field(init=False)  # gripper position [mm]
+    rt_io_module_status: TimestampedData = field(init=False)
+    rt_io_module_outputs: TimestampedData = field(init=False)
+    rt_io_module_inputs: TimestampedData = field(init=False)
+    rt_vacuum_state: TimestampedData = field(init=False)  # vacuum on/off, purge on/off, holding
+    rt_vacuum_pressure: TimestampedData = field(init=False)  # vacuum pressure [kPa]
+    rt_sig_gen_status: TimestampedData = field(init=False)
+    rt_sig_gen_outputs: TimestampedData = field(init=False)
+    rt_sig_gen_inputs: TimestampedData = field(init=False)
+    rt_wrf: TimestampedData = field(init=False)  # mm and degrees
+    rt_trf: TimestampedData = field(init=False)  # mm and degrees
+    rt_checkpoint: TimestampedData = field(init=False)  # checkpointId
+    cycle_count: int = field(default=0)
+
+    def __post_init__(self, num_joints: int):
+        nb_cart_val = num_joints
+        nb_conf_val = 3 if num_joints == 6 else 1
+
+        # Aliases to make code below more concise
+        CYCLICAL = RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL
+        CYCLICAL_OPT = RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL
+        EVENT_BASED = RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED
+
+        self.rt_target_joint_pos = TimestampedData.zeros(num_joints, CYCLICAL)
+        self.rt_target_cart_pos = TimestampedData.zeros(nb_cart_val, CYCLICAL)
+        self.rt_target_joint_vel = TimestampedData.zeros(num_joints, CYCLICAL_OPT)
+        self.rt_target_cart_vel = TimestampedData.zeros(nb_cart_val, CYCLICAL_OPT)
+        self.rt_target_joint_torq = TimestampedData.zeros(num_joints, CYCLICAL_OPT)
+        self.rt_target_conf = TimestampedData.zeros(nb_conf_val, EVENT_BASED)
+        self.rt_target_conf_turn = TimestampedData.zeros(1, EVENT_BASED)
+
+        self.rt_joint_pos = TimestampedData.zeros(num_joints, CYCLICAL_OPT)
+        self.rt_cart_pos = TimestampedData.zeros(nb_cart_val, CYCLICAL_OPT)
+        self.rt_joint_vel = TimestampedData.zeros(num_joints, CYCLICAL_OPT)
+        self.rt_joint_torq = TimestampedData.zeros(num_joints, CYCLICAL_OPT)
+        self.rt_cart_vel = TimestampedData.zeros(nb_cart_val, CYCLICAL_OPT)
+        self.rt_conf = TimestampedData.zeros(nb_conf_val, EVENT_BASED)
+        self.rt_conf_turn = TimestampedData.zeros(1, EVENT_BASED)
+
+        self.rt_effective_time_scaling = TimestampedData.zeros(1, CYCLICAL_OPT)
+        self.rt_vl = TimestampedData.zeros(num_joints + 3, CYCLICAL_OPT)
+        self.rt_vm = TimestampedData.zeros(num_joints + 3, CYCLICAL_OPT)
+        self.rt_current = TimestampedData.zeros(1, CYCLICAL_OPT)
+        self.rt_current = TimestampedData.zeros(1, CYCLICAL_OPT)
+        self.rt_temperature = TimestampedData.zeros(num_joints + 3, CYCLICAL_OPT)
+        self.rt_i2t = TimestampedData.zeros(num_joints, CYCLICAL_OPT)
+
+        self.rt_abs_joint_pos = TimestampedData.zeros(num_joints, CYCLICAL_OPT)
+
+        self.rt_external_tool_status = TimestampedData.zeros(5, EVENT_BASED)
+        self.rt_valve_state = TimestampedData.zeros(MX_EXT_TOOL_MPM500_NB_VALVES, EVENT_BASED)
+        self.rt_gripper_state = TimestampedData.zeros(4, EVENT_BASED)
+        self.rt_gripper_force = TimestampedData.zeros(1, CYCLICAL_OPT)
+        self.rt_gripper_pos = TimestampedData.zeros(1, CYCLICAL_OPT)
+
+        self.rt_io_module_status = TimestampedData.zeros(4, EVENT_BASED)
+        self.rt_io_module_outputs = TimestampedData.zeros(0, EVENT_BASED)
+        self.rt_io_module_inputs = TimestampedData.zeros(0, EVENT_BASED)
+        self.rt_vacuum_state = TimestampedData.zeros(3, EVENT_BASED)
+        self.rt_vacuum_pressure = TimestampedData.zeros(1, CYCLICAL_OPT)
+
+        self.rt_sig_gen_status = TimestampedData.zeros(4, EVENT_BASED)
+        self.rt_sig_gen_outputs = TimestampedData.zeros(0, EVENT_BASED)
+        self.rt_sig_gen_inputs = TimestampedData.zeros(0, EVENT_BASED)
+
+        self.rt_wrf = TimestampedData.zeros(nb_cart_val, EVENT_BASED)
+        self.rt_trf = TimestampedData.zeros(nb_cart_val, EVENT_BASED)
+        self.rt_checkpoint = TimestampedData.zeros(1, EVENT_BASED)
+
+    def copy(self) -> RobotRtData:
+        """ Returns a copy (avoiding returning references to mutable members) """
+        # Create a blank object that avoids
+        copied = object.__new__(RobotRtData)
+
+        # Manually copy each field
+        for field_name, field_to_copy in self.__dict__.items():
+            if isinstance(field_to_copy, TimestampedData):
+                setattr(copied, field_name, field_to_copy.copy())  # fast manual copy
+            elif isinstance(field_to_copy, dict):
+                # e.g., rt_accelerometer: dict[int, TimestampedData]
+                setattr(copied, field_name, {k: v.copy() for k, v in field_to_copy.items()})
+            else:
+                setattr(copied, field_name, field_to_copy)  # immutable fields, shallow copy OK
+
+        return copied
+
+    def increment_cycle_count(self):
+        object.__setattr__(self, 'cycle_count', self.cycle_count + 1)
+
+    def copy_from_if_updated(self, other: RobotRtData):
+        """
+        Copies only the updated data from another ``RobotRtData`` instance.
+        As data is copied, the `_updated` field of the source object is cleared.
+
+        This method is used to efficiently create a stable copy of real-time data that changed
+        at the end of a monitoring cycle.
+
+        Parameters
+        ----------
+        other
+            Source data to copy from.
+        """
+        for field_to_copy in fields(self):
+            field_name = field_to_copy.name
+            value = getattr(self, field_name)
+            other_value = getattr(other, field_name)
+            if isinstance(other_value, TimestampedData):
+                copy_data = False
+                if value.timestamp != other_value.timestamp:
+                    copy_data = True
+                elif other_value.was_updated():
+                    copy_data = True
+                if copy_data:
+                    value.set_timestamp(other_value.timestamp)
+                    value.set_enabled(other_value.enabled)
+                    value.set_data(list(other_value.data))
+                if other_value is not None:
+                    other_value.clear_updated()
+            else:
+                object.__setattr__(self, field_name, deepcopy(other_value))
 
     def _for_each_rt_data(self):
-        """Iterates for each TimestampedData type member of this class (rt_joint_pos, rt_cart_pos, etc.)
+        """
+        Iterates for each ``TimestampedData`` type member of this class
+        (``rt_joint_pos``, ``rt_cart_pos``, etc.)
         """
         # Collect class member names
         member_names = vars(self)
@@ -1313,23 +1807,24 @@ class RobotRtData:
                     yield sub_member
 
     def _reset_enabled(self):
-        """Clear the "enabled" flag of each member of this class of type TimestampedData
+        """Clear the ``TimestampedData.enabled`` flag of each member of this class of type ``TimestampedData``
         """
         for rt_data in self._for_each_rt_data():
-            rt_data.enabled = False
+            if (rt_data.update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE
+                    or rt_data.update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL):
+                rt_data.set_enabled(False)  # Optional, may not be sent by robot
+            else:
+                rt_data.set_enabled(True)  # Mandatory, the robot will send it
 
-        # manually remove the accelerometer data
-        self.rt_accelerometer.clear()
-
-    def _clear_accelerometer_data_if_disabled(self):
-        """Clear the accelerometer data dictionary member
-        """
-        for accelerometer_idx in list(self.rt_accelerometer.keys()):
-            if self.rt_accelerometer[accelerometer_idx].enabled is False:
-                del self.rt_accelerometer[accelerometer_idx]
+        for _, accelerometer in self.rt_accelerometer.items():
+            if (accelerometer.update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE
+                    or accelerometer.update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL):
+                accelerometer.set_enabled(False)  # Optional, may not be sent by robot
+            else:
+                accelerometer.set_enabled(True)  # Mandatory, the robot will send it
 
     def clear_if_outdated(self):
-        """Clear the TimestampedData of each member if the data is outdated
+        """Clear the ``TimestampedData`` of each member if the data is outdated.
         """
         # Clear any outdated pieces of data by using the enable flag
         reference_timestamp = self.rt_target_joint_pos.timestamp  # Present at every cycle
@@ -1337,81 +1832,97 @@ class RobotRtData:
         for rt_data in self._for_each_rt_data():
             if (rt_data.timestamp != reference_timestamp
                     and rt_data.update_type != RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED):
-                rt_data.enabled = False
+                rt_data.set_enabled(False)
                 rt_data.clear_if_disabled()
 
-        self._clear_accelerometer_data_if_disabled()
-
     def clear_if_disabled(self):
-        """Clear real-time values that are disabled (not reported by robot's current real-time monitoring configuration)
+        """Clear real-time values that are disabled
+           (not reported by robot's current real-time monitoring configuration).
         """
         for rt_data in self._for_each_rt_data():
             rt_data.clear_if_disabled()
 
-        self._clear_accelerometer_data_if_disabled()
 
-
-class RobotStatus:
-    """Class for storing the status of a Mecademic robot.
+@dataclass
+class RobotStatus(RobotCopyable):
+    """
+    Class for storing the status of a Mecademic robot.
 
     Attributes
     ----------
-    activation_state : bool
+    activation_state
         True if the robot is activated.
-    homing_state : bool
+    homing_state
         True if the robot is homed.
-    simulation_mode : MxRobotSimulationMode
+    simulation_mode
         True if the robot is in simulation-only mode (fast or real-time)
-    recovery_mode : bool
+    recovery_mode
         True if the robot is in recovery mode.
-    error_status : bool
+    error_status
         True if the robot is in error.
-    error_code : int
-        Current robot error code, or 0 if the robot is not in error state.
-        Note: Only supported if connecting to the on port MX_ROBOT_TCP_PORT_CONTROL_JSON or MX_ROBOT_TCP_PORT_FEED_JSON.
-              Otherwise error_code will be None (unknown).
-    pstop2State : MxStopState
+    error_code
+        Current robot error code, or MxRobotStatusCode.MX_ST_NONE if the robot is not in error
+        state. Will be None for older robot versions that did not report the error code in the API
+        (before v11).
+    error_msg
+        Message that explains the current error if appropriate, or empty string if the robot is not
+        in error. Will be None for older robot versions that did not report the error message in
+        the API (before v12)
+    pstop2State
         *** IMPORTANT NOTE: PStop2 is not safety-rated on Meca500 robots ***
-        *** Deprecated. Use RobotSafetyStatus.pstop2_state instead.
+        *** Deprecated*** Use RobotSafetyStatus.pstop2_state instead.
         Current PStop2 status.
-    estopState : MxStopState
-        *** Deprecated. Use RobotSafetyStatus.estop_state instead.
-        Current EStop status.
-        Note that Meca500 revision 3 or older never report this condition because these robots's power supply
-        will be shutdown completely in case of EStop (and thus this API will get disconnected from the robot instead).
-    pause_motion_status : bool
+    estopState
+        *** Deprecated*** Use RobotSafetyStatus.estop_state instead.
+        Current EStop status. Note that Meca500 revision 3 or older never report this condition
+        because these robots's power supply will be shutdown completely in case of EStop (and thus
+        this API will get disconnected from the robot instead).
+    pause_motion_status
         True if motion is currently paused.
-    end_of_block_status : bool
+    motion_cleared_status
+        True when motion queue was cleared (by ClearMotion, an error state, a safety stop signal or robot deactivation).
+        Remains True until motion is resumed.
+    end_of_block_status
         True if robot is not moving and motion queue is empty.
-        Note: We recommend not using end_of_block_status to detect when robot has finished executing previously sent
-              commands. Some posted commands may still be transient (on the network for example) and the robot may,
-              in some cases, declare end-of-block in-between two commands.
-              Instead, we recommend using checkpoints or the WaitIdle method.
-    brakes_engaged : bool
+        Note: We recommend not using end_of_block_status to detect when robot has finished
+        executing previously sent  commands. Some posted commands may still be transient (on the
+        network for example) and the robot may, in some cases, declare end-of-block in-between two
+        commands. Instead, we recommend using checkpoints or the WaitIdle method.
+    brakes_engaged
         True if robot brakes are engaged.
-        This is relevant only when robot is deactivated (brakes are automatically disengaged upon robot activation).
-    connection_watchdog_enabled : bool
-        True if the connection watchdog is currently enabled/active (see ConnectionWatchdog API call)
+        This is relevant only when robot is deactivated (brakes are automatically disengaged upon
+        robot activation).
+    connection_watchdog_enabled
+        True if the connection watchdog is currently enabled/active (see ``ConnectionWatchdog``)
 """
+    activation_state: bool = False
+    homing_state: bool = False
+    simulation_mode: MxRobotSimulationMode = MxRobotSimulationMode.MX_SIM_MODE_DISABLED
+    recovery_mode: bool = False
+    error_status: bool = False
+    error_code: Optional[MxRobotStatusCode] = None
+    error_msg: Optional[str] = None
+    # Deprecated fields (kept for compatibility)
+    pstop2State: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    estopState: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    pause_motion_status: bool = False
+    motion_cleared_status: bool = False
+    end_of_block_status: bool = False
+    brakes_engaged: bool = False
+    connection_watchdog_enabled: bool = False
 
-    def __init__(self):
-
-        # The following are status fields.
-        self.activation_state = False
-        self.homing_state = False
-        self.simulation_mode = MxRobotSimulationMode.MX_SIM_MODE_DISABLED
-        self.recovery_mode = False
-        self.error_status = False
-        self.error_code: Optional[int] = None
-        # pylint: disable=invalid-name
-        self.pstop2State = MxStopState.MX_STOP_STATE_RESET  # Deprecated, moved to RobotSafetyStatus.pstop2_state
-        self.estopState = MxStopState.MX_STOP_STATE_RESET  # Deprecated, moved to RobotSafetyStatus.estop_state
-        self.pause_motion_status = False
-        self.end_of_block_status = False
-        self.brakes_engaged = False
-        self.connection_watchdog_enabled = False
+    def _copy_mutable_fields(self, copied: RobotStatus):
+        # No mutable fields to copy in this class
+        pass
 
     def __str__(self) -> str:
+        # Show error message if possible, else error code, worse case simply 1/0 error status
+        error_str = 'True' if self.error_status else 'False'
+        if self.error_msg is not None and self.error_msg != "":
+            error_str = self.error_msg
+        elif self.error_code is not None and self.error_code != MxRobotStatusCode.MX_ST_NONE:
+            error_str = f'{self.error_code}'
+
         error_str = f'{self.error_status}' if (self.error_code is None
                                                or self.error_code == 0) else f'{self.error_code}'
         return (f"Activated: {self.activation_state}, "
@@ -1419,81 +1930,97 @@ class RobotStatus:
                 f"sim: {self.simulation_mode}, "
                 f"recovery mode: {self.recovery_mode}, "
                 f"error: {error_str}, "
-                f"pause motion: {str(self.pause_motion_status)}, "
+                f"motion paused: {str(self.pause_motion_status)}, "
+                f"motion cleared: {str(self.motion_cleared_status)}, "
                 f"EOB: {self.end_of_block_status}, "
                 f"brakes engaged: {self.brakes_engaged}, "
                 f"connection watchdog: {'enabled' if self.connection_watchdog_enabled else 'disabled'}")
 
     def can_move(self) -> bool:
-        """Tells if robot can currently be moved (state is homed, or activated in recovery mode)
+        """
+        Indicates whether the robot can currently be moved (i.e., it is homed or activated in recovery mode).
 
-        Returns:
-            bool: true if robot can be moved
+        Returns
+        -------
+        bool
+            True if the robot can be moved.
         """
         return self.homing_state or (self.activation_state and self.recovery_mode)
 
 
-class RobotStaticSafetyStopMasks:
-    """Various useful bit masks used to categorize safety signals
+@dataclass
+class RobotStaticSafetyStopMasks(RobotCopyable):
+    """
+    Various useful bit masks used to categorize safety signals.
 
     Attributes
     ----------
-    clearedByPsu : int
-        Bit mask to identify safety signals that must be reset using the power supply reset function.
-    withVmOff : int
+    clearedByPsu
+        Bit mask to identify safety signals that must be reset using the power supply reset
+        function.
+    withVmOff
         Bit mask to identify safety signals that cause motor voltage to be removed.
         These are category 1 safety stop signals (Estop, PStop1, etc.).
-    maskedInManualMode : int
-        Bit mask to identify safety signals masked when the robot is in "manual" operation mode (PStop1, PStop2)
-
+    maskedInManualMode
+        Bit mask to identify safety signals masked when the robot is in "manual" operation mode
+        (PStop1, PStop2)
     """
+    clearedByPsu: int = 0
+    withVmOff: int = 0
+    maskedInManualMode: int = 0
 
-    def __init__(self):
-        # Useful masks to categorize RobotSafetyStatus.stop_mask above
-        # *** Note: Only available when connected on the JSON port (MX_ROBOT_TCP_PORT_CONTROL_JSON)
-        # pylint: disable=invalid-name
-        self.clearedByPsu = 0
-        self.withVmOff = 0
-        self.maskedInManualMode = 0
+    def _copy_mutable_fields(self, copied: RobotStaticSafetyStopMasks):
+        # No mutable fields to copy in this class
+        pass
 
 
-class RobotPowerSupplyInputs:
-    """ Class for storing robot's power supply physical input states
-
-        Attributes
-        ----------
-        psu_input_mask : int
-            Bit mask that summarizes all power supply input states. Use bits from MxPsuInputMask
-        estop_asserted : bool
-            Indicate if the EStop (emergency stop) signal on the power supply is asserted (robot will stop)
-        pstop1_asserted : bool
-            Indicate if the PStop1 (protective stop category 1) signal on the power supply is asserted (robot will stop)
-        pstop2_asserted : bool
-            Indicate if the PStop2 (protective stop category 2) signal on the power supply is asserted (robot will stop)
-        reset_ext_asserted : bool
-            Indicate if the 'reset' input signal on the power supply is asserted (requesting for a reset)
-        reset_keypad_pressed : bool
-            Indicate if the 'reset' keypad button on the power supply is pressed
-        enabling_device_asserted : bool
-            Indicate if the enabling device power supply input indicates that the enabling device is pressed
+@dataclass
+class RobotPowerSupplyInputs(RobotCopyable):
     """
+    Class for storing robot's power supply physical input states
 
-    def __init__(self):
-        self.psu_input_mask = 0
-        self.estop_asserted = False
-        self.pstop1_asserted = False
-        self.pstop2_asserted = False
-        self.reset_ext_asserted = False
-        self.reset_keypad_pressed = False
-        self.enabling_device_asserted = False
+    Attributes
+    ----------
+    psu_input_mask
+        Bit mask that summarizes all power supply input states. Use bits from ``MxPsuInputMask``
+    estop_asserted
+        Indicates if the EStop (emergency stop) signal on the power supply is asserted (robot will
+        stop).
+    pstop1_asserted
+        Indicates if the PStop1 (protective stop category 1) signal on the power supply is asserted
+        (robot will stop)
+    pstop2_asserted
+        Indicates if the PStop2 (protective stop category 2) signal on the power supply is asserted
+        (robot will stop)
+    reset_ext_asserted
+        Indicates if the reset input signal on the power supply is asserted (requesting for a
+        reset).
+    reset_keypad_pressed
+        Indicate if the reset keypad button on the power supply is pressed.
+    enabling_device_asserted
+        Indicate if the enabling device power supply input indicates that the enabling device is
+        pressed.
+    """
+    psu_input_mask: int = 0
+    estop_asserted: bool = False
+    pstop1_asserted: bool = False
+    pstop2_asserted: bool = False
+    reset_ext_asserted: bool = False
+    reset_keypad_pressed: bool = False
+    enabling_device_asserted: bool = False
+
+    def _copy_mutable_fields(self, copied: RobotPowerSupplyInputs):
+        # No mutable fields to copy in this class
+        pass
 
     def set_psu_input_mask(self, input_mask: Union[MxPsuInputMask, int]):
-        """Update the power supply input mask, and update corresponding individual booleans (estop_asserted, etc.)
+        """
+        Update the power supply input mask, and update corresponding individual booleans (estop_asserted, etc.)
 
         Parameters
         ----------
-        input_mask : Union[MxPsuInputMask,int]
-            Power supply input mask to set
+        input_mask
+            Power supply input mask to set.
         """
         self.psu_input_mask = int(input_mask)
 
@@ -1505,141 +2032,121 @@ class RobotPowerSupplyInputs:
         self.reset_keypad_pressed = (self.psu_input_mask & MxPsuInputMask.MX_PSU_INPUT_RESET_KEYPAD) != 0
         self.enabling_device_asserted = (self.psu_input_mask & MxPsuInputMask.MX_PSU_INPUT_ENABLING_DEVICE) != 0
 
+    def _set_asserted(self, field_name: str, mask: MxPsuInputMask, state: bool):
+        """ Common to set_estop_asserted, set_pstop1_asserted, etc """
+        object.__setattr__(self, field_name, state)
+        new_mask = self.psu_input_mask
+        if state:
+            new_mask |= mask
+        else:
+            new_mask &= ~mask
+        self.psu_input_mask = new_mask
+
     def set_estop_asserted(self, state: bool):
         """ Update estop_asserted and update the mask (psuInputMask) accordingly """
-        self.estop_asserted = state
-        if state:
-            self.psu_input_mask |= MxPsuInputMask.MX_PSU_INPUT_ESTOP
-        else:
-            self.psu_input_mask &= ~MxPsuInputMask.MX_PSU_INPUT_ESTOP
+        self._set_asserted('estop_asserted', MxPsuInputMask.MX_PSU_INPUT_ESTOP, state)
 
     def set_pstop1_asserted(self, state: bool):
         """ Update pstop1_asserted and update the mask (psuInputMask) accordingly """
-        self.pstop1_asserted = state
-        if state:
-            self.psu_input_mask |= MxPsuInputMask.MX_PSU_INPUT_PSTOP1
-        else:
-            self.psu_input_mask &= ~MxPsuInputMask.MX_PSU_INPUT_PSTOP1
+        self._set_asserted('pstop1_asserted', MxPsuInputMask.MX_PSU_INPUT_PSTOP1, state)
 
     def set_pstop2_asserted(self, state: bool):
         """ Update pstop2_asserted and update the mask (psuInputMask) accordingly """
-        self.pstop2_asserted = state
-        if state:
-            self.psu_input_mask |= MxPsuInputMask.MX_PSU_INPUT_PSTOP2
-        else:
-            self.psu_input_mask &= ~MxPsuInputMask.MX_PSU_INPUT_PSTOP2
+        self._set_asserted('pstop2_asserted', MxPsuInputMask.MX_PSU_INPUT_PSTOP2, state)
 
     def set_reset_ext_asserted(self, state: bool):
         """ Update reset_ext_asserted and update the mask (psuInputMask) accordingly """
-        self.reset_ext_asserted = state
-        if state:
-            self.psu_input_mask |= MxPsuInputMask.MX_PSU_INPUT_RESET_EXT
-        else:
-            self.psu_input_mask &= ~MxPsuInputMask.MX_PSU_INPUT_RESET_EXT
+        self._set_asserted('reset_ext_asserted', MxPsuInputMask.MX_PSU_INPUT_RESET_EXT, state)
 
     def set_reset_keypad_asserted(self, state: bool):
         """ Update reset_keypad_asserted and update the mask (psuInputMask) accordingly """
-        self.reset_keypad_pressed = state
-        if state:
-            self.psu_input_mask |= MxPsuInputMask.MX_PSU_INPUT_RESET_KEYPAD
-        else:
-            self.psu_input_mask &= ~MxPsuInputMask.MX_PSU_INPUT_RESET_KEYPAD
+        self._set_asserted('reset_keypad_pressed', MxPsuInputMask.MX_PSU_INPUT_RESET_KEYPAD, state)
 
     def set_enabling_device_asserted(self, state: bool):
         """ Update enabling_device_asserted and update the mask (psuInputMask) accordingly """
-        self.enabling_device_asserted = state
-        if state:
-            self.psu_input_mask |= MxPsuInputMask.MX_PSU_INPUT_ENABLING_DEVICE
-        else:
-            self.psu_input_mask &= ~MxPsuInputMask.MX_PSU_INPUT_ENABLING_DEVICE
-
-    def __str__(self) -> str:
-        return (f"psu_input_mask: {hex(self.psu_input_mask)} -> "
-                f"estop_asserted: {self.estop_asserted}, "
-                f"pstop1_asserted: {self.pstop1_asserted}, "
-                f"pstop2_asserted: {self.pstop2_asserted}, "
-                f"reset_ext_asserted: {self.reset_ext_asserted}, "
-                f"reset_keypad_pressed: {self.reset_keypad_pressed}, "
-                f"enabling_device_asserted: {self.enabling_device_asserted}")
+        self._set_asserted('enabling_device_asserted', MxPsuInputMask.MX_PSU_INPUT_ENABLING_DEVICE, state)
 
 
-class RobotSafetyStatus:
-    """Class for storing the safety stop status of a Mecademic robot.
+@dataclass
+class RobotSafetyStatus(RobotCopyable):
+    """
+    Class for storing the safety stop status of a Mecademic robot.
 
     Attributes
     ----------
-    robot_operation_mode : MxRobotOperationMode
+    robot_operation_mode
         The current robot operation mode, based on the the power supply key position (not supported on Meca500 robots).
         When the key is not in "automatic" position, restrictions will apply for using the robot.
-    reset_ready : bool
+    reset_ready
         Not yet implemented. Future implementation will:
         Indicate if it's currently possible to reset safety stop conditions that are linked to the power supply reset
         button because they remove motor power (EStop, PStop1, Operation mode change, robot reboot, etc.)
-    stop_mask : int
+    stop_mask
         Bit mask that summarizes all safety stop conditions on the robot (including both active or resettable signals).
         Use bits from MxSafeStopCategory.
         Note: Also available as individual signal states (estop_state, pstop1_state, etc...)
-    stop_resettable_mask : int
+    stop_resettable_mask
         Bit mask that summarizes all safety stop conditions that are currently resettable.
         Use bits from MxSafeStopCategory.
         Note: Also available as individual signal states (estop_state, pstop1_state, etc...)
-    estop_state : MxStopState
+    estop_state
         Current EStop status.
         Note that Meca500 revision 3 or older never report this condition because these robots's power supply
         will be shutdown completely in case of EStop (and thus this API will get disconnected from the robot instead).
-    pstop1_state : MxStopState
+    pstop1_state
         Current PStop1 status
-    pstop2_state : MxStopState
+    pstop2_state
         Current PStop2 status
         *** IMPORTANT NOTE: PStop2 is not safety-rated on Meca500 robots ***
-    operation_mode_stop_state : MxStopState
+    operation_mode_stop_state
         Current status for "operation mode" safety stop condition (upon mode changes or when mode is locked)
-    enabling_device_released_stop_state : MxStopState
+    enabling_device_released_stop_state
         Current status for "enabling device" safety stop condition
-    voltage_fluctuation_stop_state : MxStopState
+    voltage_fluctuation_stop_state
         Current status for "voltage fluctuation" safety stop condition
-    reboot_stop_state : MxStopState
+    reboot_stop_state
         Current status for "robot just rebooted" safety stop condition
-    redundancy_fault_stop_state : MxStopState
+    redundancy_fault_stop_state
         Current status for "redundancy fault" safety stop condition
-    standstill_fault_stop_state : MxStopState
+    standstill_fault_stop_state
         Current status for "standstill fault" safety stop condition
-    connection_dropped_stop_state : MxStopState
+    connection_dropped_stop_state
         Current status for "connection dropped" safety stop condition
-    minor_error_stop_state : MxStopState
+    minor_error_stop_state
         Current status for "minor error" safety stop condition, which is triggered if robot removes motor voltage
         for any internal reason other than the safety stop signals above (thus generally due to a minor internal error).
         If this happens, see the robot logs for details.
-    static_masks : RobotStaticSafetyStopMasks
+    static_masks
         Useful masks to categorize safety stop signals from stop_mask
 """
+    robot_operation_mode: MxRobotOperationMode = MxRobotOperationMode.MX_ROBOT_OPERATION_MODE_AUTO
+    reset_ready: bool = False
+    stop_mask: int = 0
+    stop_resettable_mask: int = 0
+    estop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    pstop1_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    pstop2_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    operation_mode_stop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    enabling_device_released_stop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    voltage_fluctuation_stop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    reboot_stop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    redundancy_fault_stop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    standstill_fault_stop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    connection_dropped_stop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
+    minor_error_stop_state: MxStopState = MxStopState.MX_STOP_STATE_RESET
 
-    def __init__(self):
-        self.robot_operation_mode = MxRobotOperationMode.MX_ROBOT_OPERATION_MODE_AUTO
-        self.reset_ready = False
-        self.stop_mask = 0
-        self.stop_resettable_mask = 0
-        self.estop_state = MxStopState.MX_STOP_STATE_RESET
-        self.pstop1_state = MxStopState.MX_STOP_STATE_RESET
-        self.pstop2_state = MxStopState.MX_STOP_STATE_RESET
-        self.operation_mode_stop_state = MxStopState.MX_STOP_STATE_RESET
-        self.enabling_device_released_stop_state = MxStopState.MX_STOP_STATE_RESET
-        self.voltage_fluctuation_stop_state = MxStopState.MX_STOP_STATE_RESET
-        self.reboot_stop_state = MxStopState.MX_STOP_STATE_RESET
-        self.redundancy_fault_stop_state = MxStopState.MX_STOP_STATE_RESET
-        self.standstill_fault_stop_state = MxStopState.MX_STOP_STATE_RESET
-        self.connection_dropped_stop_state = MxStopState.MX_STOP_STATE_RESET
-        self.minor_error_stop_state = MxStopState.MX_STOP_STATE_RESET
+    # Useful masks to categorize stop_mask above
+    static_masks: RobotStaticSafetyStopMasks = field(default_factory=RobotStaticSafetyStopMasks)
 
-        # Useful masks to categorize stop_mask above
-        self.static_masks = RobotStaticSafetyStopMasks()
+    def _copy_mutable_fields(self, copied: RobotSafetyStatus):
+        copied.static_masks = self.static_masks.copy()  # Make sure to create a copy instead of a reference
 
     def set_estop_state(self, stop_state: MxStopState):
         """Change the EStop state
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             EStop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_ESTOP, stop_state)
@@ -1649,7 +2156,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             PStop1 state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_PSTOP1, stop_state)
@@ -1659,7 +2166,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             PStop2 state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_PSTOP2, stop_state)
@@ -1669,7 +2176,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             Safety stop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_OPERATION_MODE, stop_state)
@@ -1679,7 +2186,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             Safety stop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_ENABLING_DEVICE_RELEASED, stop_state)
@@ -1689,7 +2196,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             Safety stop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_VOLTAGE_FLUCTUATION, stop_state)
@@ -1699,7 +2206,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             Safety stop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_REBOOT, stop_state)
@@ -1709,7 +2216,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             Safety stop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_REDUNDANCY_FAULT, stop_state)
@@ -1719,7 +2226,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             Safety stop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_STANDSTILL_FAULT, stop_state)
@@ -1729,7 +2236,7 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             Safety stop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_CONNECTION_DROPPED, stop_state)
@@ -1739,21 +2246,60 @@ class RobotSafetyStatus:
 
         Parameters
         ----------
-        stop_state : MxStopState
+        stop_state
             Safety stop state to set
         """
         self.set_stop_state(MxSafeStopCategory.MX_SAFE_STOP_MINOR_ERROR, stop_state)
 
-    def set_stop_state(self, stop_category: MxSafeStopCategory, stop_state: MxStopState):
-        """Change a safety stop state
+    def get_stop_state_by_status_code(self, code: MxRobotStatusCode) -> MxStopState:
+        """Returns the safety state for the requested safety signal
 
         Parameters
         ----------
-        stop_category : MxSafeStopCategory
-            Safety stop category to change state for
-        stop_state : MxStopState
-            Safety stop state to set
+        stop_category
+            Safety signal to get state for
+
+        Returns
+        -------
+        MxStopState
+            Safety signal state
         """
+        if code == MxRobotStatusCode.MX_ST_ESTOP:
+            return self.estop_state
+        elif code == MxRobotStatusCode.MX_ST_PSTOP1:
+            return self.pstop1_state
+        elif code == MxRobotStatusCode.MX_ST_PSTOP2:
+            return self.pstop2_state
+        elif code == MxRobotStatusCode.MX_ST_GET_OPERATION_MODE:
+            return self.operation_mode_stop_state
+        elif code == MxRobotStatusCode.MX_ST_SAFE_STOP_ENABLING_DEVICE_RELEASED:
+            return self.enabling_device_released_stop_state
+        elif code == MxRobotStatusCode.MX_ST_SAFE_STOP_VOLTAGE_FLUCTUATION:
+            return self.voltage_fluctuation_stop_state
+        elif code == MxRobotStatusCode.MX_ST_SAFE_STOP_REBOOT:
+            return self.reboot_stop_state
+        elif code == MxRobotStatusCode.MX_ST_SAFE_STOP_REDUNDANCY_FAULT:
+            return self.redundancy_fault_stop_state
+        elif code == MxRobotStatusCode.MX_ST_SAFE_STOP_STANDSTILL_FAULT:
+            return self.standstill_fault_stop_state
+        elif code == MxRobotStatusCode.MX_ST_SAFE_STOP_CONNECTION_DROPPED:
+            return self.connection_dropped_stop_state
+        elif code == MxRobotStatusCode.MX_ST_SAFE_STOP_MINOR_ERROR:
+            return self.minor_error_stop_state
+        raise ValueError(f'Status code {code} does not correspond to a safety signal')
+
+    def set_stop_state(self, stop_category: MxSafeStopCategory, stop_state: MxStopState):
+        """
+        Changes a safety stop state
+
+        Parameters
+        ----------
+        stop_category
+            Safety stop category to change state for.
+        stop_state
+            Safety stop state to set.
+        """
+
         # Make sure to cast to enum value (in case we were passed an int)
         stop_state = MxStopState(stop_state)
 
@@ -1783,24 +2329,30 @@ class RobotSafetyStatus:
 
         # Update the masks too
         if stop_state == MxStopState.MX_STOP_STATE_ACTIVE:
-            self.stop_mask |= stop_category
-            self.stop_resettable_mask &= ~stop_category
+            self.stop_mask = self.stop_mask | stop_category
+            self.stop_resettable_mask = self.stop_resettable_mask & ~stop_category
         elif stop_state == MxStopState.MX_STOP_STATE_RESETTABLE:
-            self.stop_mask |= stop_category
-            self.stop_resettable_mask |= stop_category
+            self.stop_mask = self.stop_mask | stop_category
+            self.stop_resettable_mask = self.stop_resettable_mask | stop_category
         else:
-            self.stop_mask &= ~stop_category
-            self.stop_resettable_mask &= ~stop_category
+            self.stop_mask = self.stop_mask & ~stop_category
+            self.stop_resettable_mask = self.stop_resettable_mask & ~stop_category
 
     @classmethod
     def mask_to_string(cls, mask: int) -> str:
-        """Format as a string a safety stop mask (detailing each safety stop signal that is active in the mask)
+        """
+        Formats a safety stop mask as a string, detailing each active safety stop signal in the
+        mask.
 
-        Args:
-            mask (int): Mask to print as detailed string
+        Parameters
+        ----------
+        mask
+            Bit mask to format as a detailed string.
 
-        Returns:
-            str: Detailed string that represents all active safety stop signals in the mask
+        Returns
+        -------
+        str
+            String describing all active safety stop signals in the mask.
         """
         status_masks: list[str] = []
         if mask & int(MxSafeStopCategory.MX_SAFE_STOP_ESTOP):
@@ -1836,126 +2388,133 @@ class RobotSafetyStatus:
         )
 
 
-class GripperStatus:
-    """Class for storing the Mecademic robot's gripper status.
-       LEGACY, use ExtToolStatus and GripperState instead.
+@dataclass
+class GripperStatus(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's gripper status.
+
+    **Deprecated** Use ExtToolStatus and GripperState instead.
 
     Attributes
     ----------
-    present : bool
+    present
         True if the gripper is present on the robot.
-    homing_state : bool
+    homing_state
         True if the gripper has been homed (ready to be used).
-    holding_part : bool
+    holding_part
         True if the gripper is currently holding a part.
-    target_pos_reached : bool
+    target_pos_reached
         True if the gripper is at target position or at a limit (fully opened or closed).
-    error_status : bool
+    error_status
         True if the gripper is in error state.
-    overload_error : bool
+    overload_error
         True if the gripper is in overload error state.
-"""
-
-    def __init__(self):
-
-        # The following are status fields.
-        self.present = False
-        self.homing_state = False
-        self.holding_part = False
-        self.target_pos_reached = False
-        self.error_status = False
-        self.overload_error = False
-
-
-class NetworkConfig:
-    """Class for storing the Mecademic robot's network configuration.
-
-    Attributes
-    ----------
-    name : str
-        Robot name for DHCP requests
-    dhcp : bool
-        DHCP mode enabled for automatic IP assignment by DHCP server
-    ip : str
-        IPv4 address (ex: '192.168.0.100')
-    mask : str
-        Network mask (ex: '255.255.255.0')
-    gateway : str
-        Gateway IP address (ex: '192.168.0.1')
-    mac : str
-        Robot read-only MAC address (ex: '20:B0:F7:06:E4:80')
-
-"""
-
-    def __init__(self):
-
-        # The following are status fields.
-        self.name = ''
-        self.dhcp = False
-        self.ip = '192.168.0.100'
-        self.mask = '255.255.255.0'
-        self.gateway = ''
-        self.mac = ''
-
-    def __str__(self) -> str:
-        return (f"Name: {self.name}, "
-                f"DHCP: {self.dhcp}, "
-                f"ip: {self.ip}, "
-                f"mask: {self.mask}, "
-                f"gateway: {self.gateway}, "
-                f"mac: {self.mac}")
+    """
+    present: bool = False
+    homing_state: bool = False
+    holding_part: bool = False
+    target_pos_reached: bool = False
+    error_status: bool = False
+    overload_error: bool = False
 
     def __repr__(self) -> str:
         return str(self)
 
+    def _copy_mutable_fields(self, copied: GripperStatus):
+        # No mutable fields to copy in this class
+        pass
 
-class ExtToolStatus:
-    """Class for storing the Mecademic robot's external tool status.
+
+@dataclass
+class NetworkConfig(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's network configuration.
 
     Attributes
     ----------
-    sim_tool_type : int
-        Simulated tool type.
-         0: MxExtToolType.MX_EXT_TOOL_NONE
-        10: MxExtToolType.MX_EXT_TOOL_MEGP25_SHORT
-        11: MxExtToolType.MX_EXT_TOOL_MEGP25_LONG
-        20: MxExtToolType.MX_EXT_TOOL_VBOX_2VALVES
-    physical_tool_type : int
-        Physical external tool type (same values as mentioned above).
-    homing_state : bool
+    name
+        Robot name for DHCP requests
+    dhcp
+        DHCP mode enabled for automatic IP assignment by DHCP server
+    ip
+        IPv4 address (e.g., '192.168.0.100')
+    mask
+        Network mask (e.g. '255.255.255.0')
+    gateway
+        Gateway IP address (e.g. '192.168.0.1')
+    mac
+        Robot read-only MAC address (e.g. '20:B0:F7:06:E4:80')
+
+    """
+    name: str = ''
+    dhcp: bool = False
+    ip: str = '192.168.0.100'
+    mask: str = '255.255.255.0'
+    gateway: str = ''
+    mac: str = ''
+
+    def _copy_mutable_fields(self, copied: NetworkConfig):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class NetworkOptions(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's network connection options.
+
+    Attributes
+    ----------
+    keep_alive_timeout
+        TCP keep-alive connection timeout, in seconds. It specifies the delay before the robot closes
+        the TCP connection when keep-alive replies are not received from the client.
+        Value n is an integer number ranging from 0 to 60.
+        Factory-default value is 3.
+        A value of 0 disables the TCP keep-alive, in which case detecting a connection failure can be very long.
+    """
+    keep_alive_timeout: int = 3
+
+    def _copy_mutable_fields(self, copied: NetworkOptions):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class ExtToolStatus(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's external tool status.
+
+    Attributes
+    ----------
+    sim_tool_type
+        Currently simulated tool type (or MxExtToolType.MX_EXT_TOOL_NONE if simulation is not enabled)
+    physical_tool_type
+        Physical external tool type.
+    homing_state
         True if the gripper is homed.
-    error_status : bool
+    error_status
         True if the gripper is in error state.
-    overload_error : bool
+    overload_error
         True if the gripper is in overload error state.
-    comm_err_warning : bool
+    comm_err_warning
         True if some communication errors were detected with the external tool.
         This could mean that the cable may be damaged and must be replaced,
         or that the cable may simply not be screwed tight enough on either side.
-"""
+    """
+    sim_tool_type: MxExtToolType = MxExtToolType.MX_EXT_TOOL_NONE
+    physical_tool_type: MxExtToolType = MxExtToolType.MX_EXT_TOOL_NONE
+    homing_state: bool = False
+    error_status: bool = False
+    overload_error: bool = False
+    comm_err_warning: bool = False
 
-    def __init__(self):
-
-        # The following are status fields.
-        self.sim_tool_type = MxExtToolType.MX_EXT_TOOL_NONE
-        self.physical_tool_type = MxExtToolType.MX_EXT_TOOL_NONE
-        self.homing_state = False
-        self.error_status = False
-        self.overload_error = False
-        self.comm_err_warning = False
-
-    def __str__(self) -> str:
-        return (f"Sim tool type: {self.sim_tool_type}, "
-                f"Physical tool type: {self.physical_tool_type}, "
-                f"homed: {self.homing_state}, "
-                f"error: {self.error_status}, "
-                f"overload: {self.overload_error}")
-
-    def __repr__(self) -> str:
-        return str(self)
+    def _copy_mutable_fields(self, copied: ExtToolStatus):
+        # No mutable fields to copy in this class
+        pass
 
     def current_tool_type(self) -> int:
-        """Returns current external tool type (simulated or physical)
+        """
+        Returns current external tool type (simulated or physical)
 
         Returns
         -------
@@ -1965,7 +2524,8 @@ class ExtToolStatus:
         return self.sim_tool_type if self.sim_tool_type != MxExtToolType.MX_EXT_TOOL_NONE else self.physical_tool_type
 
     def is_physical_tool_present(self) -> bool:
-        """Returns if physical tool is connected
+        """
+        Returns if physical tool is connected
 
         Returns
         -------
@@ -1975,7 +2535,8 @@ class ExtToolStatus:
         return self.physical_tool_type != MxExtToolType.MX_EXT_TOOL_NONE
 
     def is_tool_sim(self) -> bool:
-        """Returns if tool is simulated or not
+        """
+        Returns if tool is simulated or not
 
         Returns
         -------
@@ -1985,211 +2546,197 @@ class ExtToolStatus:
         return self.sim_tool_type != MxExtToolType.MX_EXT_TOOL_NONE
 
     def is_gripper(self, physical: bool = False) -> bool:
-        """Returns if current external tool (simulated or physical) is a gripper
+        """
+        Returns if current external tool (simulated or physical) is a gripper.
 
         Parameters
         ----------
-        physical : bool
-            True check physical gripper, False use current one (simulated or physical)
+        physical
+            True check physical gripper, False use current one (simulated or physical).
 
         Returns
         -------
         bool
-            True if tool is a gripper, False otherwise
+            True if tool is a gripper, False otherwise.
         """
         tool_type = self.physical_tool_type if physical else self.current_tool_type()
         return tool_type in [MxExtToolType.MX_EXT_TOOL_MEGP25_SHORT, MxExtToolType.MX_EXT_TOOL_MEGP25_LONG]
 
     def is_pneumatic_module(self, physical: bool = False) -> bool:
-        """Returns if current external tool (simulated or physical) is a pneumatic module
+        """
+        Indicates whether current external tool (simulated or physical) is a pneumatic module.
 
         Parameters
         ----------
-        physical : bool
-            True check physical gripper, False use current one (simulated or physical)
+        physical
+            True check physical gripper, False use current one (simulated or physical).
 
         Returns
         -------
         bool
-            True if tool is a pneumatic module, False otherwise
+            True if tool is a pneumatic module, False otherwise.
         """
         tool_type = self.physical_tool_type if physical else self.current_tool_type()
         return tool_type in [MxExtToolType.MX_EXT_TOOL_VBOX_2VALVES]
 
 
-class IoStatus:
+@dataclass
+class IoStatus(RobotCopyable):
     """Class for storing the Mecademic robot's IO modules status.
 
     Attributes
     ----------
-    bank_id : int
-        Type of this IO module.
-        1: MxIoBankId.MX_IO_BANK_ID_IO_MODULE
-    present : bool
+    bank_id
+        Type of this IO module:
+        1: ``MxIoBankId.MX_IO_BANK_ID_IO_MODULE``
+    present
         True if an IO module of this type is present on the robot.
-    nb_inputs : int
+    nb_inputs
         Number of digital inputs supported by this IO module.
-    nb_outputs : int
+    nb_outputs
         Number of digital outputs supported by this IO module.
-    sim_mode : bool
+    sim_mode
         True if the IO module is in simulation mode.
-    error : int
+    error
         Error code of the IO module (0 if no error).
-    timestamp : int
+    timestamp
         Monotonic timestamp associated with data (in microseconds since robot last reboot)
         This timestamp is stamped by the robot so it is not affected by host/network jitter
-"""
+    """
+    bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_UNDEFINED
+    present: bool = False
+    nb_inputs: int = 0
+    nb_outputs: int = 0
+    sim_mode: bool = False
+    error: int = 0
+    timestamp: int = 0
 
-    def __init__(self):
-
-        # The following are status fields.
-        self.bank_id = MxIoBankId.MX_IO_BANK_ID_UNDEFINED
-        self.present = False
-        self.nb_inputs = 0
-        self.nb_outputs = 0
-        self.sim_mode = False
-        self.error = 0
-        self.timestamp = 0
-
-    def __str__(self) -> str:
-        return (f"BankId: {self.bank_id}, "
-                f"Physically present: {self.present}, "
-                f"Digital inputs: {self.nb_inputs}, "
-                f"Digital outputs: {self.nb_outputs}, "
-                f"Simulation mode: {self.sim_mode}, "
-                f"error: {self.error}")
-
-    def __repr__(self) -> str:
-        return str(self)
+    def _copy_mutable_fields(self, copied: IoStatus):
+        # No mutable fields to copy in this class
+        pass
 
 
-class ValveState:
-    """Class for storing the Mecademic robot's pneumatic module valve states.
+@dataclass
+class ValveState(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's pneumatic module valve states.
 
     Attributes
     ----------
-    valve_opened : list[int]
-        List of valve state: MX_VALVE_STATE_CLOSE or MX_VALVE_STATE_OPENED
-"""
+    valve_opened
+        List of valve state: ``MX_VALVE_STATE_CLOSE`` or ``MX_VALVE_STATE_OPEN``
+    """
+    valve_opened: list[int] = field(default_factory=lambda: [0] * MX_EXT_TOOL_VBOX_MAX_VALVES)
 
-    def __init__(self):
-
-        # The following are status fields.
-        self.valve_opened = [int] * MX_EXT_TOOL_VBOX_MAX_VALVES
+    def _copy_mutable_fields(self, copied: ValveState):
+        copied.valve_opened = self.valve_opened.copy()  # Make sure to create a copy instead of a reference
 
 
-class GripperState:
-    """Class for storing the Mecademic robot's gripper state.
+@dataclass
+class GripperState(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's gripper state.
 
     Attributes
     ----------
-    holding_part : bool
+    holding_part
         True if the gripper is currently holding a part.
-    target_pos_reached : bool
+    target_pos_reached
         True if the gripper is at requested position:
-          - At configured opened/closed position following GripperOpen/GripperClose.
+
+          - At configured opened/closed position following ``GripperOpen``/``GripperClose``.
           - At requested position after MoveGripper.
-    closed : bool
-        True if the gripper is at the configured 'close' position (ref SetGripperRanger) or less.
-    opened : bool
-        True if the gripper is at the configured 'open' position (ref SetGripperRanger) or more.
+    closed
+        True if the gripper is at the configured 'close' position (``SetGripperRange``) or less.
+    opened
+        True if the gripper is at the configured 'open' position (``SetGripperRange``) or more.
 
 """
+    holding_part: bool = False
+    target_pos_reached: bool = False
+    closed: bool = False
+    opened: bool = False
 
-    def __init__(self):
-
-        # The following are status fields.
-        self.holding_part = False
-        self.target_pos_reached = False
-        self.closed = False
-        self.opened = False
-
-    def __str__(self):
-        return (f'holding={self.holding_part}, '
-                f'pos_reached={self.target_pos_reached}, '
-                f'closed={self.closed}, '
-                f'opened={self.opened}')
-
-    def __repr__(self) -> str:
-        return str(self)
+    def _copy_mutable_fields(self, copied: GripperState):
+        # No mutable fields to copy in this class
+        pass
 
 
-class VacuumState:
-    """Class for storing the Mecademic robot's IO module vacuum state.
+@dataclass
+class VacuumState(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's IO module vacuum state.
 
     Attributes
     ----------
-    vacuum_on : bool
+    vacuum_on
         True if the vacuum is currently 'on' (trying to pick or holding part).
     purge_on: bool
         True if currently pushing air to release part (see SetVacuumPurgeDuration).
-    holding_part : bool
-        True if currently holding part (based on configured pressure thresholds, see SetVacuumThreshold ).
-    timestamp : int
+    holding_part
+        True if currently holding part (based on configured pressure thresholds, see
+        ``SetVacuumThreshold`` ).
+    timestamp
         Monotonic timestamp associated with data (in microseconds since robot last reboot)
         This timestamp is stamped by the robot so it is not affected by host/network jitter
-"""
+    """
+    vacuum_on: bool = False
+    purge_on: bool = False
+    holding_part: bool = False
+    timestamp: int = 0
 
-    def __init__(self):
-
-        # The following are status fields.
-        self.vacuum_on = False
-        self.purge_on = False
-        self.holding_part = False
-        self.timestamp = 0
-
-    def __str__(self) -> str:
-        return (f"Vacuum: {'on' if self.vacuum_on else 'off'}, "
-                f"Purge: {'on' if self.purge_on else 'off'}, "
-                f"Holding part: {self.holding_part}")
-
-    def __repr__(self) -> str:
-        return str(self)
+    def _copy_mutable_fields(self, copied: VacuumState):
+        # No mutable fields to copy in this class
+        pass
 
 
-class CollisionObject:
-    """Class that represents one object that can enter in collision with another or with the work zone boundary.
-       A collision object is defined by its group (MxCollisionGroup) and, in some cases, an index (like the joint)
+@dataclass
+class CollisionObject(RobotCopyable):
+    """
+    Class that represents one object that can enter in collision with another or with the work zone
+    boundary. A collision object is defined by its group (``MxCollisionGroup``) and, in some cases,
+    an index (like the link).
 
     Attributes
     ----------
-    group : MxCollisionGroup
+    group
         The group (type) of this object
-    index: int
+    index
         The index of the object within the group (for groups that can have multiple objects).
         Available indices for groups are:
-        - MxCollisionGroup.MX_COLLISION_GROUP_ROBOT:     Use index values from MxCollisionGroupRobotIdx.
-        - MxCollisionGroup.MX_COLLISION_GROUP_FCP:       Index is not used (always 0).
-        - MxCollisionGroup.MX_COLLISION_GROUP_TOOL:      Always 0 when tool sphere is used.
-                                                         Future versions may support multiple tool objects.
-        - MxCollisionGroup.MX_COLLISION_GROUP_ENV_OBJ:   User-defined index of the user-defined environment objects.
-                                                         (not supported yet)
-        - MxCollisionGroup.MX_COLLISION_GROUP_WORK_ZONE: Index is not used (always 0).
-"""
 
-    def __init__(self,
-                 group=MxCollisionGroup.MX_COLLISION_GROUP_ROBOT,
-                 index=MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_BASE):
-        self.set(group, index)
+        - ``MxCollisionGroup.MX_COLLISION_GROUP_ROBOT``:    Use index values from``MxCollisionGroupRobotIdx``.
+        - ``MxCollisionGroup.MX_COLLISION_GROUP_FCP``:      Index is not used (always 0).
+        - ``MxCollisionGroup.MX_COLLISION_GROUP_TOOL``:     Always 0 when tool sphere is used.
+        - ``MxCollisionGroup.MX_COLLISION_GROUP_ENV_OBJ``:  User-defined index of the user-defined  environment objects.
+                                                            Not supported yet.
+        - ``MxCollisionGroup.MX_COLLISION_GROUP_WORK_ZONE``: Index is not used (always 0).
+    """
+    group: MxCollisionGroup = MxCollisionGroup.MX_COLLISION_GROUP_ROBOT
+    index: int = MxCollisionGroupRobotIdx.MX_COLLISION_GROUP_ROBOT_BASE
 
-    def set(self, group: MxCollisionGroup, index: int):
-        """ Setter function """
-        # The following are status fields.
-        self.group = group
-        # Update the index according to new group (if appropriate)
+    def __post_init__(self):
         if self.group == MxCollisionGroup.MX_COLLISION_GROUP_ROBOT:
-            self.index = MxCollisionGroupRobotIdx(index)
+            corrected_index = MxCollisionGroupRobotIdx(self.index)
         elif self.group == MxCollisionGroup.MX_COLLISION_GROUP_TOOL:
-            self.index = MxCollisionGroupToolIdx(index)
+            corrected_index = MxCollisionGroupToolIdx(self.index)
         else:
-            self.index = int(index)
+            corrected_index = int(self.index)
+        object.__setattr__(self, 'index', corrected_index)
 
-    def set_from_response(self, response_args: list[int]) -> list[int]:
-        """ Set CollisionObject from parsed reply message argument """
-        self.set(MxCollisionGroup(response_args.pop(0)), response_args.pop(0))
-        return response_args
+    def _copy_mutable_fields(self, copied: CollisionObject):
+        # No mutable fields to copy in this class
+        pass
+
+    @classmethod
+    def from_response(cls, response_args: list[int]):
+        group = MxCollisionGroup(response_args.pop(0))
+        index = response_args.pop(0)
+        return cls(group=group, index=index), response_args
 
     def __eq__(self, other):
+        if not isinstance(other, CollisionObject):
+            return NotImplemented
         if int(self.group) != int(other.group):
             return False
         if (self.group == MxCollisionGroup.MX_COLLISION_GROUP_ROBOT
@@ -2207,42 +2754,55 @@ class CollisionObject:
         return str(self)
 
 
-class SelfCollisionStatus:
-    """Class for storing the Mecademic robot's self collision status.
-       This is used when robot collision detection has been activated (with SetCollisionCfg).
+@dataclass
+class SelfCollisionStatus(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's self collision status.
+    This is used when robot collision detection has been activated (with ``SetCollisionCfg``).
 
     Attributes
     ----------
-    collision_detected : bool
+    collision_detected
         True if the robot has detected a collision with itself.
-        Note that when the collision severity is set to MX_EVENT_SEVERITY_PAUSE_MOTION or greater
-        the robot will have stopped just before the collision actually occurs and collision_detected will be True
-        until ResumeMotion is called.
-        When collision severity is set to MX_EVENT_SEVERITY_WARNING the robot will actually continue to move and the
-        collision will actually occur. This can damage the robot or the tool.
-    object1 : MxCollisionGroup
+        Note that when the collision severity is set to ``MX_EVENT_SEVERITY_PAUSE_MOTION`` or
+        greater  the robot will have stopped just before the collision actually occurs and
+        ``collision_detected`` will be True  until ``ResumeMotion`` is called.
+        When collision severity is set to ``MX_EVENT_SEVERITY_WARNING`` the robot will actually
+        continue to move and the collision will actually occur. This can damage the robot or the
+        tool.
+    object1
         When collision is detected, indicates the first of the two objects that caused the collision
         (a part of the robot or the tool)
-    object2 : MxCollisionGroup
-        When collision is detected, indicates the second of the two objects that caused the collision
-        (a part of the robot or the tool)
-"""
+    object2
+        When collision is detected, indicates the second of the two objects that caused the
+        collision (a part of the robot or the tool)
+    """
+    collision_detected: bool = False
+    object1: CollisionObject = field(default_factory=CollisionObject)
+    object2: CollisionObject = field(default_factory=CollisionObject)
 
-    def __init__(self,
-                 collision_detected: bool = False,
-                 collision_object1: CollisionObject = CollisionObject(),
-                 collision_object2: CollisionObject = CollisionObject()):
-        # The following are status fields.
-        self.collision_detected = collision_detected
-        self.object1 = collision_object1
-        self.object2 = collision_object2
+    def _copy_mutable_fields(self, copied: SelfCollisionStatus):
+        copied.object1 = self.object1.copy()  # Make sure to create a copy instead of a reference
+        copied.object2 = self.object2.copy()  # Make sure to create a copy instead of a reference
 
-    def set_from_response(self, response_args: list[int]) -> list[int]:
-        """ Set CollisionObject from parsed reply message argument """
-        self.collision_detected = bool(response_args.pop(0))
-        response_args = self.object1.set_from_response(response_args)
-        response_args = self.object2.set_from_response(response_args)
-        return response_args
+    @classmethod
+    def from_response(cls, response_args: List[int]) -> SelfCollisionStatus:
+        """ Build a SelfCollisionStatus from the robot response as an int array """
+        # Parse collision_detected flag
+        collision_detected = bool(response_args.pop(0))
+
+        # Parse object1
+        object1, response_args = CollisionObject.from_response(response_args)
+
+        # Parse object2
+        object2, response_args = CollisionObject.from_response(response_args)
+
+        # Build new instance with parsed data
+        return cls(
+            collision_detected=collision_detected,
+            object1=object1,
+            object2=object2,
+        )
 
     def __str__(self) -> str:
         if self.collision_detected:
@@ -2254,33 +2814,37 @@ class SelfCollisionStatus:
         return str(self)
 
 
-class WorkZoneStatus:
-    """Class for storing the Mecademic robot's "in work zone" status.
-       This is used when robot work zone has been defined and enabled (with SetWorkZoneCfg).
+@dataclass
+class WorkZoneStatus(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's "in work zone" status.
+
+    This is used when robot work zone has been defined and enabled (with ``SetWorkZoneCfg``).
 
     Attributes
     ----------
-    outside_work_zone : bool
+    outside_work_zone
         True if the a part of the robot or the tool have reached the work zone boundary.
-        Note that when the collision severity is set to MX_EVENT_SEVERITY_PAUSE_MOTION or greater
-        the robot will have stopped just before the robot moves outside the work zone but flag outside_work_zone will
-        still be set to True until ResumeMotion is called.
-        When collision severity is set to MX_EVENT_SEVERITY_WARNING the flag outside_work_zone will report whether the
-        robot is currently outside the work zone.
-    object : MxCollisionGroup
+        Note that when the collision severity is set to ``MX_EVENT_SEVERITY_PAUSE_MOTION`` or
+        greater  the robot will have stopped just before the robot moves outside the work zone but
+        the flag ``outside_work_zone`` will still be set to True until ``ResumeMotion`` is called.
+        When collision severity is set to ``MX_EVENT_SEVERITY_WARNING``, the flag
+        ``outside_work_zone`` will report whether the robot is currently outside the work zone.
+    object
         Indicate the object that reached the work zone boundary (a part of the robot, or the tool)
 """
+    outside_work_zone: bool = False
+    object: CollisionObject = field(default_factory=CollisionObject)
 
-    def __init__(self, outside_work_zone: bool = False, collision_object: CollisionObject = CollisionObject()):
-        # The following are status fields.
-        self.outside_work_zone = outside_work_zone
-        self.object = collision_object
+    def _copy_mutable_fields(self, copied: WorkZoneStatus):
+        copied.object = self.object.copy()  # Make sure to create a copy instead of a reference
 
-    def set_from_response(self, response_args: list[int]) -> list[int]:
-        """ Set CollisionObject from parsed reply message argument """
-        self.outside_work_zone = bool(response_args.pop(0))
-        response_args = self.object.set_from_response(response_args)
-        return response_args
+    @classmethod
+    def from_response(cls, response_args: list[int]) -> WorkZoneStatus:
+        """ Build a WorkZoneStatus from the robot response as an int array """
+        outside_work_zone = bool(response_args.pop(0))
+        obj, response_args = CollisionObject.from_response(response_args)
+        return cls(outside_work_zone=outside_work_zone, object=obj)
 
     def __str__(self) -> str:
         if self.outside_work_zone:
@@ -2292,59 +2856,608 @@ class WorkZoneStatus:
         return str(self)
 
 
-class CollisionStatus:
-    """Class for storing the Mecademic robot's collision status (collision with self or work zone boundary).
-       This is used when robot collision detection has been activated (with SetCollisionCfg) or
-       work zone has been enabled (with SetWorkZoneCfg)
+@dataclass
+class CollisionStatus(RobotCopyable):
+    """
+    Class for storing the Mecademic robot's collision status (collision with self or work zone
+    boundary).
+
+    This is used when robot collision detection has been activated (with ``SetCollisionCfg``) or
+    work zone has been enabled (with ``SetWorkZoneCfg``).
 
     Attributes
     ----------
-    self_collision_status : SelfCollisionStatus
-        Current self collision status
-    work_zone_status : WorkZoneStatus
-        Current "inside work zone" status
-"""
+    self_collision_status
+        Current self collision status.
+    work_zone_status
+        Current "inside work zone" status.
+    """
+    self_collision_status: SelfCollisionStatus = field(default_factory=SelfCollisionStatus)
+    work_zone_status: WorkZoneStatus = field(default_factory=WorkZoneStatus)
 
-    def __init__(self,
-                 self_collision_status: SelfCollisionStatus = SelfCollisionStatus(),
-                 work_zone_status: WorkZoneStatus = WorkZoneStatus()):
-        # The following are status fields.
-        self.self_collision_status = self_collision_status
-        self.work_zone_status = work_zone_status
-
-    def __str__(self) -> str:
-        return f'Collision status: [ {self.self_collision_status}, {self.work_zone_status} ]'
-
-    def __repr__(self) -> str:
-        return str(self)
+    def _copy_mutable_fields(self, copied: CollisionStatus):
+        copied.self_collision_status = self.self_collision_status.copy()
+        copied.work_zone_status = self.work_zone_status.copy()
 
 
-class RobotSidecarStatus:
-    """Class for storing the status of a "sidecar" scripting engine connected to the robot.
+@dataclass
+class LoadedProgramConfig(RobotCopyable):
+    """
+    Class for storing the configuration for one robot program (loaded or not).
 
     Attributes
     ----------
-    embedded : bool
-        True if this sidecar instance is running embedded inside the robot.
-    remote_ip : str
-        The IP address of this sidecar instance.
-    registered_functions : list[str]
-        List of functions registered by this sidecar instance.
+    configured_to_load
+        Indicate if the current configuration is to load this program or not.
+    """
+    configured_to_load: bool = False
+
+    def _copy_mutable_fields(self, copied: LoadedProgramConfig):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class LoadedPrograms(RobotCopyable):
+    """
+    Class for storing the robot's configuration related to user programs (which are loaded, etc.)
+
+    Attributes
+    ----------
+    programs
+        Indicates if the current configuration is to load this program or not.
+    """
+    programs: dict[str, LoadedProgramConfig]
+
+    def _copy_mutable_fields(self, copied: LoadedPrograms):
+        copied.programs = deepcopy(self.programs)  # Make sure to create a copy instead of a reference
+
+
+@dataclass
+class ProgramStatus(RobotCopyable):
+    """
+    Class for storing the status of a user program loaded by the MecaScript engine.
+
+    Attributes
+    ----------
+    status
+        The current program loading status. To know if the program is configured to be loaded,
+        refer to ``configured_to_load`` boolean below.
+    message
+        A message for the user that details the status (generally used for detailing errors).
+    configured_to_load
+        Indicates if the current configuration is to load this program or not.
 """
+    status: MxProgramStatus = MxProgramStatus.MX_PROGRAM_UNLOADED
+    message: str = ""
+    configured_to_load: bool = False
 
-    def __init__(self):
+    def _copy_mutable_fields(self, copied: ProgramStatus):
+        # No mutable fields to copy in this class
+        pass
 
-        # The following are status fields.
-        self.id: Optional[int] = None
-        self.embedded = False
-        self.remote_ip = ""
-        self.registered_functions: list[str] = []
 
-    def __str__(self) -> str:
-        ip = ""
-        if not self.embedded:
-            ip = f", IP: {self.remote_ip}"
-        return ((f"Id: {self.id}, "
-                 f"Embedded: {self.embedded}, "
-                 f"Ip: {self.remote_ip}{ip}, "
-                 f"functions: [{','.join(self.registered_functions)}]"))
+@dataclass
+class MecaScriptCfg(RobotCopyable):
+    """
+    Class for storing the robot's MecaScript configuration options.
+
+    Attributes
+    ----------
+    python_enabled
+        True if this MecaScript Python engine should be running on the robot.
+"""
+    python_enabled: bool = True
+
+    def _copy_mutable_fields(self, copied: MecaScriptEngineStatus):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class MecaScriptEngineStatus(RobotCopyable):
+    """
+    Class for storing the status of a MecaScript engine connected to the robot.
+
+    Attributes
+    ----------
+    id
+        Id of the running MecaScript engine, None if no engine is running
+    embedded
+        True if this MecaScript engine is running embedded inside the robot.
+    remote_ip
+        The IP address of this MecaScript engine.
+    ready
+        The MecaScript engine is ready (has finished loading all programs and registering all commands)
+    registered_commands
+        List of commands registered by this MecaScript engine.
+"""
+    id: Optional[int] = None
+    embedded: bool = False
+    remote_ip: str = ""
+    ready: bool = False
+    registered_commands: List[str] = field(default_factory=list)
+    loaded_programs_status: Dict[str, ProgramStatus] = field(default_factory=dict)
+
+    def _copy_mutable_fields(self, copied: MecaScriptEngineStatus):
+        copied.registered_commands = self.registered_commands.copy()
+        copied.loaded_programs_status = deepcopy(self.loaded_programs_status)
+
+
+@dataclass
+class ProgramExecutionStatus(RobotCopyable):
+    """
+    Class representing the execution status of a MecaScript program, telling whether
+    the robot is currently executing a MecaScript program along with other useful information.
+
+    Attributes
+    ----------
+    command_name
+        Name of the command currently being executed. Empty string if no command is executing.
+    file_path
+        Path of the program file in which this command was defined.
+    stopping
+        True if the executing command has been requested to stop.
+    id
+        ID of the MecaScript engine on which the command is being executed (0 if none).
+    command_type
+        Indicates the type of the executing command (inline or controlling).
+    """
+    command_name: str = ""
+    file_path: str = ""
+    stopping: bool = False
+    id: int = 0
+    command_type: MxRegisteredCmdType = MxRegisteredCmdType.MX_REGISTERED_CMD_TYPE_INLINE
+
+    def _copy_mutable_fields(self, copied: ProgramExecutionStatus):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class CalibrationCfg(RobotCopyable):
+    """
+    Class for storing the robot calibration configuration, as set by ``SetCalibrationCfg``.
+
+    Attributes
+    ----------
+    enabled
+        True when the calibration is enabled on the robot. Note that for this to make any
+        difference, the robot must have been calibrated at factory, which is
+        indicated by ``GetRobotCalibrated``.
+    """
+    enabled: bool = False
+
+    def _copy_mutable_fields(self, copied: CalibrationCfg):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class CollisionCfg(RobotCopyable):
+    """
+    Class for storing the robot collision configuration, as set by ``SetCollisionCfg``.
+
+    Attributes
+    ----------
+    severity
+        The severity of detected robot self collision events. The allowed values are:
+
+        - ``MX_EVENT_SEVERITY_SILENT``
+        - ``MX_EVENT_SEVERITY_WARNING``
+        - ``MX_EVENT_SEVERITY_ERROR``
+    """
+    severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR
+
+    def _copy_mutable_fields(self, copied: CollisionCfg):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class JointLimitsCfg(RobotCopyable):
+    """
+    Class for storing the robot joint limits configuration, as set by ``SetJointLimitsCfg``.
+    Note that joint limits themselves are returned by ``GetJointLimits``.
+
+    Attributes
+    ----------
+    enabled
+        True when the joint limits are enabled on the robot.
+"""
+    enabled: bool = False
+
+    def _copy_mutable_fields(self, copied: JointLimitsCfg):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class MoveDurationCfg(RobotCopyable):
+    """
+    Class for storing the configuration of robot moves in duration mode, as set by
+    ``SetMoveDurationCfg``.
+
+    Attributes
+    ----------
+    severity
+        The severity of events reporting that the robot cannot meet the requested duration for a
+        given move command. The allowed values are:
+
+        - ``MX_EVENT_SEVERITY_SILENT``
+        - ``MX_EVENT_SEVERITY_WARNING``
+        - ``MX_EVENT_SEVERITY_ERROR``
+    """
+    severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_WARNING
+
+    def _copy_mutable_fields(self, copied: MoveDurationCfg):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class Pstop2Cfg(RobotCopyable):
+    """
+    Class for storing the PStop2 safety signal configuration, as set by SetPstop2Cfg
+
+    Attributes
+    ----------
+    severity
+        The severity of PStop2 safety signals. The allowed values are:
+
+        - ``MX_EVENT_SEVERITY_PAUSE_MOTION``
+        - ``MX_EVENT_SEVERITY_CLEAR_MOTION``
+    """
+    severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_CLEAR_MOTION
+
+    def _copy_mutable_fields(self, copied: Pstop2Cfg):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class SimModeCfg(RobotCopyable):
+    """Class for storing the robot default simulation mode configuration, as set by
+    ``SetSimModeCfg``.
+
+    Attributes
+    ----------
+    mode: MxRobotSimulationMode
+        The default simulation mode that is applied when ``ActivateSim`` is called without
+        an argument or when the simulation  mode is enabled from the cyclic protocols.
+    """
+    mode: MxRobotSimulationMode = MxRobotSimulationMode.MX_SIM_MODE_REAL_TIME
+
+    def _copy_mutable_fields(self, copied: SimModeCfg):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class TorqueLimitsCfg(RobotCopyable):
+    """
+    Class for storing the torque limits configuration, as set by ``SetTorqueLimitsCfg``.
+    Note that the torque limits themselves (per joint) is returned by ``GetTorqueLimits``.
+
+    Attributes
+    ----------
+    severity
+        The severity of torque exceeded events. The allowed values are:
+
+        - ``MX_EVENT_SEVERITY_SILENT``
+        - ``MX_EVENT_SEVERITY_WARNING``
+        - ``MX_EVENT_SEVERITY_PAUSE_MOTION``
+        - ``MX_EVENT_SEVERITY_ERROR``
+    mode: MxTorqueLimitsMode
+        The mode used to determine if the robot torque exceeds the configured limit.
+    """
+    severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR
+    mode: MxTorqueLimitsMode = MxTorqueLimitsMode.MX_TORQUE_LIMITS_MODE_DELTA_WITH_EXPECTED
+
+    def _copy_mutable_fields(self, copied: TorqueLimitsCfg):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class TorqueLimitsStatus(RobotCopyable):
+    """
+    Class for storing the robot's torque limits status.
+    The torque limits are defined by ``SetTorqueLimitsCfg`` and ``SetTorqueLimits``.
+
+    Attributes
+    ----------
+    exceeded
+        True when the configured torque limits are exceeded on the robot.
+"""
+    exceeded: bool = False
+
+    def _copy_mutable_fields(self, copied: TorqueLimitsStatus):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class WorkZoneCfg(RobotCopyable):
+    """
+    Class for storing the robot work zone configuration, as set by ``SetWorkZoneCfg``.
+
+    Attributes
+    ----------
+    severity
+        The severity of detected robot self collision events. The allowed values are:
+
+        - ``MX_EVENT_SEVERITY_SILENT``
+        - ``MX_EVENT_SEVERITY_WARNING``
+        - ``MX_EVENT_SEVERITY_ERROR``
+    mode: MxWorkZoneMode
+        The mode that determines when the robot is considered outside the work zone.
+    """
+    severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR
+    mode: MxWorkZoneMode = MxWorkZoneMode.MX_WORK_ZONE_MODE_FCP_IN_WORK_ZONE
+
+    def _copy_mutable_fields(self, copied: WorkZoneCfg):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class WorkZoneLimits(RobotCopyable):
+    """
+    Class for storing the work zone limits.
+
+    Attributes
+    ----------
+    x_min
+        Minimum x value of the work zone, in mm.
+    y_min
+        Minimum y value of the work zone, in mm.
+    z_min
+        Minimum z value of the work zone, in mm.
+    x_max
+        Maximum x value of the work zone, in mm.
+    y_max
+        Maximum y value of the work zone, in mm.
+    z_max
+        Maximum z value of the work zone, in mm.
+"""
+    x_min: float = 0
+    y_min: float = 0
+    z_min: float = 0
+    x_max: float = 0
+    y_max: float = 0
+    z_max: float = 0
+
+    def _copy_mutable_fields(self, copied: WorkZoneLimits):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class RobotPayload(RobotCopyable):
+    """
+    Class for storing the robot payload.
+
+    Attributes
+    ----------
+    mass
+        Carried mass in kg
+    x
+        X coordinate of center of mass relative to FRF.
+    y
+        Y coordinate of center of mass relative to FRF.
+    z
+        Z coordinate of center of mass relative to FRF.
+"""
+    mass: float = 0
+    x: float = 0
+    y: float = 0
+    z: float = 0
+
+    def _copy_mutable_fields(self, copied: RobotPayload):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class ToolSphere(RobotCopyable):
+    """
+    Class for storing the robot tool sphere configuration.
+
+    Attributes
+    ----------
+    x
+        Offset along FRF x-axis to position tool center
+    y
+        Offset along FRF y-axis to position tool center
+    z
+        Offset along FRF z-axis to position tool center
+    r
+        Radius of the tool sphere model.
+"""
+    x: float = 0
+    y: float = 0
+    z: float = 0
+    r: float = 0
+
+    def _copy_mutable_fields(self, copied: ToolSphere):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class VacuumThreshold(RobotCopyable):
+    """
+    Class for storing the vacuum thresholds.
+
+    Attributes
+    ----------
+    hold_threshold
+        Vacuum pressure threshold to consider holding part in kPa.
+    release_threshold
+        Vacuum pressure threshold to consider part released in kPa.
+"""
+    hold_threshold: float = 0
+    release_threshold: float = 0
+
+    def _copy_mutable_fields(self, copied: VacuumThreshold):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class MoveJumpApproachVel(RobotCopyable):
+    """
+    Class for storing the move jump approach velocity configuration.
+
+    Attributes
+    ----------
+    startVel
+        See ``SetMoveJumpApproachVel`` for details.
+    startDist
+        See ``SetMoveJumpApproachVel`` for details.
+    endVel
+        See ``SetMoveJumpApproachVel`` for details.
+    endDist
+        See ``SetMoveJumpApproachVel`` for details.
+    """
+    startVel: float = 0
+    startDist: float = 0
+    endVel: float = 0
+    endDist: float = 0
+
+    def _copy_mutable_fields(self, copied: MoveJumpApproachVel):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class MoveJumpHeight(RobotCopyable):
+    """
+    Class for storing the move jump height configuration.
+
+    Attributes
+    ----------
+    startHeight
+        See ``SetMoveJumpHeight`` for details.
+    endHeight
+        See ``SetMoveJumpHeight`` for details.
+    minHeight
+        See ``SetMoveJumpHeight`` for details.
+    maxHeight
+        See ``SetMoveJumpHeight`` for details.
+    """
+    startHeight: float = 0
+    endHeight: float = 0
+    minHeight: float = 0
+    maxHeight: float = 0
+
+    def _copy_mutable_fields(self, copied: MoveJumpHeight):
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class RobotProgramStatus(RobotCopyable):
+    """
+    Class for storing the status of a robot program
+
+    Attributes
+    ----------
+    valid
+        The program is considered valid and can be executed if loaded.
+    invalid_lines
+        List of line numbers in the file that are considered invalid.
+    """
+    valid: bool = False
+    invalid_lines: list[int] = field(default_factory=lambda: [])
+
+    def _copy_mutable_fields(self, copied: RobotProgramStatus):
+        copied.invalid_lines = self.invalid_lines.copy()
+
+
+@dataclass
+class RobotFileStatus(RobotCopyable):
+    """
+    Class for storing the status of a robot file
+
+    Attributes
+    ----------
+    program_status
+        Program validity status. Ignore if this file is not a robot program.
+    """
+    program_status: RobotProgramStatus = field(default_factory=RobotProgramStatus)
+
+    def _copy_mutable_fields(self, copied: RobotFileStatus):
+        copied.program_status = self.program_status.copy()
+        # No mutable fields to copy in this class
+        pass
+
+
+@dataclass
+class RobotFile(RobotCopyable):
+    """
+    Class for storing a robot file loaded from the robot.
+
+    Attributes
+    ----------
+    name
+        The file name (path) on the robot
+    content
+        The file content. Generally as a string, unless the data is binary and cannot be represented as a string,
+        in which case it will be returned as a bytearray.
+    status
+        The file status
+    """
+    name: str = field(default_factory="")
+    content: str | bytearray = field(default_factory="")
+    status: RobotFileStatus = field(default_factory=RobotFileStatus)
+
+    def _copy_mutable_fields(self, copied: RobotFile):
+        copied.status = self.status.copy()
+
+
+@dataclass
+class RobotFileList(RobotCopyable):
+    """
+    Class for storing the list of files returned by the robot.
+
+    Attributes
+    ----------
+    files
+        Dictionary of listed files, key is file path
+    """
+    files: Dict[str, RobotFileStatus] = field(default_factory=dict)
+
+    def _copy_mutable_fields(self, copied: RobotFileList):
+        copied.files = self.files.copy()
+
+
+@dataclass
+class RobotTemperature(RobotCopyable):
+    """
+    Class for storing the robot temperature.
+
+    Attributes
+    ----------
+    timestamp
+        Monotonic timestamp associated with data (in microseconds since robot last reboot)
+        This timestamp is stamped by the robot so it is not affected by host/network jitter
+    baseboard
+        The robot temperature measured on the main CPU (baseboard), in Celsius.
+    psu
+        The robot temperature measured in the Power supply, in Celsius.
+    safe_mcu
+        The robot temperature measured on the safety processors, in Celsius.
+    motors
+        The robot temperature measured each motor, in Celsius.
+    """
+    timestamp: int = 0
+
+    baseboard: Optional[float] = None
+    psu: Optional[float] = None
+    safe_mcu: Optional[float] = None
+    motors: Optional[list[float]] = None
+
+    def _copy_mutable_fields(self, copied: WorkZoneCfg):
+        copied.motors = self.motors.copy()
