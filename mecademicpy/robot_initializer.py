@@ -1,6 +1,12 @@
 """
 This file contains a tool to initialize a robot to a well-known initial state and configuration.
-See below for details
+
+The most useful functions from this file are:
+  - ``reset_robot_configuration``
+  - ``reset_motion_queue``
+  - ``reset_vacuum_module``
+
+To use these functions, your application must instantiate a ``RobotWithTools`` instead of ``Robot``.
 """
 # pylint: disable=wildcard-import, unused-wildcard-import
 from __future__ import annotations
@@ -37,42 +43,59 @@ class DirtyFlags():
 class MotionQueueParams:
     """ This class regroups all motion queue parameters """
 
-    def __init__(self):
+    def __init__(self, robot_model: Optional[MxRobotModel] = None):
         self.torque_limits_severity = MxEventSeverity.MX_EVENT_SEVERITY_WARNING
-        self.torque_limits_mode = MxTorqueLimitsMode.MX_TORQUE_LIMITS_DETECT_SKIP_ACCEL
-        self.torque_limits = [100] * 6
-        self.auto_conf = True
-        self.auto_conf_turn = True
-        self.blending = 100
-        self.cart_acc = 50
-        self.cart_ang_vel = 150
-        self.cart_lin_vel = 400
-        self.joint_acc = 50
-        self.joint_vel_limit = 100
-        self.joint_vel = 50
+        self.torque_limits_mode = MxTorqueLimitsMode.MX_TORQUE_LIMITS_MODE_DELTA_WITH_EXPECTED
+        self.torque_limits = [float(MX_MQ_DEFAULT_TORQUE_LIMIT)] * 6
+        self.auto_conf = bool(MX_MQ_DEFAULT_AUTO_CONF)
+        self.auto_conf_turn = bool(MX_MQ_DEFAULT_AUTO_CONF_TURN)
+        self.blending = float(MX_MQ_DEFAULT_BLENDING)
+        self.cart_acc = float(MX_MQ_DEFAULT_CART_ACC)
+        self.cart_ang_vel = float(MX_MQ_DEFAULT_CART_ANG_VEL)
+        self.cart_lin_vel = float(MX_MQ_DEFAULT_CART_LIN_VEL)
+        self.joint_acc = float(MX_MQ_DEFAULT_JOINT_ACC)
+        if robot_model is not None and robot_model == MxRobotModel.MX_ROBOT_MODEL_M500_R4:
+            # On this robot model, we can allow faster maximum velocity compared to Meca500 R3 and older.
+            # This will allow SetJointVel with higher value. It will also allow joints to move faster during
+            # Linear moves if necessary (like when passing near singularities or if requesting very large linear
+            # velocity).
+            self.joint_vel_limit = float(MX_MQ_DEFAULT_JOINT_VEL_LIMIT_MECA500_R4)
+        else:
+            self.joint_vel_limit = float(MX_MQ_DEFAULT_JOINT_VEL_LIMIT)
+        self.joint_vel = float(MX_MQ_DEFAULT_JOINT_VEL)
         self.move_mode = MxMoveMode.MX_MOVE_MODE_VELOCITY
         self.move_duration_severity = MxEventSeverity.MX_EVENT_SEVERITY_WARNING
-        self.move_duration = 3.0
-        self.vel_timeout = 0.1
-        self.trf = [0, 0, 0, 0, 0, 0]
-        self.wrf = [0, 0, 0, 0, 0, 0]
-        self.payload = [0, 0, 0, 0]
+        self.move_duration = float(MX_MQ_DEFAULT_MOVE_DURATION)
+        self.vel_timeout = float(MX_MQ_DEFAULT_VEL_TIMEOUT)
+        self.trf = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.wrf = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        self.payload = [0.0, 0.0, 0.0, 0.0]
 
-        self.gripper_force = 40
-        self.gripper_vel = 50
-        self.gripper_range = [0, 0]
+        self.gripper_force = float(MX_MQ_DEFAULT_GRIPPER_FORCE)
+        self.gripper_vel = float(MX_MQ_DEFAULT_GRIPPER_VEL)
+        self.gripper_range = [0.0, 0.0]
 
-        self.move_jump_height = [MX_MOVE_JUMP_DEFAULT_HEIGHT_MM, MX_MOVE_JUMP_DEFAULT_HEIGHT_MM, 0, 102]
-        self.move_jump_approach_vel = [10, 1, 10, 1]
+        self.move_jump_height = [
+            float(MX_MQ_DEFAULT_MOVE_JUMP_HEIGHT),
+            float(MX_MQ_DEFAULT_MOVE_JUMP_HEIGHT),
+            float(MX_MQ_DEFAULT_MOVE_JUMP_MIN_HEIGHT),
+            float(MX_MQ_DEFAULT_MOVE_JUMP_MAX_HEIGHT)
+        ]
+        self.move_jump_approach_vel = [
+            float(MX_MQ_DEFAULT_MOVE_JUMP_APPROACH_VEL),
+            float(MX_MQ_DEFAULT_MOVE_JUMP_APPROACH_DIST),
+            float(MX_MQ_DEFAULT_MOVE_JUMP_APPROACH_VEL),
+            float(MX_MQ_DEFAULT_MOVE_JUMP_APPROACH_DIST)
+        ]
 
-        self.monitoring_interval = 1.0 / 60.0
+        self.monitoring_interval = MX_ROBOT_CFG_DEFAULT_MONITORING_INTERVAL
         self.real_time_monitoring = ['TargetJointPos', 'TargetCartPos']
 
     def __eq__(self, other):
         """Comparison of each motion queue parameter (note: We could use a dataclass instead)"""
-        for field in self.__dict__:
-            self_attr = getattr(self, field)
-            other_attr = getattr(other, field)
+        for dict_field in self.__dict__:
+            self_attr = getattr(self, dict_field)
+            other_attr = getattr(other, dict_field)
             if other_attr is None:
                 return False
             if isinstance(self_attr, list):
@@ -99,7 +122,7 @@ class RobotWithTools(Robot):
     # pylint: disable=invalid-name
     def HasIoModule(self):
         """ Tells if the IO module is connected/detected """
-        return self.GetRtIoStatus(MxIoBankId.MX_IO_BANK_ID_IO_MODULE).present
+        return self._io_module_status.present
 
     def ActivateRobot(self):
         """Overload of ActivateRobot to set as "dirty" all motion-queue related settings
@@ -147,11 +170,11 @@ class RobotWithTools(Robot):
             reset before running the next test """
         with self._main_lock:
             # Make sure that command and args are split
-            command, args = self._split_command_args(command, args)
-            if command.lower() == 'setconf':
+            command_trimmed = command.replace('-', '').lower()
+            if command_trimmed == 'setconf':
                 # Setting conf also disables auto-conf
                 self._dirty_flags.add_sent_command('SetAutoConf')
-            elif command.lower() == 'setconfturn':
+            elif command_trimmed == 'setconfturn':
                 # Setting conf also disables auto-conf
                 self._dirty_flags.add_sent_command('SetAutoConfTurn')
             self._dirty_flags.add_sent_command(command)
@@ -162,7 +185,7 @@ class RobotWithTools(Robot):
 
         Parameters
         ----------
-        robot_operation_mode : MxRobotOperationMode
+        robot_operation_mode
             New robot operation mode to set in robot state
         """
         super()._set_robot_operation_mode(robot_operation_mode)
@@ -188,7 +211,7 @@ class RobotWithTools(Robot):
 
         Parameters
         ----------
-        cmd_name : str
+        cmd_name
             Name of the command to check if dirty
         """
         with self._main_lock:
@@ -199,7 +222,7 @@ class RobotWithTools(Robot):
 
         Parameters
         ----------
-        cmd_name : str
+        cmd_name
             Name of the "Set" command to send
         *args :
             Command-specific arguments
@@ -240,7 +263,7 @@ def set_joint_limits_cfg(robot: RobotWithTools, set_enable=False):
 
     Parameters
     ----------
-    set_enable : bool,
+    set_enable
         Enable joint limits or not by default False
     """
 
@@ -249,6 +272,7 @@ def set_joint_limits_cfg(robot: RobotWithTools, set_enable=False):
         deactivate_robot(robot)
         # Enable/disable joint limits
         robot.SetJointLimitsCfg(set_enable)
+        robot.Sync()  # Make sure that "Set" has completed before returning
 
 
 def get_joint_limits(robot: RobotWithTools, joint: int, use_model: bool = False) -> tuple[float]:
@@ -256,9 +280,9 @@ def get_joint_limits(robot: RobotWithTools, joint: int, use_model: bool = False)
 
     Parameters
     ----------
-    joint : int
+    joint
         joint number to get limits
-    use_model : bool
+    use_model
         return model limits (else effective joint limits)
 
     Returns
@@ -282,12 +306,13 @@ def get_all_joint_limits(robot: RobotWithTools, use_model: bool = False) -> dict
 
     Parameters
     ----------
-    use_model : bool
+    use_model
         return model limits
 
     Returns
     -------
-        dict {joint, [low_limit, high_limit]}
+    dict
+        {jointNb, [low_limit, high_limit]}
     """
     limits = {}
     for joint in range(1, robot.GetRobotInfo().num_joints + 1):
@@ -301,11 +326,11 @@ def _set_joint_limits(robot: RobotWithTools, joint: int, low_limit: float, high_
 
     Parameters
     ----------
-    joint : int
+    joint
         joint number where to set the limit
-    low_limit : float
+    low_limit
         lower joint limit
-    high_limit : float
+    high_limit
         higher joint limit
     """
 
@@ -314,18 +339,21 @@ def _set_joint_limits(robot: RobotWithTools, joint: int, low_limit: float, high_
 
     # Set joint limits for selected joint
     robot.SetJointLimits(joint, low_limit, high_limit)
+    robot.Sync()  # Make sure that "Set" has completed before returning
 
 
 def _enable_joint_limits_for_ext_tool(robot: RobotWithTools, move_to_safe_position=False):
     """This function configures appropriate joint limits depending on the detected external tool, as described
         in documentation for public method reset_joint_limits below
 
-    Args:
-        robot (RobotWithTools):                 Robot to configure joint limits for
-        move_to_safe_position (bool, optional): If True and robot is outside the limits, this function will attempt
-                                                to move it inside the limits (using recovery mode) before enabling
-                                                the limits.
-                                                Defaults to False.
+    Parameters
+    ----------
+    robot
+        Robot to configure joint limits for
+    move_to_safe_position
+        If True and robot is outside the limits, this function will attempt
+        to move it inside the limits (using recovery mode) before enabling
+        the limits.
     """
 
     if not robot.GetRobotInfo().supports_ext_tool:
@@ -390,6 +418,7 @@ def reset_joint_limits(robot: RobotWithTools):
         Please use this method only if your situation is covered by one of the cases below.
 
         This function handles only the following cases (write your own function if your situation differs)
+
         - For Meca500 with a MPM500 pneumatic module, a limit will be set to avoid collision with the joint 4
         - For Meca500 with a MEGP-25E or MEGP-25LS gripper, joint 6 will be limited to +/- 180 degrees to avoid
           damaging the cable.
@@ -435,6 +464,8 @@ def reset_work_zone_limits(robot: RobotWithTools):
     if need_to_set_cfg:
         robot.SetWorkZoneCfg(*expected_cfg)
 
+    robot.Sync()  # Make sure that "Set" has completed before returning
+
 
 def reset_collision_cfg(robot: RobotWithTools):
     """This function reverts collision configurations to defaults.
@@ -472,6 +503,8 @@ def reset_collision_cfg(robot: RobotWithTools):
     if need_to_set_collision_cfg:
         robot.SetCollisionCfg(*expected_collision_cfg)
 
+    robot.Sync()  # Make sure that "Set" has completed before returning
+
 
 def reset_pstop2_cfg(robot: RobotWithTools):
     """This function reverts PStop2 configuration to defaults.
@@ -493,6 +526,7 @@ def reset_pstop2_cfg(robot: RobotWithTools):
 
     # Set default config
     robot.SetPStop2Cfg(expected_severity[0])
+    robot.Sync()  # Make sure that "Set" has completed before returning
 
 
 def reset_sim_mode_cfg(robot: RobotWithTools):
@@ -516,6 +550,7 @@ def reset_sim_mode_cfg(robot: RobotWithTools):
 
     # Set default config
     robot.SetSimModeCfg(expected_sim_mode_cfg[0])
+    robot.Sync()  # Make sure that "Set" has completed before returning
 
 
 def reset_vacuum_grip(robot: RobotWithTools):
@@ -557,7 +592,7 @@ def _reset_digital_outputs_bank(robot: RobotWithTools, bank_id: MxIoBankId):
     """This function clears all digital outputs for specified bank"""
 
     # Check if already cleared
-    curr_output_states = robot.GetRtOutputState(bank_id).data
+    curr_output_states = robot.GetRtOutputState(bank_id)
     nb_outputs = len(curr_output_states)
     cleared_outputs = [0] * nb_outputs
     if curr_output_states == cleared_outputs:
@@ -569,7 +604,7 @@ def _reset_digital_outputs_bank(robot: RobotWithTools, bank_id: MxIoBankId):
 
 def _wait_outputs_cleared(robot: RobotWithTools):
     """Wait until all digital outputs have been cleared"""
-    io_module_outputs = robot.GetRtOutputState(MxIoBankId.MX_IO_BANK_ID_IO_MODULE).data
+    io_module_outputs = robot.GetRtOutputState(MxIoBankId.MX_IO_BANK_ID_IO_MODULE)
     io_module_outputs_cleared = [0] * len(io_module_outputs)
 
     start_wait = time.monotonic()
@@ -583,7 +618,7 @@ def _wait_outputs_cleared(robot: RobotWithTools):
         except TimeoutException:
             pass
         # Check if now cleared
-        io_module_outputs = robot.GetRtOutputState(MxIoBankId.MX_IO_BANK_ID_IO_MODULE).data
+        io_module_outputs = robot.GetRtOutputState(MxIoBankId.MX_IO_BANK_ID_IO_MODULE)
 
 
 def reset_digital_outputs(robot: RobotWithTools):
@@ -636,15 +671,17 @@ def reset_sim_mode(robot: RobotWithTools):
 def reset_error(robot: RobotWithTools):
     """Synchronously reset robot error (if robot is in error state).
 
-    Args:
-        robot (RobotWithTools): Robot to reset error for
+    Parameters
+    ----------
+    robot
+        Robot to reset error for
 
     Raises
-        ------
-        TimeoutException
-            Raised if the robot does not report error being cleared in a reasonable time
-        InterruptException
-            Raised if waiting becomes irrelevant (disconnected from the robot for example)
+    ------
+    TimeoutException
+        Raised if the robot does not report error being cleared in a reasonable time
+    InterruptException
+        Raised if waiting becomes irrelevant (disconnected from the robot for example)
     """
     if not robot.GetStatusRobot().error_status:
         # No error to clear
@@ -659,7 +696,7 @@ def clear_motion(robot: RobotWithTools, then_resume=False):
 
     Parameters
     ----------
-    then_resume : bool, optional
+    then_resume
         Resume motion after clearing motion queue, by default False
     """
     if robot.GetStatusRobot().error_status:
@@ -695,7 +732,7 @@ def resume_motion(robot: RobotWithTools):
 
 
 def reset_robot_configuration(robot: RobotWithTools):
-    """This function resets robot configuration to default state ***
+    """This function resets robot configuration to default state
     """
     reset_error(robot)
     reset_sim_mode(robot)
@@ -709,17 +746,22 @@ def reset_robot_configuration(robot: RobotWithTools):
 #
 # The following function will reset robot to default motion queue settings (after activating it if not already done)
 #
-def reset_motion_queue(robot: RobotWithTools, params: MotionQueueParams = None, activate_home=False):
+def reset_motion_queue(robot: RobotWithTools, params: MotionQueueParams = None, activate_home=False, clear=True):
     """This function resets robot's motion queue to default values
 
-    Args:
-        robot (RobotWithTools):                 Robot to reset motion queue for
-        params (MotionQueueParams, optional):   Motion queue parameters to apply.
-                                                Default values from MotionQueueParams are used if None.
-                                                Defaults to None.
-        activate_home (bool, optional): True  -> Activate and home the robot if not already done
-                                        False -> Don't change robot status (do nothing if not activated and homed)
-                                        Defaults to False.
+    Parameters
+    ----------
+    robot :RobotWithTools
+        Robot to reset motion queue for
+    params
+        Motion queue parameters to apply.
+        Default values from MotionQueueParams are used if None.
+    activate_home
+        True  -> Activate and home the robot if not already done
+        False -> Don't change robot status (do nothing if not activated and homed)
+    clear
+        True  -> Reset error (if any) and clear motion
+        False -> Just add instructions to the motion queue, don't clear it
     """
     if robot.GetRobotInfo().supports_time_scaling:
         robot.set_if_dirty('SetTimeScaling', 100)
@@ -733,9 +775,9 @@ def reset_motion_queue(robot: RobotWithTools, params: MotionQueueParams = None, 
             params = MotionQueueParams()
         robot.set_dirty_if_params_changed(params)
 
-        reset_error(robot)
-
-        clear_motion(robot, then_resume=True)
+        if clear:
+            reset_error(robot)
+            clear_motion(robot, then_resume=True)
 
         if robot.GetRobotInfo().supports_torque_limits:
             robot.set_if_dirty('SetTorqueLimitsCfg', params.torque_limits_severity, params.torque_limits_mode)

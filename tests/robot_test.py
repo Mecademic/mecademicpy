@@ -7,7 +7,6 @@ This file contains unit-tests for the mecademicpy module
 from __future__ import annotations
 
 import copy
-import logging
 import os
 import pathlib
 import queue
@@ -43,7 +42,7 @@ DEFAULT_TIMEOUT = 10  # Set 10s as default timeout.
 
 # Use 'connect_robot_helper(robot, args..)' to take care of robot connection.
 
-# Refer to the 'test_start_offline_program()' test case for an example usage that
+# Refer to the 'test_start_program()' test case for an example usage that
 # also includes using `simple_response_handler()` to test a message exchange.
 
 #####################################################################################
@@ -110,7 +109,8 @@ def connect_robot_helper(robot: mdr.Robot,
                        offline_mode=offline_mode,
                        disconnect_on_exception=disconnect_on_exception,
                        enable_synchronous_mode=enable_synchronous_mode,
-                       monitor_mode=monitor_mode)
+                       monitor_mode=monitor_mode,
+                       set_rtc=mdr.SetRtcMode.DONT_SET_RTC)
 
         fake_robot.join()
 
@@ -124,6 +124,8 @@ def simple_response_handler(queue_in: queue.Queue, queue_out: queue.Queue, expec
     if isinstance(expected_in, list):
         for i, expected_val in enumerate(expected_in):
             event = queue_in.get(block=True, timeout=1)
+            if event[0] == '-':  # Remove dash prefix from command names
+                event = event[1:]
             assert event == expected_val
             if isinstance(desired_out[i], list):
                 desired_list: list = desired_out
@@ -201,7 +203,7 @@ def test_setup_invalid_input(robot: mdr.Robot):
 def test_connection_no_robot(robot: mdr.Robot):
     robot.default_timeout = 0
 
-    with pytest.raises((mdr.CommunicationError, TimeoutError, ConnectionRefusedError)):
+    with pytest.raises((mdr.CommunicationError, TimeoutError, ConnectionRefusedError, mdr.DisconnectError)):
         robot.Connect(TEST_IP)
 
 
@@ -356,8 +358,9 @@ def test_9_1_connection(robot: mdr.Robot):
 def test_already_connected(robot: mdr.Robot):
     connect_robot_helper(robot, yaml_filename='meca500_r3_v9.yml')
 
-    # Try connecting again, should do nothing
-    robot.Connect()
+    # Try connecting again, should do raise an error
+    with pytest.raises(mdr.InvalidStateError):
+        robot.Connect()
     assert robot.IsConnected()
 
 
@@ -493,7 +496,7 @@ def test_monitoring_connection(robot: mdr.Robot):
     robot._monitor_rx_queue.put(make_test_message(mx_st.MX_ST_RT_CONF, range(4)))
     robot._monitor_rx_queue.put(make_test_message(mx_st.MX_ST_RT_CONF_TURN, range(2)))
 
-    robot._monitor_rx_queue.put(make_test_message(mx_st.MX_ST_RT_ACCELEROMETER, range(5)))
+    robot._monitor_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_ACCELEROMETER, '100000, 5, 0, 0, -16000'))
 
     robot.Disconnect()
 
@@ -530,12 +533,10 @@ def test_monitoring_connection(robot: mdr.Robot):
 
     # The data is sent as [timestamp, accelerometer_id, {measurements...}].
     # We convert it to a dictionary which maps the accelerometer_id to a TimestampedData object.
-    accel_array = make_test_array(mx_st.MX_ST_RT_ACCELEROMETER, range(5))
-    assert robot._robot_rt_data.rt_accelerometer == {
-        accel_array[1]:
-        mdr.TimestampedData(accel_array[0], accel_array[2:],
-                            mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
-    }
+    expected_accel = mdr.TimestampedData(100000, [0, 0, -16000],
+                                         mdr.RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+    expected_accel.set_enabled(True)
+    assert robot._robot_rt_data.rt_accelerometer == {5: expected_accel}
 
 
 # Test that checkpoints created by user are properly sent to robot, waited on, and unblocked.
@@ -556,7 +557,7 @@ def test_user_set_checkpoints(robot: mdr.Robot):
     checkpoint_1.wait(timeout=DEFAULT_TIMEOUT)
 
 
-# Test that the user can wait on checkpoints which were set by an external source, like an offline program.
+# Test that the user can wait on checkpoints which were set by an external source, like a user program.
 def test_external_checkpoints(robot: mdr.Robot):
     connect_robot_helper(robot)
 
@@ -860,8 +861,8 @@ def test_callbacks(robot: mdr.Robot):
         # Note we don't actually run robot.ClearMotion() here as the command will block in synchronous mode.
         # It is also not necessary for the test.
 
-        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_OFFLINE_START, ''))
-        # Note we don't actually run robot.StartOfflineProgram() here as there is no actual robot and thus
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_PROGRAM_STARTED, ''))
+        # Note we don't actually run robot.StartProgram() here as there is no actual robot and thus
         # no recorded programs
         # It is also not necessary for the test.
 
@@ -918,10 +919,13 @@ def test_callbacks(robot: mdr.Robot):
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RECOVERY_MODE_OFF, ''))
         robot.SetRecoveryMode(False)
 
-        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_OFFLINE_START, ''))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_PROGRAM_STARTED, ''))
 
         robot.SetCheckpoint(checkpoint_id)
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_CHECKPOINT_DISCARDED, str(checkpoint_id)))
+
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_MECASCRIPT_ENGINE_STATUS, data='', json_data={"data": {}}))
+        robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_PROGRAM_EXECUTION_STATUS, data='', json_data={"data": {}}))
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '0,0,0,0,0,0,0'))
         robot.DeactivateRobot()
@@ -966,9 +970,11 @@ def test_event_with_exception():
 def test_motion_commands(robot: mdr.Robot):
     connect_robot_helper(robot)
 
+    # These commands have different type of arguments and will be tested outside these unit tests
     skip_commands = [
         'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
-        'SetTorqueLimitsCfg', 'SetIoSim', 'SetOutputState', 'SetOutputStateImmediate', 'SetVariable'
+        'SetTorqueLimitsCfg', 'SetIoSim', 'SetOutputState', 'SetOutputStateImmediate', 'SetVariable',
+        'SetLoadedPrograms', 'SetApiLock', 'SetCalibrationCfg', 'SetRobotName', 'SetMecaScriptCfg'
     ]
 
     # List of methods that will be deprecated. The deprecation decorator breaks the way we use to test those methods.
@@ -1116,12 +1122,12 @@ def test_synchronous_gets_legacy(robot: mdr.Robot):
 
     # Without RT messages, enabling 'include_timestamp' should raise exception.
     with pytest.raises(mdr.InvalidStateError):
-        robot.GetRtTargetJointPos(include_timestamp=True)
+        robot.GetRtTargetJointPos(include_timestamp=True, synchronous_update=False)
     with pytest.raises(mdr.InvalidStateError):
-        robot.GetRtTargetCartPos(include_timestamp=True)
+        robot.GetRtTargetCartPos(include_timestamp=True, synchronous_update=False)
 
-    assert robot.GetRtTargetJointPos(include_timestamp=False) == fake_data(seed=1)
-    assert robot.GetRtTargetCartPos(include_timestamp=False) == fake_data(seed=1)
+    assert robot.GetRtTargetJointPos(include_timestamp=False, synchronous_update=False) == fake_data(seed=1)
+    assert robot.GetRtTargetCartPos(include_timestamp=False, synchronous_update=False) == fake_data(seed=1)
 
     assert not robot.GetRobotInfo().rt_message_capable
 
@@ -1149,32 +1155,32 @@ def test_synchronous_gets_legacy(robot: mdr.Robot):
     fake_robot.join()
 
 
-# Test initializing offline programs.
-def test_start_offline_program(robot: mdr.Robot):
+# Test initializing programs.
+def test_start_program(robot: mdr.Robot):
     connect_robot_helper(robot, enable_synchronous_mode=True)
 
     expected_command = 'StartProgram(1)'
 
     # Report that the program has been started successfully.
-    robot_response = mdr.Message(mx_st.MX_ST_OFFLINE_START, '')
+    robot_response = mdr.Message(mx_st.MX_ST_PROGRAM_STARTED, '')
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
     fake_robot.start()
 
-    robot.StartOfflineProgram(1, timeout=1)
+    robot.StartProgram(1, timeout=1)
 
     fake_robot.join(timeout=1)
 
     # Report that the program does not exist.
-    robot_response = mdr.Message(mx_st.MX_ST_NO_OFFLINE_SAVED, '')
+    robot_response = mdr.Message(mx_st.MX_ST_PROGRAM_NOT_FOUND, '')
     fake_robot = threading.Thread(target=simple_response_handler,
                                   args=(robot._command_tx_queue, robot._command_rx_queue, expected_command,
                                         robot_response))
     fake_robot.start()
 
     with pytest.raises(mdr.InvalidStateError):
-        robot.StartOfflineProgram(1, timeout=1)
+        robot.StartProgram(1, timeout=1)
 
     fake_robot.join(timeout=1)
 
@@ -1209,10 +1215,10 @@ def test_monitor_mode(robot: mdr.Robot):
     robot._monitor_rx_handler_thread.join(timeout=5)
 
     # Check that these gets do not raise an exception.
-    assert robot.GetRtTargetJointPos() == fake_joint
-    assert robot.GetRtTargetCartPos() == fake_pose
+    assert robot.GetRtTargetJointPos(synchronous_update=False) == fake_joint
+    assert robot.GetRtTargetCartPos(synchronous_update=False) == fake_pose
 
-    with pytest.raises(mdr.InvalidStateError):
+    with pytest.raises(mdr.DisconnectError):
         robot.MoveJoints(*fake_joint)
 
 
@@ -1253,7 +1259,7 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
     connect_robot_helper(robot)
 
     # Manually set that the robot is rt-message-capable.
-    robot._robot_info.rt_message_capable = True
+    object.__setattr__(robot._robot_info, "rt_message_capable", True)
 
     # Send some fictive IoModule input/output values so the robot object creates the inputs/outputs arrays
     io_module_outputs = mdr.Message(mx_st.MX_ST_RT_OUTPUT_STATE,
@@ -1345,6 +1351,9 @@ def test_file_logger(tmp_path, robot: mdr.Robot):
                 mdr.Message(mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING, fake_string(seed=30, length=2)))
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_VM, fake_string(seed=31, length=10)))
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CURRENT, fake_string(seed=32, length=2)))
+            robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_VL, fake_string(seed=33, length=10)))
+            robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_TEMPERATURE, fake_string(seed=34, length=10)))
+            robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_I2T, fake_string(seed=35, length=7)))
 
             robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_RT_CYCLE_END, str(i * 100)))
 
@@ -1383,7 +1392,7 @@ def test_file_logger_legacy(tmp_path, robot: mdr.Robot):
     connect_robot_helper(robot, yaml_filename='meca500_r3_v8_3.yml')
 
     # This is explicitly set for readability, and is not necessary.
-    robot._robot_info.rt_message_capable = False
+    object.__setattr__(robot._robot_info, "rt_message_capable", False)
     # Send status message to indicate that the robot is activated and homed, and idle.
     robot._monitor_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '1,1,0,0,0,1,1'))
 

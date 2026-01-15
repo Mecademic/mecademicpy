@@ -6,7 +6,10 @@ We have separated the public API from the internal implementation to make the pu
 # pylint: disable=attribute-defined-outside-init
 from __future__ import annotations
 
+import base64
 import copy
+import difflib
+import enum
 import functools
 import ipaddress
 import json
@@ -15,34 +18,53 @@ import math
 import pathlib
 import queue
 import socket
+import string
 import threading
 import time
 import weakref
 from argparse import ArgumentError
-from typing import Callable, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import requests
+try:
+    import requests
+except ImportError:
+    # Installing robot firmware will not be available
+    requests = None
 
-import mecademicpy._robot_trajectory_logger as mx_traj
-import mecademicpy.robot_global_functions as rgf
-import mecademicpy.robot_sidecar_classes as rsc
-from mecademicpy.robot_sidecar_classes import VariablesContainer
+try:
+    import mecademicpy._robot_trajectory_logger as mx_traj
+
+    from .robot_trajectory_files import RobotTrajectories
+except ImportError:
+    mx_traj = None
+
+import mecademicpy.mecascript_classes as mecascript
+from mecademicpy.mecascript_classes import VariablesContainer
 
 # pylint: disable=wildcard-import,unused-wildcard-import,invalid-name
 from .mx_robot_def import MxRobotStatusCode as mx_st
 from .mx_robot_def import *
 from .robot_classes import *
-from .robot_trajectory_files import RobotTrajectories
 from .tools import *
 
 _CHECKPOINT_ID_MAX_PRIVATE = 8191  # Max allowable checkpoint id, inclusive
+_CHECKPOINT_ABORT_MSG = 'Checkpoint discarded by the robot'
 
 _TERMINATE = '--terminate--'
 
 _MONITORING_TIMEOUT_MS = 10000  # Max time without receiving any monitoring message from the robot
 _UPDATE_TIMEOUT = 15 * 60  # 15 minutes timeout
 
-OFFLINE_PROGRAM_OP_DEFAULT_TIMEOUT = 15
+FILE_MANAGEMENT_OP_DEFAULT_TIMEOUT = 15
+
+
+class ApplicationType(enum.IntEnum):
+    USER_APP = 0,  # A user application
+    EXTERNAL_SIDECAR = 1,  # A manually started sidecar application
+    EMBEDDED_SIDECAR = 2,  #Embedded sidecar scripting engine
+
+    def is_sidecar(self) -> bool:
+        return self.value == ApplicationType.EXTERNAL_SIDECAR or self.value == ApplicationType.EMBEDDED_SIDECAR
 
 
 def disconnect_on_exception_decorator(func):
@@ -58,6 +80,10 @@ def disconnect_on_exception_decorator(func):
     def wrap(self, *args, **kwargs):
         try:
             return func(self, *args, **kwargs)
+        except (ConnectionAbortedError, BrokenPipeError, OSError, DisconnectError) as e:
+            # pylint: disable=protected-access
+            self._disconnect()
+            raise e
         # pylint: disable=broad-exception-caught
         except BaseException as e:
             # pylint: disable=protected-access
@@ -71,6 +97,44 @@ def disconnect_on_exception_decorator(func):
     return wrap
 
 
+@dataclass
+class MecaScriptGlobalFunction:
+    """ Class to store information provided by the decorator mecascript_global_function_decorator"""
+    function: Callable = None
+    is_mecascript_implementation: bool = False
+
+
+_MX_ROBOT_GLOBAL_FUNCTIONS: dict[str, MecaScriptGlobalFunction] = {}
+
+
+def mecascript_global_function_decorator(function: Optional[Callable] = None,
+                                         *,
+                                         is_mecascript_implementation: bool = False):
+    """This is a decorator used to mark a Robot method to be exported as a global function that will be registered
+       in the mxpy programs namespace so users can call it globally, for example:
+       - MoveJoints() => equivalent to robot.MoveJoints()
+
+    Args:
+        function: The function being flagged as global
+        is_mecascript_implementation: Indicate if this function is expected to be implemented by a MecaScript built-in
+                                      on the robot and registered (attached) once this Python application connects to
+                                      the robot.
+    """
+
+    def decorator(func: Callable) -> Callable:
+        _MX_ROBOT_GLOBAL_FUNCTIONS[func.__name__] = MecaScriptGlobalFunction(
+            is_mecascript_implementation=is_mecascript_implementation)
+        return func
+
+    # Support both usages, with and without arguments:
+    #   @mecascript_global_function_decorator
+    #   @mecascript_global_function_decorator(is_mecascript_implementation=True)
+    if function is None:
+        return decorator
+    else:
+        return decorator(function)
+
+
 class _RobotEvents:
     """Class for storing possible status events for the Mecademic robot.
 
@@ -82,30 +146,26 @@ class _RobotEvents:
         Set if robot is disconnected.
     on_status_updated : event
         Set if robot status is updated.
+    on_loaded_programs_updated: event
+        Set upon response to GetLoadedPrograms.
+    on_mecascript_engine_status_updated: event
+        Set if MecaScript engine status has been updated.
+    on_program_execution_status_updated: event
+        Set if MecaScript scripting engine execution status has been updated.
+    on_mecascript_exec_idle: event
+        Set if MecaScript scripting engine is not executing a function.
     on_network_config_updated : event
         Set if robot network configuration is updated.
     on_status_gripper_updated : event
         Set if gripper status is updated.
-    on_external_tool_status_updated: event
-        Set if external tool status has been updated.
-    on_gripper_state_updated: event
-        Set if gripper state has been updated.
-    on_valve_state_updated: event
-        Set if pneumatic module valve state has been updated.
-    on_output_state_updated: event
-        Set if digital outputs state has been updated.
-    on_input_state_updated: event
-        Set if digital inputs state has been updated.
-    on_vacuum_state_updated: event
-        Set if IO expansion module's vacuum module state has been updated.
     on_holding_part: event
         Set if gripper or IO expansion's vacuum gripper is holding a part.
     on_released_part: event
         Set if gripper or IO expansion's vacuum gripper is not holding a part.
     on_vacuum_purge_done: event
         Set when the vacuum gripper is not purging.
-    on_io_status_updated: event
-        Set if IO expansion module's status has been updated.
+    on_vacuum_purging: event
+        Set when the vacuum gripper is purging.
     on_activated : event
         Set if robot is activated.
     on_deactivated : event
@@ -144,18 +204,72 @@ class _RobotEvents:
         Set if robot is in recovery mode.
     on_deactivate_recovery_mode : event
         Set if robot is not in recovery mode.
-    on_joints_updated : event
-        Set if joint angles has been updated.
-    on_pose_updated : event
-        Set if robot pose has been updated.
+    on_rt_accel_updated : event
+        Set if RT accelerometer data has been updated
+    on_rt_ext_tool_status_updated : event
+        Set if RT external tool status data has been updated
+    on_rt_gripper_force_updated: event
+        Set if RT gripper force has been updated.
+    on_rt_gripper_pos_updated: event
+        Set if RT gripper position has been updated.
+    on_rt_gripper_state_updated: event
+        Set if RT gripper state has been updated.
+    on_rt_valve_state_updated: event
+        Set if RT pneumatic module valve state has been updated.
+    on_rt_io_status_updated: event
+        Set if RT IO expansion module's status has been updated.
+    on_rt_output_state_updated: event
+        Set if RT digital outputs state has been updated.
+    on_rt_input_state_updated: event
+        Set if RT digital inputs state has been updated.
+    on_rt_vacuum_state_updated: event
+        Set if RT IO expansion module's vacuum module state has been updated.
+    on_rt_vacuum_pressure_updated: event
+        Set if RT IO expansion module's vacuum module pressure has been updated.
+    on_rt_target_joint_pos_updated : event
+        Set if RT target joint position has been updated.
+    on_rt_joint_pos_updated : event
+        Set if RT joint position has been updated.
+    on_rt_target_joint_torq_updated : event
+        Set if RT target joint torque has been updated.
+    on_rt_joint_torq_updated : event
+        Set if RT joint torque has been updated.
+    on_rt_target_joint_vel_updated : event
+        Set if RT target joint velocity has been updated.
+    on_rt_joint_vel_updated : event
+        Set if RT joint velocity has been updated.
+    on_rt_target_cart_pos_updated : event
+        Set if RT target Cartesian position has been updated.
+    on_rt_cart_pos_updated : event
+        Set if RT Cartesian position has been updated.
+    on_rt_target_cart_vel_updated : event
+        Set if RT target Cartesian velocity has been updated.
+    on_rt_cart_vel_updated : event
+        Set if RT Cartesian velocity has been updated.
+    on_rt_target_conf_updated : event
+        Set if RT target robot posture configuration has been updated.
+    on_rt_conf_updated : event
+        Set if RT robot posture configuration has been updated.
+    on_rt_target_conf_turn_updated : event
+        Set if RT target robot turn configuration has been updated.
+    on_rt_conf_turn_updated : event
+        Set if RT robot turn configuration has been updated.
+    on_rt_trf_updated : event
+        Set if RT TRF has been updated.
+    on_rt_wrf_updated : event
+        Set if RT WRF has been updated.
+    on_rt_temperature_updated : event
+        Set if RT Temperature has been updated.
+    on_rt_i2t_updated : event
+        Set if RT I2t has been updated.
     on_brakes_activated : event
         Set if brakes are activated.
     on_brakes_deactivated : event
         Set if brakes are deactivated.
-    on_offline_program_started : event
-        Set if there has been a change in the offline program state.
-    on_offline_program_op_done : event
-        Set when offline program operation (list/load/save/delete) has completed.
+    on_program_started : event
+        Set if there has been a change in a running program state.
+    on_file_op_done : event
+        Set when a file management operation (list/load/save/delete) has completed.
     on_end_of_block : event
         Set if end of block has been reached.
     on_end_of_cycle: event
@@ -164,77 +278,113 @@ class _RobotEvents:
         Set if time scaling has changed.
 """
 
-    def __init__(self):
-        self.on_connected = InterruptableEvent()
-        self.on_disconnected = InterruptableEvent()
+    def __init__(self, wait_callback: Optional[Callable] = None):
+        """Constructor for this robot event object
 
-        self.on_status_updated = InterruptableEvent()
-        self.on_network_config_updated = InterruptableEvent()
+        Args:
+            wait_callback (Optional[Callable], optional):
+                Optional callback function that is called periodically while awaiting on a robot event defined
+                in this class.
+                This is mainly used for calling user callbacks while the user thread awaits on one of these events,
+                which simplifies usage of callbacks and avoids having to explicitly call RunCallbacks() in many cases.
+        """
+        self.on_connected = InterruptableEvent(wait_callback=wait_callback)
+        self.on_disconnected = InterruptableEvent(wait_callback=wait_callback)
+        self.welcome_msg_received = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_status_gripper_updated = InterruptableEvent()
-        self.on_external_tool_status_updated = InterruptableEvent()
-        self.on_gripper_state_updated = InterruptableEvent()
-        self.on_valve_state_updated = InterruptableEvent()
-        self.on_output_state_updated = InterruptableEvent()
-        self.on_input_state_updated = InterruptableEvent()
-        self.on_vacuum_state_updated = InterruptableEvent()
-        self.on_holding_part = InterruptableEvent()
-        self.on_released_part = InterruptableEvent()
-        self.on_vacuum_purge_done = InterruptableEvent()
-        self.on_io_status_updated = InterruptableEvent()
+        self.on_status_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_loaded_programs_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_mecascript_engine_status_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_program_execution_status_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_mecascript_exec_idle = InterruptableEvent(wait_callback=wait_callback)
+        self.on_network_config_updated = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_activated = InterruptableEvent()
-        self.on_deactivated = InterruptableEvent()
+        self.on_status_gripper_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_holding_part = InterruptableEvent(wait_callback=wait_callback)
+        self.on_released_part = InterruptableEvent(wait_callback=wait_callback)
+        self.on_vacuum_purge_done = InterruptableEvent(wait_callback=wait_callback)
+        self.on_vacuum_purging = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_homed = InterruptableEvent()
+        self.on_activated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_deactivated = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_error = InterruptableEvent()
-        self.on_error_reset = InterruptableEvent()
+        self.on_homed = InterruptableEvent(wait_callback=wait_callback)
+
+        self.on_error = InterruptableEvent(wait_callback=wait_callback)
+        self.on_error_reset = InterruptableEvent(wait_callback=wait_callback)
 
         # Safety stop support
-        self.on_safety_stop_reset = InterruptableEvent()
-        self.on_safety_stop_resettable = InterruptableEvent()
-        self.on_safety_stop_state_change = InterruptableEvent()
+        self.on_safety_stop_reset = InterruptableEvent(wait_callback=wait_callback)
+        self.on_safety_stop_resettable = InterruptableEvent(wait_callback=wait_callback)
+        self.on_safety_stop_state_change = InterruptableEvent(wait_callback=wait_callback)
 
         # Support for deprecated safety stop methods
-        self.on_pstop2 = InterruptableEvent()
-        self.on_pstop2_resettable = InterruptableEvent()
-        self.on_pstop2_reset = InterruptableEvent()
-        self.on_estop = InterruptableEvent()
-        self.on_estop_reset = InterruptableEvent()
-        self.on_estop_resettable = InterruptableEvent()
+        self.on_pstop2 = InterruptableEvent(wait_callback=wait_callback)
+        self.on_pstop2_resettable = InterruptableEvent(wait_callback=wait_callback)
+        self.on_pstop2_reset = InterruptableEvent(wait_callback=wait_callback)
+        self.on_estop = InterruptableEvent(wait_callback=wait_callback)
+        self.on_estop_reset = InterruptableEvent(wait_callback=wait_callback)
+        self.on_estop_resettable = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_motion_paused = InterruptableEvent()
-        self.on_motion_resumed = InterruptableEvent()
-        self.on_motion_cleared = InterruptableEvent()
+        self.on_motion_paused = InterruptableEvent(wait_callback=wait_callback)
+        self.on_motion_resumed = InterruptableEvent(wait_callback=wait_callback)
+        self.on_motion_cleared = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_activate_sim = InterruptableEvent()
-        self.on_deactivate_sim = InterruptableEvent()
+        self.on_activate_sim = InterruptableEvent(wait_callback=wait_callback)
+        self.on_deactivate_sim = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_activate_ext_tool_sim = InterruptableEvent()
-        self.on_deactivate_ext_tool_sim = InterruptableEvent()
+        self.on_activate_ext_tool_sim = InterruptableEvent(wait_callback=wait_callback)
+        self.on_deactivate_ext_tool_sim = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_io_sim_enabled = InterruptableEvent()
-        self.on_io_sim_disabled = InterruptableEvent()
+        self.on_io_sim_enabled = InterruptableEvent(wait_callback=wait_callback)
+        self.on_io_sim_disabled = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_activate_recovery_mode = InterruptableEvent()
-        self.on_deactivate_recovery_mode = InterruptableEvent()
+        self.on_activate_recovery_mode = InterruptableEvent(wait_callback=wait_callback)
+        self.on_deactivate_recovery_mode = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_joints_updated = InterruptableEvent()
-        self.on_pose_updated = InterruptableEvent()
+        self.on_rt_accel_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_ext_tool_status_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_gripper_force_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_gripper_pos_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_gripper_state_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_valve_state_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_io_status_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_output_state_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_input_state_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_vacuum_state_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_vacuum_pressure_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_target_joint_pos_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_joint_pos_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_target_joint_torq_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_joint_torq_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_target_joint_vel_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_joint_vel_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_target_cart_pos_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_cart_pos_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_target_cart_vel_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_cart_vel_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_target_conf_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_conf_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_target_conf_turn_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_conf_turn_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_trf_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_wrf_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_temperature_updated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_rt_i2t_updated = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_brakes_activated = InterruptableEvent()
-        self.on_brakes_deactivated = InterruptableEvent()
+        self.on_brakes_activated = InterruptableEvent(wait_callback=wait_callback)
+        self.on_brakes_deactivated = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_offline_program_started = InterruptableEvent()
-        self.on_file_op_done = InterruptableEvent()
+        self.on_program_started = InterruptableEvent(wait_callback=wait_callback)
+        self.on_file_op_done = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_time_scaling_changed = InterruptableEvent()
+        self.on_time_scaling_changed = InterruptableEvent(wait_callback=wait_callback)
 
-        self.on_end_of_block = InterruptableEvent()
-        self.on_end_of_cycle = InterruptableEvent()
+        self.on_end_of_block = InterruptableEvent(wait_callback=wait_callback)
+        self.on_end_of_cycle = InterruptableEvent(wait_callback=wait_callback)
 
         self.on_disconnected.set()
+        self.welcome_msg_received.set()
         self.on_deactivated.set()
         self.on_error_reset.set()
 
@@ -252,37 +402,62 @@ class _RobotEvents:
         self.on_time_scaling_changed.set()
 
         self.on_status_updated.set()
+        self.on_loaded_programs_updated.set()
+        self.on_mecascript_engine_status_updated.set()
+        self.on_program_execution_status_updated.set()
+        self.on_mecascript_exec_idle.set()
         self.on_network_config_updated.set()
         self.on_status_gripper_updated.set()
-        self.on_external_tool_status_updated.set()
-        self.on_gripper_state_updated.set()
-        self.on_valve_state_updated.set()
-        self.on_output_state_updated.set()
-        self.on_input_state_updated.set()
-        self.on_vacuum_state_updated.set()
         self.on_holding_part.set()
         self.on_released_part.set()
         self.on_vacuum_purge_done.set()
-        self.on_io_status_updated.set()
+        self.on_vacuum_purging.clear()
 
-        self.on_joints_updated.set()
-        self.on_pose_updated.set()
+        self.on_rt_accel_updated.set()
+        self.on_rt_ext_tool_status_updated.set()
+        self.on_rt_gripper_force_updated.set()
+        self.on_rt_gripper_pos_updated.set()
+        self.on_rt_gripper_state_updated.set()
+        self.on_rt_valve_state_updated.set()
+        self.on_rt_io_status_updated.set()
+        self.on_rt_output_state_updated.set()
+        self.on_rt_input_state_updated.set()
+        self.on_rt_vacuum_state_updated.set()
+        self.on_rt_vacuum_pressure_updated.set()
+        self.on_rt_target_joint_pos_updated.set()
+        self.on_rt_joint_pos_updated.set()
+        self.on_rt_target_joint_torq_updated.set()
+        self.on_rt_joint_torq_updated.set()
+        self.on_rt_target_joint_vel_updated.set()
+        self.on_rt_joint_vel_updated.set()
+        self.on_rt_target_cart_pos_updated.set()
+        self.on_rt_cart_pos_updated.set()
+        self.on_rt_target_cart_vel_updated.set()
+        self.on_rt_cart_vel_updated.set()
+        self.on_rt_target_conf_updated.set()
+        self.on_rt_conf_updated.set()
+        self.on_rt_target_conf_turn_updated.set()
+        self.on_rt_conf_turn_updated.set()
+        self.on_rt_trf_updated.set()
+        self.on_rt_wrf_updated.set()
+        self.on_rt_temperature_updated.set()
+        self.on_rt_i2t_updated.set()
         self.on_brakes_activated.set()
 
     def clear_all(self):
         """Clear all events.
 
         """
-        for interruptable_event in self.__dict__.values():
-            interruptable_event.clear()
+        for event in self.__dict__.values():
+            event.clear()
 
-    def abort_all(self, skipped_events: list[str] = None, message=""):
+    def abort_all(self, skipped_events: List[str] = None, message=""):
         """Abort all events, except for events in skipped_events list.
 
         """
-        for event_name, interruptable_event in self.__dict__.items():
+        for event_name, event in self.__dict__.items():
             if not skipped_events or event_name not in skipped_events:
-                interruptable_event.abort(message)
+                event.abort(message)
 
     def abort_all_on_error(self, message=""):
         """Abort all events in the specific case where the robot has reported an error.
@@ -293,6 +468,10 @@ class _RobotEvents:
                 'on_connected',  # Don't abort a wait for "on_connected" (should be done by now anyways)
                 'on_deactivated',  # Don't abort waiting for "on_deactivated". WaitDeactivated is can be used in error
                 'on_status_updated',  # Don't abort a wait for "on_status_updated", that's what we're doing!
+                'on_loaded_programs_updated',  # Don't abort a wait, still valid in error
+                'on_mecascript_engine_status_updated',  # Don't abort a wait, still valid in error
+                'on_program_execution_status_updated',  # Don't abort a wait, still valid in error
+                'on_mecascript_exec_idle',  # Don't abort a wait, still valid in error
                 'on_network_config_updated',  # Don't abort a wait for "on_network_config_updated", available in error
                 'on_error_reset',  # Don't abort a wait for "on_error_reset" because we got an error
                 'on_end_of_cycle',  # Don't abort a wait for "on_end_of_cycle", cycles should continue during error
@@ -307,6 +486,7 @@ class _RobotEvents:
                 'on_estop_resettable',  # The "EStop resettable" state may still change while in error
                 'on_estop_reset',  # The EStop state may still change while in error
                 'on_time_scaling_changed',  # The set time scaling still works in error
+                'on_motion_cleared',  # Motion remains cleared while the robot is in error
             ],
             message=message)
 
@@ -314,8 +494,18 @@ class _RobotEvents:
         """Clear aborts for all events.
 
         """
-        for interruptable_event in self.__dict__.values():
-            interruptable_event.clear_abort()
+        for event in self.__dict__.values():
+            event.clear_abort()
+
+    def add_tmp_interrupt_all(self, cause: str, exception: MecademicException):
+        """ Add a temporary interrupt cause to all robot events """
+        for event in self.__dict__.values():
+            event.add_tmp_interrupt(cause, exception)
+
+    def remove_tmp_interrupt_all(self, cause: str):
+        """ Remove a temporary interrupt cause to all robot events """
+        for event in self.__dict__.values():
+            event.remove_tmp_interrupt(cause)
 
 
 class _CallbackQueue():
@@ -421,38 +611,51 @@ class _Robot:
         Used to protect internal state of the robot object.
 
     _robot_info: RobotInfo object
+        Returned by GetRobotInfo().
         Store information concerning robot (ex.: serial number)
     _robot_rt_data : RobotRtData object
+        Returned by GetRobotRtData().
         Stores current robot real-time data.
         All attributes of this object are the latest captured on monitor port, so they don't necessarily share the same
         timestamp
     _robot_rt_data_stable : RobotRtData object
         Stores current robot real-time data, but all attributes of object share the same timestamp
     _robot_status: RobotStatus object
+        Returned by GetStatusRobot().
         Stores current robot status
     _robot_safety_status: RobotSafetyStatus object
+        Returned by GetSafetyStatus().
         Stores current robot safety status
     _robot_psu_inputs: RobotPowerSupplyInputs object
+        Returned by GetPowerSupplyInputs().
         Stores current robot power supply input states
     _robot_collision_status: CollisionStatus
+        Sub-members of this class are returned by GetCollisionStatus() and GetWorkZoneStatus.
         Stores current collision status (self collision and work zone boundary)
+    _robot_torque_limits_status: bool
+        Returned (as TorqueLimitsStatus) by GetTorqueLimitsStatus().
+        Stores whether the robot is currently exceeding the torque limits for at least one joint
     _gripper_status: GripperStatus object
+        Returned by GetStatusGripper() (legacy, the new API is GetRtGripperState)
         Stores current gripper status
     _external_tool_status: ExtToolStatus object
+        Returned by GetRtExtToolStatus().
         Stores current external tool status
     _gripper_state: GripperState object
+        Returned by GetRtGripperState().
         Stores current gripper state
     _gripper_state_before_last_move : GripperState object
         Stores gripper state at the time a Open/Close/Move gripper command is sent
         (then used to accelerate WaitGripperMoveCompletion in case target_pos_reached is already True when its called
          because otherwise it's not possible to know if the move has completed, or not yet started)
     _valve_state: ValveState object
+        Returned by GetRtValveState().
         Stores current pneumatic valve state
-    _psu_io_status: IoStatus object
-        Stores current PSU IO module status
     _io_module_status: IoStatus object
+        Returned by GetRtIoStatus(bank_id=MxIoBankId.MX_IO_BANK_ID_IO_MODULE).
         Stores current IO module status
-    _vacuum_state: IoStatus object
+    _vacuum_state: VacuumState object
+        Returned by GetRtVacuumState().
         Stores current IO module's vacuum gripper state
     _sig_gen_status: IoStatus object
         Stores current signal generator status
@@ -480,7 +683,7 @@ class _Robot:
     _internal_checkpoint_counter : int
         Stores the next available checkpoint id for internal checkpoints.
 
-    _enable_synchronous_mode : boolean
+    _enable_synchronous_mode : bool
         If enabled, commands block until action is completed.
 
     _clear_motion_requests : int
@@ -507,7 +710,8 @@ class _Robot:
         """Constructor for an instance of the Robot class.
         """
         # Initialize member variables that are NOT reset by "with" block (i.e. by __enter__ and __exit__)
-        self.logger = logging.getLogger(__name__)
+        self.logger: logging.Logger = logging.getLogger(__name__)
+        self._application_type = ApplicationType.USER_APP
         self._is_initialized = False
         self._offline_mode = False
         # (callbacks remain registered after "with" block
@@ -515,10 +719,10 @@ class _Robot:
         self._run_callbacks_in_separate_thread = False
         self._reset()
 
-        # Build a dictionary of robot commands that, when sending them, we need to update internal states.
+        # Build a dictionary of robot commands that, before sending them, we need to update internal states.
         # We do it like this to catch code using "SendCustomCommand" instead of calling the official public API
         # (for example: robot.SendCustomCommand("ActivateRobot(1)") needs to behave like robot.ActivateRobot)
-        self._send_cmd_handlers: dict[str, Callable] = {
+        self._before_send_cmd_handlers: dict[str, Callable[[Optional[str]], None]] = {
             'activaterobot': self._sending_ActivateRobot,
             'deletefile': self._sending_DeleteFile,
             'deleteprogram': self._sending_DeleteFile,
@@ -530,6 +734,7 @@ class _Robot:
             'home': self._sending_Home,
             'savefile': self._sending_SaveFile,
             'saveprogram': self._sending_SaveFile,
+            'setloadedprograms': self._sending_SetLoadedPrograms,
             'setmonitoringinterval': self._sending_SetMonitoringInterval,
             'settimescaling': self._sending_SetTimeScaling,
             'startprogram': self._sending_StartProgram,
@@ -584,8 +789,8 @@ class _Robot:
             lambda response: self._handle_recovery_mode_status(True),
             mx_st.MX_ST_RECOVERY_MODE_OFF:  # 2050
             lambda response: self._handle_recovery_mode_status(False),
-            mx_st.MX_ST_OFFLINE_START:  # 2063
-            self._handle_offline_start,
+            mx_st.MX_ST_PROGRAM_STARTED:  # 2063
+            self._handle_program_started,
             mx_st.MX_ST_GET_STATUS_GRIPPER:  # 2079
             self._handle_gripper_status_response,
             mx_st.MX_ST_GET_ROBOT_SERIAL:  # 2083
@@ -644,6 +849,8 @@ class _Robot:
             self._handle_rt_vm,
             mx_st.MX_ST_RT_CURRENT:  # 2224
             self._handle_rt_current,
+            mx_st.MX_ST_RT_VL:  # 2225
+            self._handle_rt_vl,
             mx_st.MX_ST_RT_CHECKPOINT:  # 2227
             self._handle_rt_checkpoint,
             mx_st.MX_ST_RT_WRF:  # 2228
@@ -652,6 +859,10 @@ class _Robot:
             self._handle_trf,
             mx_st.MX_ST_RT_CYCLE_END:  # 2230
             self._handle_cycle_end,
+            mx_st.MX_ST_RT_TEMPERATURE:  # 2250
+            self._handle_rt_temperature,
+            mx_st.MX_ST_RT_I2T:  # 2251
+            self._handle_rt_i2t,
             mx_st.MX_ST_RT_EXTTOOL_STATUS:  # 2300
             self._handle_external_tool_status_response,
             mx_st.MX_ST_RT_VALVE_STATE:  # 2310
@@ -680,12 +891,16 @@ class _Robot:
             self._handle_file_op_done,
             mx_st.MX_ST_DELETE_FILE:  # 2503
             self._handle_file_op_done,
+            mx_st.MX_ST_SET_LOADED_PROGRAMS:  # 2505
+            self._handle_file_op_done,
+            mx_st.MX_ST_GET_LOADED_PROGRAMS:  # 2610
+            self._handle_get_loaded_programs,
             mx_st.MX_ST_EOB:  # 3012
             self._handle_eob,
-            mx_st.MX_ST_NO_OFFLINE_SAVED:  # 3017
-            self._handle_offline_program_error,
-            mx_st.MX_ST_OFFLINE_INVALID:  # 3020
-            self._handle_offline_program_error,
+            mx_st.MX_ST_PROGRAM_NOT_FOUND:  # 3017
+            self._handle_start_program_error,
+            mx_st.MX_ST_PROGRAM_INVALID:  # 3020
+            self._handle_start_program_error,
             mx_st.MX_ST_TORQUE_LIMIT_STATUS:  # 3028
             self._handle_torque_limit_status,
             mx_st.MX_ST_CHECKPOINT_REACHED:  # 3030
@@ -720,24 +935,40 @@ class _Robot:
             self._handle_dict_cmd_added,
             mx_st.MX_ST_DICT_CMD_REMOVED:  # 3201
             self._handle_dict_cmd_removed,
-            mx_st.MX_ST_SIDECAR_STATUS:  # 3203
-            self._handle_sidecar_status,
             mx_st.MX_ST_VARIABLE_ADDED:  # 3310
             self._handle_variable_added,
             mx_st.MX_ST_VARIABLE_REMOVED:  # 3311
             self._handle_variable_removed,
+            mx_st.MX_ST_MECASCRIPT_ENGINE_STATUS:  # 3220
+            self._handle_mecascript_engine_status,
+            mx_st.MX_ST_PROGRAM_EXECUTION_STATUS:  # 3222
+            self._handle_program_execution_status,
         }
 
-        # Sidecar support stuff
-        self._sidecar_registered_functions: dict[str, rsc.RegisteredFunction] = {}
-        self._sidecar_overridden_functions: dict[str, callable] = {}
-        self._sidecar_status: list[RobotSidecarStatus] = []
-        self._registered_vars_by_name: dict[str, rsc.RegisteredVariable] = {}
-        self._registered_cyclic_id: dict[int, Union[rsc.RegisteredFunction, rsc.RegisteredVariable]] = {}
+        # List of all loaded programs (mxprog, mxpy, py). Valid only after calling GetLoadedPrograms.
+        self._loaded_programs = LoadedPrograms(programs={})
+        # Loaded mxprog support
+        self._mxprog_registered_commands: dict[str, mecascript.RegisteredCommand] = {}
+        # MecaScript support stuff
+        self._mecascript_registered_commands: dict[str, mecascript.RegisteredCommand] = {}
+        self._mecascript_overridden_commands: dict[str, Callable] = {}
+        self._mecascript_static_global_functions: dict[str, MecaScriptGlobalFunction] = {}
+        self._mecascript_engine_status = MecaScriptEngineStatus()
+        self._program_execution_status = ProgramExecutionStatus()
+        self._mecascript_executing_command: Optional[mecascript.RegisteredCommand] = None
+        self._mecascript_command_continue = False  # True while MecaScript program can continue executing
+        self._mecascript_fct_stop_graceful = False  # Meaningful if _mecascript_command_continue=False (prog stopping)
+        self._mecascript_global_watchers: list[Callable] = []
+        self.programs = mecascript.AttributeContainer(callable_mode=True)
+
+        self._registered_vars_by_name: dict[str, mecascript.RegisteredVariable] = {}
+        self._registered_cyclic_id: dict[int, Union[mecascript.RegisteredCommand, mecascript.RegisteredVariable]] = {}
+        self._missing_robot_command_tested = False
+        self._missing_robot_commands: list[str] = []
 
         # Create a variables container
-        self.vars = VariablesContainer()
-        self.vars.attach(self._get_variable, self._set_variable)
+        self.variables = VariablesContainer()
+        self.variables.attach(self._get_variable, self._set_variable)
 
     def __del__(self):
         """Destructor for an instance of the Robot class.
@@ -772,6 +1003,23 @@ class _Robot:
         """
         self._reset()
 
+    def _set_sidecar_mode(self, embedded: bool):
+        """Indicate if this robot object is within a sidecar engine
+
+        Args:
+            embedded: Running as embedded (or external) sidecar
+        """
+        # Set the application time to sidecar (embedded or external)
+        self._application_type = ApplicationType.EMBEDDED_SIDECAR if embedded else ApplicationType.EXTERNAL_SIDECAR
+
+        # Build a dictionary of all Robot class methods marked as global by mecascript_global_function_decorator
+        self._mecascript_static_global_functions: dict[str, MecaScriptGlobalFunction] = {}
+        for name, global_function in _MX_ROBOT_GLOBAL_FUNCTIONS.items():
+            function = getattr(self, name, None)
+            if callable(function):
+                global_function.function = function
+                self._mecascript_static_global_functions[name] = global_function
+
     def _reset(self):
         """ Reset the Robot class (disconnects, stop threads, clears queues, etc).
         (this code is common to constructor, destructor and __exit__ implicit functions)
@@ -785,15 +1033,21 @@ class _Robot:
         self._address = None
         self._port = None
 
+        self._connect_in_progress = False
         self._command_socket = None
         self._monitor_socket = None
 
         self._rx_thread = None
+        self._rx_thread_running = False
         self._tx_thread = None
+        self._tx_thread_running = False
         self._monitor_rx_thread = None
+        self._monitor_rx_thread_running = False
 
         self._rx_handler_thread = None
+        self._rx_handler_thread_running = False
         self._monitor_rx_handler_thread = None
+        self._monitor_rx_handler_thread_running = False
 
         self._main_lock = threading.RLock()
 
@@ -810,18 +1064,20 @@ class _Robot:
         self._robot_safety_status = RobotSafetyStatus()
         self._robot_psu_inputs = RobotPowerSupplyInputs()
         self._robot_collision_status = CollisionStatus()
+        self._robot_torque_limits_status = False
         self._first_robot_status_received = False
+        self._json_robot_status_received = False
         self._using_legacy_json_api = False
         self._gripper_status = GripperStatus()
         self._external_tool_status = ExtToolStatus()
         self._gripper_state = GripperState()
         self._gripper_state_before_last_move = GripperState()
         self._valve_state = ValveState()
-        self._psu_io_status = IoStatus()
         self._io_module_status = IoStatus()
         self._vacuum_state = VacuumState()
         self._sig_gen_status = IoStatus()
-        self._robot_events = _RobotEvents()
+        self._robot_temperature = RobotTemperature()
+        self._robot_events = _RobotEvents(wait_callback=self._handle_callbacks_while_waiting)
         self._reset_fw_update_status()
 
         self._file_logger = None
@@ -829,6 +1085,7 @@ class _Robot:
         self._monitoring_interval_to_restore = None
         self._auto_connection_watchdog = False
         self._auto_connection_watchdog_last = 0
+        self._skip_msg_queue_threads = False
 
         self._reset_disconnect_attributes()
 
@@ -836,7 +1093,6 @@ class _Robot:
         self._disconnect_on_exception = None
 
         self._offline_mode = None
-        self._sidecar_mode = None
         self._monitor_mode = None
 
         self.default_timeout = DEFAULT_WAIT_TIMEOUT
@@ -845,56 +1101,76 @@ class _Robot:
         self._tmp_rt_joint_pos = None
         self._tmp_rt_cart_pos = None
 
-        self._is_sync = InterruptableEvent()
+        self._is_sync = InterruptableEvent(wait_callback=self._handle_callbacks_while_waiting)
         self._is_sync.set()
         self._tx_sync = 0
         self._tx_sync_pending = 0
         self._rx_sync = 0
 
         self._captured_trajectory = None
+        self._captured_trajectory_path = None
 
-        self._unregister_functions(remote_attributes_only=False)
+        self._unregister_commands(remote_attributes_only=False)
 
         self._is_initialized = True
+
+    def _handle_callbacks_while_waiting(self):
+        """ This function is called while waiting on interruptable events to handle pending callbacks """
+        if not self._run_callbacks_in_separate_thread:
+            self._handle_callbacks(polling=True)
 
     def _reset_disconnect_attributes(self):
         """ Reset class attributes that need to be reset following a disconnection with the robot """
         if not self._offline_mode:
-            self._command_rx_queue = queue.Queue()
-            self._command_tx_queue = queue.Queue()
-            self._monitor_rx_queue = queue.Queue()
+            if self._skip_msg_queue_threads:
+                self._command_rx_queue = None
+                self._command_tx_queue = None
+                self._monitor_rx_queue = None
+            else:
+                self._command_rx_queue = queue.Queue()
+                self._command_tx_queue = queue.Queue()
+                self._monitor_rx_queue = queue.Queue()
         self._rx_timestamp = 0
         self._monitor_timeout_used = False
-        self._custom_response_events = list()
+        self._silent_prefix = ''
+        self._custom_response_events: List[weakref.ReferenceType[InterruptableEvent]] = list()
 
-        self._user_checkpoints = dict()
-        self._internal_checkpoints = dict()
+        self._user_checkpoints: Dict[int, List[InterruptableEvent]] = dict()
+        self._internal_checkpoints: Dict[int, List[InterruptableEvent]] = dict()
         self._internal_checkpoint_counter = MX_CHECKPOINT_ID_MAX + 1
 
         self._clear_motion_requests = 0
 
-        self._unregister_functions(remote_attributes_only=True)
+        self._unregister_commands(remote_attributes_only=True)
         self._unregister_variables()
 
-    def _unregister_functions(self, remote_attributes_only: bool):
-        """Unregister all functions that are no longer relevant
+    def _unregister_commands(self, remote_attributes_only: bool):
+        """Unregister all robot commands that are no longer relevant
 
         Args:
             remote_attributes_only (_type_): True -> Unregister only attributes that were remotely created.
                                                      (this is typically done when disconnecting from the robot and we
-                                                      must cleanup functions that the robot reported to us earlier)
-                                             False -> Unregister all functions (i.e. we're destroying)
+                                                      must cleanup commands that the robot reported to us earlier)
+                                             False -> Unregister all commands (i.e. we're destroying)
         """
         if not self._is_initialized:
             # We're initializing, do this only when disconnecting or destroying
             return
 
-        functions_to_unregister: list[str] = []
-        for function_name, function in self._sidecar_registered_functions.items():
-            if not remote_attributes_only or not function.locally_created:
-                functions_to_unregister.append(function_name)
-        for function_name in functions_to_unregister:
-            self._sidecar_unregister_function(function_name)
+        # Unregister legacy mxprog commands
+        commands_to_unregister: List[str] = []
+        for command_name, command in self._mxprog_registered_commands.items():
+            commands_to_unregister.append(command_name)
+        for command_name in commands_to_unregister:
+            self._mxprog_unregister_command(command_name)
+
+        # Unregister sidecar commands
+        commands_to_unregister: List[str] = []
+        for command_name, command in self._mecascript_registered_commands.items():
+            if not remote_attributes_only or not command.locally_created:
+                commands_to_unregister.append(command_name)
+        for command_name in commands_to_unregister:
+            self._mecascript_unregister_command(command_name)
 
     def _unregister_variables(self):
         """ Unregister all robot variables """
@@ -902,7 +1178,7 @@ class _Robot:
             # We're initializing, do this only when disconnecting or destroying
             return
 
-        variables_to_unregister: list[str] = []
+        variables_to_unregister: List[str] = []
         for name, _ in self._registered_vars_by_name.items():
             variables_to_unregister.append(name)
 
@@ -919,9 +1195,21 @@ class _Robot:
     # Static methods.
     #####################################################################################
 
+    def _rx_thread_fct(self, robot_socket: socket.socket, rx_queue: Optional[queue.Queue]):
+        try:
+            self._rx_thread_fct_common(robot_socket, rx_queue)
+        finally:
+            self._rx_thread_running = False
+
+    def _monitor_rx_thread_fct(self, robot_socket: socket.socket, rx_queue: Optional[queue.Queue]):
+        try:
+            self._rx_thread_fct_common(robot_socket, rx_queue)
+        finally:
+            self._monitor_rx_thread_running = False
+
     #pylint: disable=unused-argument
-    def _rx_thread_fct(self, robot_socket: socket.socket, rx_queue: queue.Queue):
-        """Handle received data on the socket.
+    def _rx_thread_fct_common(self, robot_socket: socket.socket, rx_queue: Optional[queue.Queue]):
+        """Handle received data on the socket (common to control and monitoring thread)
 
         Parameters
         ----------
@@ -936,6 +1224,9 @@ class _Robot:
 
         """
         remainder = ''
+        # If we're not using a rx queue, we won't call self._wait_welcome_message. In that case the rx thread
+        # (here) is responsible to handle the welcome message.
+        must_handle_welcome_msg = rx_queue is None
         while True:
             # Wait for a message from the robot.
             try:
@@ -959,15 +1250,27 @@ class _Robot:
 
             # Put all responses into the queue.
             for response in responses[:-1]:
-                # #logger.debug(f'Socket Rx - Response: {response}')
-                rx_queue.put(Message.from_string(response))
+                #logger.debug(f'Socket Rx - Response: {response}')
+                message = Message.from_string(response)
+                if rx_queue is None:
+                    # No intermediate rx thread, let's handle the response directly here
+                    if must_handle_welcome_msg:
+                        self._handle_welcome_message(message)
+                        must_handle_welcome_msg = False  # Done!
+                        pass
+                    else:
+                        self._handle_rx_msg(message)
+                else:
+                    # Queue for the other thread and let's get back to socket reading
+                    rx_queue.put(message)
 
-        if self._rx_handler_thread is not None:
+        if self._rx_handler_thread_running:
             # Socket closed for reason other than ourself calling Disconnect -> Let's print a trace
             self.logger.warning(f'Rx thread: TCP socket with the robot has been closed')
 
-        # Notify the queue that we're disconnected
-        rx_queue.put(_TERMINATE)
+        if rx_queue is not None:
+            # Notify the queue that we're disconnected
+            rx_queue.put(_TERMINATE)
 
     def _tx_thread_fct(self, robot_socket: socket.socket, tx_queue: queue.Queue):
         """Handle sending data on the socket.
@@ -984,19 +1287,21 @@ class _Robot:
             Logger to use.
 
         """
-        while True:
-            # Wait for a command to be available from the queue.
-            command: str = tx_queue.get(block=True)
+        try:
+            while True:
+                # Wait for a command to be available from the queue.
+                command: str = tx_queue.get(block=True)
 
-            # Terminate thread if requested, otherwise send the command.
-            if command == _TERMINATE:
-                return
-            else:
-                self.logger.debug(f'Socket Tx - Command: {command}')
-                robot_socket.sendall((command + '\0').encode('ascii'))
+                # Terminate thread if requested, otherwise send the command.
+                if command == _TERMINATE:
+                    return
+                else:
+                    self.logger.debug(f'Socket Tx - Command: {command}')
+                    robot_socket.sendall((command + '\0').encode('ascii'))
+        finally:
+            self._tx_thread_running = False
 
-    @staticmethod
-    def _connect_socket(logger: logging.Logger, address: str, port: int, socket_timeout=1.0) -> socket.socket:
+    def _connect_socket(self, logger: logging.Logger, address: str, port: int, socket_timeout=1.0) -> socket.socket:
         """Connects to an arbitrary socket.
 
         Parameters
@@ -1022,6 +1327,12 @@ class _Robot:
 
         # Set final socket timeout
         new_socket.settimeout(socket_timeout)
+
+        if self._skip_msg_queue_threads:
+            # Increase Rx and Tx socket buffer sizes to be able to accumulate a good number of commands before blocking
+            new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)  # 1MB
+            new_socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1024 * 1024)  # 1MB
+
         return new_socket
 
     def _handle_callbacks(self, polling=False):
@@ -1129,15 +1440,43 @@ class _Robot:
                  enable_synchronous_mode: bool = False,
                  disconnect_on_exception: bool = True,
                  monitor_mode: bool = False,
-                 sidecar_mode: bool = False,
                  offline_mode: bool = False,
-                 timeout: float = 1.0):
+                 timeout: float = 1.0,
+                 set_rtc: SetRtcMode = SetRtcMode.SET_ONLY_IF_NEEDED):
         """See documentation in equivalent function in robot.py"""
         try:
             with self._main_lock:
+                # Check if user has specified a custom port to connect to
+                addr_port = address.split(':')
+                mode_str = "monitoring mode" if monitor_mode else "control mode"
+                if len(addr_port) > 1:
+                    port = int(addr_port[1])
+                    address = addr_port[0]
+                else:
+                    port = MX_ROBOT_TCP_PORT_FEED if monitor_mode else MX_ROBOT_TCP_PORT_CONTROL
+
+                ipaddress.ip_address(address)  # This will raise ValueError if the address is not valid
 
                 if self.IsConnected():
+                    # Raise an error if connected to a different address
+                    if address != self._address:
+                        raise InvalidStateError(
+                            f'Already connected to another robot ({self._address}), please disconnect first')
+                    if monitor_mode != self._monitor_mode:
+                        current_mode = "monitoring" if self._monitor_mode else "control"
+                        new_mode = "monitoring" if monitor_mode else "control"
+                        raise InvalidStateError((f'Already connected in {current_mode} mode, '
+                                                 f'please disconnect before reconnecting in {new_mode} mode'))
+                    if port != self._port:
+                        raise InvalidStateError((f'Already connected to another port ({self._port}), '
+                                                 f'please disconnect before reconnecting to port {port}'))
                     return  # Still connected -> Do nothing
+
+                self._connect_in_progress = True
+                self._port = port
+                self._address = address
+                if self._fw_update_reboot_timestamp == 0:  # Don't print this trace when reconnecting during update
+                    self.logger.info(f"Connecting to robot {address}:{self._port} ({mode_str})")
 
                 # Check that the ip address is valid and set address.
                 if not isinstance(address, str):
@@ -1146,43 +1485,34 @@ class _Robot:
                 self._enable_synchronous_mode = enable_synchronous_mode
                 self._disconnect_on_exception = disconnect_on_exception
                 self._offline_mode = offline_mode
-                self._sidecar_mode = sidecar_mode
                 self._monitor_mode = monitor_mode
+                self._skip_msg_queue_threads = self._application_type.is_sidecar()
 
                 # Make sure we start from a fresh state
                 self._reset_disconnect_attributes()
-
-                # Check if user has specified a custom port to connect to
-                addr_port = address.split(':')
-                mode_str = "monitoring mode" if self._monitor_mode else "control mode"
-                if len(addr_port) > 1:
-                    self._port = int(addr_port[1])
-                    address = addr_port[0]
-                else:
-                    self._port = MX_ROBOT_TCP_PORT_FEED if self._monitor_mode else MX_ROBOT_TCP_PORT_CONTROL
-
-                if self._fw_update_reboot_timestamp == 0:  # Don't print this trace when reconnecting during update
-                    self.logger.info(f"Connecting to robot {address}:{self._port} ({mode_str})")
-
-                ipaddress.ip_address(address)
-                self._address = address
 
                 # Reset robot status to default values
                 self._robot_status = RobotStatus()
                 self._robot_safety_status = RobotSafetyStatus()
                 self._robot_psu_inputs = RobotPowerSupplyInputs()
                 self._robot_collision_status = CollisionStatus()
+                self._robot_torque_limits_status = False
                 self._first_robot_status_received = False
+                self._json_robot_status_received = False
                 self._using_legacy_json_api = False
+
+                self._robot_events.clear_all()
 
                 if not self._monitor_mode:
                     self._initialize_command_socket(timeout)
-                    self._initialize_command_connection()
+                    if self._command_rx_queue is None:
+                        # Wait until the welcome message is received from the robot
+                        self._robot_events.welcome_msg_received.wait(timeout=2)
+                    else:
+                        self._initialize_command_connection()
                 else:
                     # Activate the monitoring timeout to detect if we're no more receiving anything from the robot
                     self._monitor_timeout_used = True
-
-                self._robot_events.clear_all()
 
                 self._robot_events.on_deactivated.set()
                 self._robot_events.on_error_reset.set()
@@ -1202,28 +1532,53 @@ class _Robot:
                 self._set_connection_watchdog_enabled(False)
 
                 self._robot_events.on_status_updated.set()
-                self._robot_events.on_network_config_updated.set()
+                self._robot_events.on_loaded_programs_updated.set()
+                self._robot_events.on_mecascript_engine_status_updated.set()
+                self._robot_events.on_program_execution_status_updated.set()
+                self._robot_events.on_mecascript_exec_idle.set()
+                self._robot_events.on_network_config_updated.clear()  # Cleared until first get after connect
                 self._robot_events.on_status_gripper_updated.set()
-                self._robot_events.on_external_tool_status_updated.set()
-                self._robot_events.on_gripper_state_updated.set()
-                self._robot_events.on_valve_state_updated.set()
-                self._robot_events.on_output_state_updated.set()
-                self._robot_events.on_input_state_updated.set()
-                self._robot_events.on_vacuum_state_updated.set()
                 self._robot_events.on_holding_part.set()
                 self._robot_events.on_released_part.set()
                 self._robot_events.on_vacuum_purge_done.set()
-                self._robot_events.on_io_status_updated.set()
+                self._robot_events.on_vacuum_purging.clear()
 
-                self._robot_events.on_joints_updated.set()
-                self._robot_events.on_pose_updated.set()
+                self._robot_events.on_rt_accel_updated.set()
+                self._robot_events.on_rt_ext_tool_status_updated.set()
+                self._robot_events.on_rt_gripper_force_updated.set()
+                self._robot_events.on_rt_gripper_pos_updated.set()
+                self._robot_events.on_rt_gripper_state_updated.set()
+                self._robot_events.on_rt_valve_state_updated.set()
+                self._robot_events.on_rt_io_status_updated.set()
+                self._robot_events.on_rt_output_state_updated.set()
+                self._robot_events.on_rt_input_state_updated.set()
+                self._robot_events.on_rt_vacuum_state_updated.set()
+                self._robot_events.on_rt_vacuum_pressure_updated.set()
+                self._robot_events.on_rt_target_joint_pos_updated.set()
+                self._robot_events.on_rt_joint_pos_updated.set()
+                self._robot_events.on_rt_target_joint_torq_updated.set()
+                self._robot_events.on_rt_joint_torq_updated.set()
+                self._robot_events.on_rt_target_joint_vel_updated.set()
+                self._robot_events.on_rt_joint_vel_updated.set()
+                self._robot_events.on_rt_target_cart_pos_updated.set()
+                self._robot_events.on_rt_cart_pos_updated.set()
+                self._robot_events.on_rt_target_cart_vel_updated.set()
+                self._robot_events.on_rt_cart_vel_updated.set()
+                self._robot_events.on_rt_target_conf_updated.set()
+                self._robot_events.on_rt_conf_updated.set()
+                self._robot_events.on_rt_target_conf_turn_updated.set()
+                self._robot_events.on_rt_conf_turn_updated.set()
+                self._robot_events.on_rt_trf_updated.set()
+                self._robot_events.on_rt_wrf_updated.set()
+                self._robot_events.on_rt_temperature_updated.set()
+                self._robot_events.on_rt_i2t_updated.set()
+
+            if self._robot_info.version.is_at_least(9, 2):
+                self._silent_prefix = '-'
 
             if (self._robot_info.version.is_at_least(11, 1, 5) and (self._port == MX_ROBOT_TCP_PORT_CONTROL)):
                 # Enable JSON mode automatically on this robot
-                self._send_custom_command('EnableJsonMode()',
-                                          expected_responses=None,
-                                          timeout=None,
-                                          skip_internal_check=True)
+                self._send_custom_command('EnableJsonMode', expected_responses=None, timeout=None)
 
             connect_to_monitoring_port = True
             if not self._monitor_mode and self._robot_info.version.major >= 8:
@@ -1231,76 +1586,83 @@ class _Robot:
 
                 if not self._robot_info.rt_message_capable:
                     # For these versions (8.3-), it is not possible to get robot information if in error.
-                    self._send_custom_command('GetStatusRobot',
+                    self._send_custom_command(f'{self._silent_prefix}GetStatusRobot',
                                               expected_responses=[mx_st.MX_ST_GET_STATUS_ROBOT],
-                                              timeout=self.default_timeout,
-                                              skip_internal_check=True)
+                                              timeout=self.default_timeout)
                     if self._robot_status.error_status:
                         can_query_robot_info = False
 
                 if can_query_robot_info:
                     # Fetch the robot serial number
-                    self._send_custom_command('GetRobotSerial',
+                    self._send_custom_command(f'{self._silent_prefix}GetRobotSerial',
                                               expected_responses=[mx_st.MX_ST_GET_ROBOT_SERIAL],
-                                              timeout=self.default_timeout,
-                                              skip_internal_check=True)
+                                              timeout=self.default_timeout)
 
                     # Fetch full version
-                    full_version_response = self._send_custom_command('GetFwVersionFull',
-                                                                      [mx_st.MX_ST_GET_FW_VERSION_FULL],
-                                                                      timeout=self.default_timeout,
-                                                                      skip_internal_check=True)
+                    full_version_response = self._send_custom_command(
+                        f'{self._silent_prefix}GetFwVersionFull',
+                        expected_responses=[mx_st.MX_ST_GET_FW_VERSION_FULL],
+                        timeout=self.default_timeout)
                     full_version = full_version_response.data
-                    self._robot_info.version.update_version(full_version)
+
+                    self._robot_info.version = RobotVersion.from_version_string(full_version)
 
                     # Fetch the current real-time monitoring settings
                     if self._robot_info.rt_message_capable:
-                        self._send_custom_command('GetRealTimeMonitoring',
+                        self._send_custom_command(f'{self._silent_prefix}GetRealTimeMonitoring',
                                                   expected_responses=[mx_st.MX_ST_GET_REAL_TIME_MONITORING],
-                                                  timeout=self.default_timeout,
-                                                  skip_internal_check=True)
+                                                  timeout=self.default_timeout)
 
                         # Get initial monitoring interval
                         monitoring_interval_response = self._send_custom_command(
-                            'GetMonitoringInterval',
+                            f'{self._silent_prefix}GetMonitoringInterval',
                             expected_responses=[mx_st.MX_ST_GET_MONITORING_INTERVAL],
-                            timeout=self.default_timeout,
-                            skip_internal_check=True)
+                            timeout=self.default_timeout)
                         if isinstance(monitoring_interval_response, Message):
                             self._monitoring_interval = float(f'{monitoring_interval_response.data}')
                             self._monitoring_interval_to_restore = self._monitoring_interval
+
+                    # Set the date/time on the robot
+                    if not self._application_type.is_sidecar() and set_rtc != SetRtcMode.DONT_SET_RTC:
+                        self._send_custom_command(f'{self._silent_prefix}SetRtc',
+                                                  args=[int(time.time())],
+                                                  expected_responses=None,
+                                                  timeout=None)
 
                     # Check if this robot supports sending monitoring data on ctrl port (which we want to do to avoid
                     # race conditions between the two sockets causing potential problems with this API)
                     # Also make sure we have received a robot status event before continuing
                     if self._robot_info.rt_on_ctrl_port_capable:
                         connect_to_monitoring_port = False  # We won't need to connect to monitoring port
-                        if self._sidecar_mode:
+                        if self._application_type.is_sidecar():
                             # In sidecar mode, the robot automatically enables ctrl port monitoring
                             pass
                         else:
-                            if self._robot_info.sidecar_capable:
-                                self._send_custom_command('SetDictMonitoring(1,0)',
+                            if self._robot_info.variables_capable:
+                                self._send_custom_command(f'{self._silent_prefix}SetVariablesMonitoring',
+                                                          args=[1],
                                                           expected_responses=None,
-                                                          timeout=None,
-                                                          skip_internal_check=True)
-                                self._send_custom_command('SetVariablesMonitoring(1)',
+                                                          timeout=None)
+                            if self._robot_info.mecascript_capable:
+                                self._send_custom_command(f'{self._silent_prefix}SetDictMonitoring',
+                                                          args=[1, 0],
                                                           expected_responses=None,
-                                                          timeout=None,
-                                                          skip_internal_check=True)
-                            self._send_custom_command('SetCtrlPortMonitoring(1)',
+                                                          timeout=None)
+                            self._send_custom_command(f'{self._silent_prefix}SetCtrlPortMonitoring',
+                                                      args=[1],
                                                       expected_responses=[mx_st.MX_ST_GET_STATUS_ROBOT],
-                                                      timeout=self.default_timeout,
-                                                      skip_internal_check=True)
+                                                      timeout=self.default_timeout)
                         # Since we're going to receive monitoring messages on the control port, we'll periodically
                         # receive events from the robot and can thus enable the "monitor timeout" to detect that
                         # we're disconnected from the robot if ever we no more receive any message from it
                         self._monitor_timeout_used = True
                     else:
-                        self._send_custom_command('GetStatusRobot',
+                        self._send_custom_command(f'{self._silent_prefix}GetStatusRobot',
                                                   expected_responses=[mx_st.MX_ST_GET_STATUS_ROBOT],
-                                                  timeout=self.default_timeout,
-                                                  skip_internal_check=True)
+                                                  timeout=self.default_timeout)
+            else:
+                # Legacy robot
+                pass
 
             if connect_to_monitoring_port:
                 with self._main_lock:
@@ -1310,6 +1672,12 @@ class _Robot:
             # Now that we're connected, let's update _robot_info with the connected Ip address
             self._robot_info.ip_address = address
 
+            if robot_model_is_meca500(self._robot_info.robot_model):
+                # Let's allocate the joint 5's accelerometer Timestamped data with dummy values for now
+                # (and 'enabled' False for now until we receive actual data)
+                self._robot_rt_data.rt_accelerometer[5] = TimestampedData(
+                    0, [0, 0, 0], RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
+
             self.logger.info(f'{self._robot_info}')  # Note: This will print "Connected to..."
 
             if self._robot_info.version.major < 8:
@@ -1318,14 +1686,33 @@ class _Robot:
             self._robot_events.on_connected.set()
             self._callback_queue.put('on_connected')
 
+            if self._application_type.is_sidecar():
+                # Print a warning for all commands that are missing from the public API
+                if len(self._missing_robot_commands) != 0:
+                    self.LogTrace('Warning: The following robot commands are missing from the Robot API:',
+                                  logging.WARNING)
+                    for command_name in self._missing_robot_commands:
+                        self.LogTrace(f' - {command_name}', logging.WARNING)
+                    if self._application_type == ApplicationType.EMBEDDED_SIDECAR:
+                        # Let's consider this fatal for the embedded sidecar application so we don't release a build
+                        # where the robot has a new function that is not implemented in the Python API
+                        raise NotImplementedError(
+                            (f'The robot class is missing the following robot commands {self._missing_robot_commands}. '
+                             f'Please implement them so MecaScript API is coherent with the robot API.'))
+
             # Start callback thread if necessary
             self._start_callback_thread()
+        except InvalidStateError as e:
+            # Just re-raise this exception without disconnecting (we're already connected from a previous attempt)
+            raise e
         except Exception as e:
             if self._fw_update_reboot_timestamp == 0:  # Don't print this trace when reconnecting during firmware update
-                self.logger.info(f'Failed to connect: {e}')
+                self.logger.error(f'Failed to connect: {e}')
             self._disconnect()
             # Uniformize the raised exception to CommunicationError (the message string may clarify what happened)
             raise CommunicationError(e) from e
+        finally:
+            self._connect_in_progress = False
 
     def Disconnect(self):
         """See documentation in equivalent function in robot.py"""
@@ -1347,9 +1734,9 @@ class _Robot:
         # Awake any blocked interruptable event
         self._invalidate_interruptable_events(message="Ask to disconnect from the robot")
 
+        self._shut_down_socket_threads()
         with self._main_lock:
             message = "explicitly disconnected from the robot"
-            self._shut_down_socket_threads()
 
             # Invalidate checkpoints and appropriate interruptable events
             self._invalidate_checkpoints(message, forced=True)
@@ -1359,6 +1746,7 @@ class _Robot:
             self._reset_disconnect_attributes()
 
             # Finally, close sockets.
+            was_connected = self._command_socket is not None or self._monitor_socket is not None
             if self._command_socket is not None:
                 try:
                     self._command_socket.close()
@@ -1379,6 +1767,8 @@ class _Robot:
             self._callback_queue.put('on_disconnected')
 
             self._robot_events.abort_all(message=message)
+            if was_connected:
+                self.logger.info('Disconnected from the robot')
 
         # Now that we're disconnected and posted 'on_disconnected' callback we can stop the callback thread
         self._stop_callback_thread()
@@ -1387,12 +1777,11 @@ class _Robot:
         """See documentation in equivalent function in robot.py"""
         if self._robot_events.on_connected.is_set():
             try:
-                self._check_internal_states(refresh_monitoring_mode=True)
+                self._check_internal_states(just_check_if_connected=True)
                 return True
             # pylint: disable=broad-exception-caught
             except Exception:
-                if not self._fw_update_status.in_progress:
-                    self.logger.info('Connection to robot was lost.')
+                self._disconnect()
                 return False
         else:
             return False
@@ -1418,9 +1807,9 @@ class _Robot:
                     MX_JSON_KEY_CONNECTION_WATCHDOG_TIMEOUT: timeout,
                     MX_JSON_KEY_CONNECTION_WATCHDOG_MESSAGE: message
                 }
-                self._send_json_command('-ConnectionWatchdog', watchdog_ags)
+                self._send_json_command(f'{self._silent_prefix}ConnectionWatchdog', watchdog_ags)
             else:
-                self._send_custom_command(f"-ConnectionWatchdog({timeout})")
+                self._send_custom_command(f'{self._silent_prefix}ConnectionWatchdog', args=[timeout])
 
     def AutoConnectionWatchdog(self, enable: bool, timeout: float = 0, message: Optional[str] = None):
         """See documentation in equivalent function in robot.py"""
@@ -1430,18 +1819,27 @@ class _Robot:
                 self.ConnectionWatchdog(timeout, message)
             self._auto_connection_watchdog = enable
 
+    def SetApiLock(self, key: str):
+        """See documentation in equivalent function in robot.py"""
+        with self._main_lock:
+            self._send_command('SetApiLock', args=key)
+
+    def ApiUnlock(self, key: str):
+        """See documentation in equivalent function in robot.py"""
+        with self._main_lock:
+            self._send_command('ApiUnlock', args=key)
+
     @disconnect_on_exception_decorator
     def ActivateRobot(self):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('ActivateRobot')
 
         if self._enable_synchronous_mode:
             self.WaitActivated()
 
     # pylint: disable=unused-argument
-    def _sending_ActivateRobot(self, args: list[str]):
+    def _sending_ActivateRobot(self, args: Optional[str]):
         """ This function updates internal states when sending ActivateRobot command to the robot """
         self._robot_events.on_activated.clear_abort()
         self._robot_events.on_homed.clear_abort()
@@ -1449,24 +1847,33 @@ class _Robot:
     def DeactivateRobot(self):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('DeactivateRobot')
 
         if self._enable_synchronous_mode:
             self.WaitDeactivated()
 
+    def RebootRobot(self):
+        """See documentation in equivalent function in robot.py"""
+        with self._main_lock:
+            if self._robot_status.activation_state:
+                raise InvalidStateError(f'Robot must be deactivated before it can be rebooted')
+            self._send_command('RebootRobot')
+
+        if self._enable_synchronous_mode:
+            # Wait until the robot is disconnected due to the reboot request
+            self.WaitDisconnected()
+
     @disconnect_on_exception_decorator
     def Home(self):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('Home')
 
         if self._enable_synchronous_mode:
             self.WaitHomed()
 
     # pylint: disable=unused-argument
-    def _sending_Home(self, args: list[str]):
+    def _sending_Home(self, args: Optional[str]):
         """ This function updates internal states when sending Home command to the robot """
         self._robot_events.on_homed.clear_abort()
 
@@ -1474,7 +1881,6 @@ class _Robot:
     def PauseMotion(self):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('PauseMotion')
 
         if self._enable_synchronous_mode:
@@ -1484,7 +1890,6 @@ class _Robot:
     def ResumeMotion(self):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('ResumeMotion')
 
         if self._enable_synchronous_mode:
@@ -1494,14 +1899,13 @@ class _Robot:
     def ClearMotion(self):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('ClearMotion')
 
         if self._enable_synchronous_mode:
             self.WaitMotionCleared(timeout=self.default_timeout)
 
     # pylint: disable=unused-argument
-    def _sending_ClearMotion(self, args: list[str]):
+    def _sending_ClearMotion(self, args: Optional[str]):
         """ This function updates internal states when sending ClearMotion command to the robot """
         # Clearing the motion queue also requires clearing checkpoints, as the robot will not send them anymore.
         message = "ClearMotion"
@@ -1525,9 +1929,9 @@ class _Robot:
         with self._main_lock:
             self._send_command('SetMonitoringInterval', [t])
 
-    def _sending_SetMonitoringInterval(self, args: list[str]):
+    def _sending_SetMonitoringInterval(self, args: Optional[str]):
         """ This function updates internal states when sending SetMonitoringInterval command to the robot """
-        self._monitoring_interval = float(args[0])
+        self._monitoring_interval = float(args)
         self._refresh_auto_connection_watchdog(force=True)
 
     def GetStatusGripper(self, synchronous_update: bool = False, timeout: float = None) -> GripperStatus:
@@ -1536,9 +1940,9 @@ class _Robot:
 
         Parameters
         ----------
-        synchronous_update: boolean
+        synchronous_update
             True -> Synchronously get updated gripper status. False -> Get latest known status.
-        timeout: float, defaults to DEFAULT_WAIT_TIMEOUT
+        timeout
             Timeout (in seconds) waiting for synchronous response from the robot.
 
         Returns
@@ -1548,18 +1952,24 @@ class _Robot:
 
         """
         # Use appropriate default timeout if not specified
+        prefix = ''
         if timeout is None:
             timeout = self.default_timeout
+        if not synchronous_update and self._must_force_sync():
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
-            self._send_sync_command('GetStatusGripper', None, self._robot_events.on_status_gripper_updated, timeout)
+            self._send_sync_command(f'{prefix}GetStatusGripper', None, self._robot_events.on_status_gripper_updated,
+                                    timeout)
 
         with self._main_lock:
-            return copy.deepcopy(self._gripper_status)
+            return self._gripper_status.copy()
 
     def WaitGripperMoveCompletion(self, timeout: Optional[float] = None):
         """See documentation in equivalent function in robot.py"""
         if not self._robot_info.gripper_pos_ctrl_capable:
             raise NotImplementedError(f"Unsupported method for this firmware version")
+        self._warn_if_blocking(if_paused=True)
 
         if timeout is not None and timeout <= 0:
             raise ValueError("timeout must be None or a positive value")
@@ -1599,10 +2009,10 @@ class _Robot:
             wait_duration = timeout_time - current_time
             self.logger.debug(f'WaitGripperMoveCompletion: Waiting for {wait_duration}s')
             try:
-                self._robot_events.on_gripper_state_updated.wait(wait_duration)
+                self._robot_events.on_rt_gripper_state_updated.wait(wait_duration)
                 with self._main_lock:
                     gripper_state = self._gripper_state
-                    self._robot_events.on_gripper_state_updated.clear()
+                    self._robot_events.on_rt_gripper_state_updated.clear()
                     self.logger.debug(f'WaitGripperMoveCompletion: New state is {str(gripper_state)}')
 
                 if waiting_move_start:
@@ -1655,11 +2065,11 @@ class _Robot:
 
     def GripperOpen(self):
         """See documentation in equivalent function in robot.py"""
-        self._gripper_state_before_last_move = copy.deepcopy(self._gripper_state)
+        self._gripper_state_before_last_move = self._gripper_state.copy()
         self._send_motion_command('GripperOpen')
 
-        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable and self.GetRtExtToolStatus(
-        ).is_gripper():
+        if (self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable
+                and self._external_tool_status.is_gripper()):
             gripper_state = self.GetRtGripperState(synchronous_update=True)
             if gripper_state.opened and gripper_state.target_pos_reached:
                 return
@@ -1667,11 +2077,11 @@ class _Robot:
 
     def GripperClose(self):
         """See documentation in equivalent function in robot.py"""
-        self._gripper_state_before_last_move = copy.deepcopy(self._gripper_state)
+        self._gripper_state_before_last_move = self._gripper_state.copy()
         self._send_motion_command('GripperClose')
 
-        if self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable and self.GetRtExtToolStatus(
-        ).is_gripper():
+        if (self._enable_synchronous_mode and self._robot_info.gripper_pos_ctrl_capable
+                and self._external_tool_status.is_gripper()):
             gripper_state = self.GetRtGripperState(synchronous_update=True)
             if gripper_state.closed and gripper_state.target_pos_reached:
                 return
@@ -1685,7 +2095,7 @@ class _Robot:
             else:
                 self.GripperClose()
         else:
-            self._gripper_state_before_last_move = copy.deepcopy(self._gripper_state)
+            self._gripper_state_before_last_move = self._gripper_state.copy()
             self._send_motion_command('MoveGripper', [target])
             if self._enable_synchronous_mode:
                 rt_data = self.GetRobotRtData(synchronous_update=True)
@@ -1693,13 +2103,15 @@ class _Robot:
                     return
                 self.WaitGripperMoveCompletion()
 
-    def SetOutputState(self, bank_id: MxIoBankId, *output_states: Union[MxDigitalIoState, int, str]):
+    def _set_output_state(self, bank_id: MxIoBankId, *output_states: Union[List, MxDigitalIoState, int, str]):
         """See documentation in equivalent function in robot.py"""
         final_args = list(output_states)
+        if isinstance(final_args[0], list) and len(final_args) > 0:
+            final_args = final_args[0]
         final_args.insert(0, bank_id)
         self._send_motion_command('SetOutputState', final_args)
 
-    def SetOutputState_Immediate(self, bank_id: MxIoBankId, *output_states: Union[MxDigitalIoState, int, str]):
+    def _set_output_state_immediate(self, bank_id: MxIoBankId, *output_states: Union[MxDigitalIoState, int, str]):
         """See documentation in equivalent function in robot.py"""
         send_now = True
         desired_state = list(output_states)
@@ -1708,25 +2120,26 @@ class _Robot:
                 # Already desired state (and sync mode).
                 # In sync mode we send one command at the time so we're sure that no state change is pending. So if
                 # already in desired state we don't need to send the command. We actually DON'T want to send the command
-                # because there would be no state change reported by on_vacuum_state_updated and this would timeout
+                # because there would be no state change reported by on_rt_vacuum_state_updated and this would timeout
                 send_now = False
 
         if send_now:
             final_args = copy.deepcopy(desired_state)
             final_args.insert(0, bank_id)
             self._send_immediate_command('SetOutputState_Immediate', final_args,
-                                         self._robot_events.on_output_state_updated)
+                                         self._robot_events.on_rt_output_state_updated)
             if self._enable_synchronous_mode:
                 # Wait until reached desired state (or timeout)
                 self.WaitIOState(bank_id, False, *desired_state, self.default_timeout)
 
     def WaitForAnyCheckpoint(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking(if_paused=True)
         with self._main_lock:
             self._check_internal_states()
             if '*' not in self._internal_checkpoints:
                 self._internal_checkpoints['*'] = list()
-            event = InterruptableEvent()
+            event = InterruptableEvent(wait_callback=self._handle_callbacks_while_waiting)
             self._internal_checkpoints['*'].append(event)
 
         event.wait(timeout=timeout)
@@ -1760,9 +2173,10 @@ class _Robot:
 
     def WaitActivated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
-            if robot_model_is_mg2(self.GetRobotInfo().robot_model):
+            if robot_model_is_mg2(self._robot_info.robot_model):
                 timeout = 5.0
             else:
                 timeout = 30.0
@@ -1770,6 +2184,7 @@ class _Robot:
 
     def WaitDeactivated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1777,9 +2192,10 @@ class _Robot:
 
     def WaitHomed(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
-            if robot_model_is_mg2(self.GetRobotInfo().robot_model):
+            if robot_model_is_mg2(self._robot_info.robot_model):
                 timeout = 5.0
             else:
                 timeout = 40.0
@@ -1787,6 +2203,7 @@ class _Robot:
 
     def WaitSimActivated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1794,6 +2211,7 @@ class _Robot:
 
     def WaitSimDeactivated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1801,6 +2219,7 @@ class _Robot:
 
     def WaitExtToolSimActivated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1808,6 +2227,7 @@ class _Robot:
 
     def WaitExtToolSimDeactivated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1816,6 +2236,7 @@ class _Robot:
     # pylint: disable=unused-argument
     def WaitIoSimEnabled(self, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1825,6 +2246,7 @@ class _Robot:
     # pylint: disable=unused-argument
     def WaitIoSimDisabled(self, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1874,12 +2296,16 @@ class _Robot:
                     timeout: float = None):
         """See WaitOutputState/WaitInputState
         """
+        self._warn_if_blocking()
         expected_states = list(args)
         if timeout is None:
             timeout = self.default_timeout
 
         start_wait = time.monotonic()
-        event = self._robot_events.on_input_state_updated if is_input else self._robot_events.on_output_state_updated
+        if is_input:
+            event = self._robot_events.on_rt_input_state_updated
+        else:
+            event = self._robot_events.on_rt_output_state_updated
         while not self.IsDesiredIoState(bank_id, is_input, *expected_states):
             try:
                 event.wait(timeout=0.01)
@@ -1893,6 +2319,7 @@ class _Robot:
     def WaitRecoveryMode(self, activated: bool, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
+        self._warn_if_blocking()
         if timeout is None:
             timeout = self.default_timeout
         if activated:
@@ -1902,6 +2329,7 @@ class _Robot:
 
     def WaitForError(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_error.wait(timeout=timeout)
@@ -1915,6 +2343,7 @@ class _Robot:
 
     def WaitPStop2ResetDeprecated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1922,6 +2351,7 @@ class _Robot:
 
     def WaitPStop2ResettableDeprecated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1929,6 +2359,7 @@ class _Robot:
 
     def WaitEStopResetDeprecated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1936,6 +2367,7 @@ class _Robot:
 
     def WaitEStopResettableDeprecated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1943,6 +2375,7 @@ class _Robot:
 
     def WaitSafetyStopReset(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1950,6 +2383,7 @@ class _Robot:
 
     def WaitSafetyStopResettable(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1957,6 +2391,7 @@ class _Robot:
 
     def WaitSafetyStopStateChange(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1966,6 +2401,7 @@ class _Robot:
 
     def WaitMotionResumed(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        #self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1973,6 +2409,7 @@ class _Robot:
 
     def WaitMotionPaused(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        #self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
@@ -1980,15 +2417,21 @@ class _Robot:
 
     def WaitMotionCleared(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
+        #self._warn_if_blocking()
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         self._robot_events.on_motion_cleared.wait(timeout=timeout)
 
-    def WaitEndOfCycle(self, timeout: float = None):
+    def WaitEndOfCycle(self, timeout: float = None, *, force_cycle=False):
         """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
         if self._robot_events.on_end_of_cycle.is_set():
             self._robot_events.on_end_of_cycle.clear()
+
+        if force_cycle and self._robot_info.version.is_at_least(12, 0, 0):
+            with self._main_lock:
+                self._send_command('ForceRealTimeMonitoring')
 
         # Use appropriate default timeout if not specified
         if timeout is None:
@@ -1997,14 +2440,18 @@ class _Robot:
 
     def WaitIdle(self, timeout: float = None, wait_rt_data=False):
         """See documentation in equivalent function in robot.py"""
-        with self._main_lock:
-            # Can't wait if robot is in error (already "idle")
-            if self._robot_status.error_status:
-                raise InterruptException('Robot is in error')
+        self._warn_if_blocking(if_paused=True)
         checkpoint = self._set_checkpoint_internal()
 
         start_time = time.monotonic()
-        checkpoint.wait(timeout=timeout)
+        try:
+            checkpoint.wait(timeout=timeout)
+        except InterruptException as e:
+            # If the error reports an interrupted checkpoint, let's change the message to be clearer
+            # (so the user does not have to guess/understand that WaitIdle is using a checkpoint internally)
+            if _CHECKPOINT_ABORT_MSG in e.message:
+                raise InterruptException('WaitIdle interrupted by the robot') from e
+            raise e
         end_time = time.monotonic()
 
         if timeout:
@@ -2020,7 +2467,6 @@ class _Robot:
     def ResetError(self):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('ResetError')
 
         if self._enable_synchronous_mode:
@@ -2029,7 +2475,6 @@ class _Robot:
     def ResetPStop2Deprecated(self, timeout: float = None):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             if self._robot_info.version.is_at_least(9, 2):
                 self._send_command('ResetPStop2')
             else:
@@ -2045,15 +2490,23 @@ class _Robot:
     def Delay(self, t: float):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
-            if not self._robot_events.on_homed.is_set():
-                raise InvalidStateError('This command requires robot to be homed.')
             self._send_command('Delay', [t])
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
 
         if self._enable_synchronous_mode:
             checkpoint.wait()
+
+    def sleep(self, duration: float):
+        """See documentation in equivalent function in robot.py"""
+        start_time = time.monotonic()
+        while True:
+            elapsed = time.monotonic() - start_time
+            if elapsed >= duration:
+                return
+            if not self.IsConnected():
+                raise InterruptException("Sleep interrupted due to disconnection with the robot")
+            time.sleep(0.01)
 
     def VacuumGripReleaseImmediate(self, release: bool):
         """See VacuumGrip_Immediate/VacuumRelease_Immediate"""
@@ -2062,51 +2515,94 @@ class _Robot:
             # Already desired state (and sync mode).
             # In sync mode we send one command at the time so we're sure that no state change is pending. So if already
             # in desired state we don't need to send the command. We actually DON'T want to send the command because
-            # there would be no state change reported by on_vacuum_state_updated and this would timeout
+            # there would be no state change reported by on_rt_vacuum_state_updated and this would timeout
             return
         else:
             if release:
                 self._send_immediate_command('VacuumRelease_Immediate', None,
-                                             self._robot_events.on_vacuum_state_updated)
+                                             self._robot_events.on_rt_vacuum_state_updated)
             else:
-                self._send_immediate_command('VacuumGrip_Immediate', None, self._robot_events.on_vacuum_state_updated)
+                self._send_immediate_command('VacuumGrip_Immediate', None,
+                                             self._robot_events.on_rt_vacuum_state_updated)
             if self._enable_synchronous_mode:
                 # Wait until reached desired state (or timeout)
                 start_wait = time.monotonic()
                 while self._vacuum_state.vacuum_on != expected_vacuum_on:
                     try:
-                        self._robot_events.on_vacuum_state_updated.wait(timeout=self.default_timeout)
+                        self._robot_events.on_rt_vacuum_state_updated.wait(timeout=self.default_timeout)
                     except TimeoutException as e:
                         # Check final timeout
                         elapsed_sec = time.monotonic() - start_wait
                         if elapsed_sec > self.default_timeout:
                             raise e
-                    self._robot_events.on_vacuum_state_updated.clear()
+                    self._robot_events.on_rt_vacuum_state_updated.clear()
 
-    def StartProgram(self, n: int | str, timeout: float = None):
-        """See documentation in equivalent function in robot.py"""
-        with self._main_lock:
-            self._check_internal_states()
-            self._send_command('StartProgram', [n])
-
-        if self._enable_synchronous_mode:
-            try:
-                self._robot_events.on_offline_program_started.wait(timeout=timeout)
-            except InterruptException as e:
-                raise InvalidStateError(str(e)) from e
-
-    def _sending_StartProgram(self, args: list[str]):
-        """ This function updates internal states when sending StartProgram command to the robot """
-        self._robot_events.on_offline_program_started.clear()
-
-    def ListFiles(self, timeout: float = None) -> dict:
+    @disconnect_on_exception_decorator
+    def WaitReleasedPart(self, timeout: Optional[float] = None):
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
         if timeout is None:
-            timeout = OFFLINE_PROGRAM_OP_DEFAULT_TIMEOUT
+            timeout = self.default_timeout
+        self._robot_events.on_released_part.wait(timeout=timeout)
+
+    def WaitPurgeDone(self, timeout: Optional[float] = None, wait_purge_started=True):
+        """See documentation in equivalent function in robot.py"""
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if wait_purge_started:
+            self._robot_events.on_vacuum_purging.wait(timeout=timeout)
+        self._robot_events.on_vacuum_purge_done.wait(timeout=timeout)
+
+    def StartProgram(self, name: int | str, timeout: float = None):
+        """See documentation in equivalent function in robot.py"""
+        is_sidecar_command = False
+        with self._main_lock:
+            is_sidecar_command = name in self._mecascript_registered_commands
+            if not is_sidecar_command and isinstance(name, str):
+                # Alternative: User may call a program by path instead of name. We can convert the path
+                # to program name to look into our list of registered command in case it matches one
+                name_alt = MX_PROGRAMS_PREFIX + '.' + name
+                name_alt = name_alt.replace('/', '.')
+                if name_alt.lower().endswith(MX_PROG_FILE_EXTENSION) or name_alt.lower().endswith(MX_PY_FILE_EXTENSION):
+                    name_alt = name_alt.rsplit('.', 1)[0]
+                is_sidecar_command = name_alt in self._mecascript_registered_commands
+                if is_sidecar_command:
+                    name = name_alt
+
+            if not is_sidecar_command:
+                # Note: Non-sidecar StartProgram calls are always asynchronous so here we can call _send_command
+                # within _main_lock, it will no block
+                self._send_command('StartProgram', [name])
+            else:
+                # _mecascript_call_registered_command is called below outside lock
+                pass
+
+        # Blocking call, must be performed outside _main_lock
+        try:
+            if is_sidecar_command:
+                self._mecascript_call_registered_command(command_name=name, timeout=timeout)
+            elif self._enable_synchronous_mode:
+                self._robot_events.on_program_started.wait(timeout=timeout)
+        except InterruptException as e:
+            raise InvalidStateError(str(e)) from e
+
+    def StopProgram(self):
+        """See documentation in equivalent function in robot.py"""
+        with self._main_lock:
+            self._send_command('StopProgram')
+
+    def _sending_StartProgram(self, args: Optional[str]):
+        """ This function updates internal states when sending StartProgram command to the robot """
+        self._robot_events.on_program_started.clear()
+
+    def ListFiles(self, timeout: float = None, as_dict=False) -> Union[RobotFileList, dict]:
+        """See documentation in equivalent function in robot.py"""
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = FILE_MANAGEMENT_OP_DEFAULT_TIMEOUT
 
         with self._main_lock:
-            self._check_internal_states()
             if self._robot_info.version.is_at_least(11, 1, 3):
                 self._send_command('ListFiles')
             else:
@@ -2116,25 +2612,37 @@ class _Robot:
         except InterruptException as e:
             raise InvalidStateError(str(e)) from e
         data = response.json_data.get(MX_JSON_KEY_DATA, {})
+        files: dict[str, dict] = {}
         if "programs" in data:
-            return data["programs"]
+            files = data["programs"]
         elif "files" in data:
-            return data["files"]
+            files = data["files"]
         else:
-            return {}
+            files = {}
+        if as_dict:
+            return files
+        # Build RobotFileList from the returned dict
+        file_list = RobotFileList()
+        for file_name, file_dict in files.items():
+            status: dict = file_dict.get("status", {})
+            valid = status.get("valid", False)
+            invalid_lines = status.get("invalidLines", [])
+            if file_name not in file_list.files:
+                file_list.files[file_name] = RobotFileStatus()
+            file_list.files[file_name].program_status = RobotProgramStatus(valid, invalid_lines)
+        return file_list
 
-    def _sending_ListFiles(self, args: list[str]):
+    def _sending_ListFiles(self, args: Optional[str]):
         """ This function updates internal states when sending ListFiles command to the robot """
         self._robot_events.on_file_op_done.clear()
 
-    def LoadFile(self, name: str, timeout: float = None) -> dict:
+    def LoadFile(self, name: str, timeout: float = None, as_dict=False) -> Union[RobotFile, dict]:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
         if timeout is None:
-            timeout = OFFLINE_PROGRAM_OP_DEFAULT_TIMEOUT
+            timeout = FILE_MANAGEMENT_OP_DEFAULT_TIMEOUT
 
         with self._main_lock:
-            self._check_internal_states()
             self._robot_events.on_file_op_done.clear()
 
             json_data = {"name": name}
@@ -2146,9 +2654,30 @@ class _Robot:
             response = self._robot_events.on_file_op_done.wait(timeout=timeout)
         except InterruptException as e:
             raise InvalidStateError(str(e)) from e
-        return response.json_data.get(MX_JSON_KEY_DATA, {})
+        file_dict = response.json_data.get(MX_JSON_KEY_DATA, {})
+        if as_dict:
+            return file_dict
+        # Build RobotFile object
+        status: dict = file_dict.get("status", {})
+        valid = status.get("valid", False)
+        invalid_lines = status.get("invalidLines", [])
+        is_base64 = file_dict.get("base64", False)
+        program_status = RobotProgramStatus(valid, invalid_lines)
+        content: str = None
+        if is_base64:
+            try:
+                decoded_bytes = base64.b64decode(file_dict.get("content", ""))
+                # Try to interpret as UTF-8 text
+                content = decoded_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                # Not valid UTF-8 so keep as bytes
+                content = decoded_bytes
+        if not content:
+            content = file_dict.get("content", "")
+        file = RobotFile(name=name, content=content, status=RobotFileStatus(program_status))
+        return file
 
-    def _sending_LoadFile(self, args: list[str]):
+    def _sending_LoadFile(self, args: Optional[str]):
         """ This function updates internal states when sending LoadFile command to the robot """
         self._robot_events.on_file_op_done.clear()
 
@@ -2156,13 +2685,26 @@ class _Robot:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
         if timeout is None:
-            timeout = OFFLINE_PROGRAM_OP_DEFAULT_TIMEOUT
+            timeout = FILE_MANAGEMENT_OP_DEFAULT_TIMEOUT
 
         with self._main_lock:
-            self._check_internal_states()
             self._robot_events.on_file_op_done.clear()
 
-            if self._robot_info.version.is_at_least(11, 1, 3):
+            if self._robot_info.version.is_at_least(12, 1, 0):
+                # Always convert the file data to base64 in case it contains binary
+                is_base64 = False
+                if isinstance(content, (bytes, bytearray)):
+                    content = base64.b64encode(content).decode('ascii')
+                    is_base64 = True
+                json_data = {
+                    "name": name,
+                    "content": content,
+                    "allowInvalid": allow_invalid,
+                    "overwrite": overwrite,
+                    "base64": is_base64
+                }
+                self._send_json_command('SaveFile', json_data)
+            elif self._robot_info.version.is_at_least(11, 1, 3):
                 json_data = {"name": name, "content": content, "allowInvalid": allow_invalid, "overwrite": overwrite}
                 self._send_json_command('SaveFile', json_data)
             else:
@@ -2174,7 +2716,7 @@ class _Robot:
         except InterruptException as e:
             raise InvalidStateError(str(e)) from e
 
-    def _sending_SaveFile(self, args: list[str]):
+    def _sending_SaveFile(self, args: Optional[str]):
         """ This function updates internal states when sending SaveFile command to the robot """
         self._robot_events.on_file_op_done.clear()
 
@@ -2182,10 +2724,9 @@ class _Robot:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
         if timeout is None:
-            timeout = OFFLINE_PROGRAM_OP_DEFAULT_TIMEOUT
+            timeout = FILE_MANAGEMENT_OP_DEFAULT_TIMEOUT
 
         with self._main_lock:
-            self._check_internal_states()
             json_data = {"name": name}
             if self._robot_info.version.is_at_least(11, 1, 3):
                 self._send_json_command('DeleteFile', json_data)
@@ -2197,259 +2738,617 @@ class _Robot:
         except InterruptException as e:
             raise InvalidStateError(str(e)) from e
 
-    def _sending_DeleteFile(self, args: list[str]):
+    def _sending_DeleteFile(self, args: Optional[str]):
         """ This function updates internal states when sending DeleteFile command to the robot """
         self._robot_events.on_file_op_done.clear()
+
+    def SetLoadedPrograms(self,
+                          *,
+                          files_to_load: Optional[List[str]] = None,
+                          files_to_unload: Optional[List[str]] = None,
+                          synchronous_update: bool = True,
+                          timeout: Optional[float] = None):
+        """See documentation in equivalent function in robot.py"""
+
+        with self._main_lock:
+            # Convert files_to_load and files_to_unload into the dict syntax expected by this robot JSON command
+            file_list: List[dict] = []
+            if files_to_load is not None:
+                for file_to_load in files_to_load:
+                    file_list.append({
+                        MX_JSON_KEY_LOADED_PROGRAM_NAME: file_to_load,
+                        MX_JSON_KEY_LOADED_PROGRAM_LOADED_CFG: True
+                    })
+            if files_to_unload is not None:
+                for file_to_unload in files_to_unload:
+                    file_list.append({
+                        MX_JSON_KEY_LOADED_PROGRAM_NAME: file_to_unload,
+                        MX_JSON_KEY_LOADED_PROGRAM_LOADED_CFG: False
+                    })
+            json_data = {MX_JSON_KEY_LOADED_PROGRAMS_FILES: file_list}
+            self._send_json_command('SetLoadedPrograms', json_data)
+
+        if synchronous_update:
+            self.WaitProgramsLoaded(files_to_load=files_to_load, files_to_unload=files_to_unload, timeout=timeout)
+
+    def WaitProgramsLoaded(self,
+                           *,
+                           files_to_load: Optional[List[str]] = None,
+                           files_to_unload: Optional[List[str]] = None,
+                           timeout: Optional[float] = None):
+        """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = FILE_MANAGEMENT_OP_DEFAULT_TIMEOUT
+
+        start_wait = time.monotonic()
+        # First, wait until robot file operations have finished (which should be the case after SetLoadedPrograms
+        # has finished writing the robot json configuration file).
+        # Note that this does not wait until the sidecar engine has confirmed the programs are loaded/unloaded.
+        try:
+            self._robot_events.on_file_op_done.wait(timeout=timeout)
+        except InterruptException as e:
+            raise InvalidStateError(str(e)) from e
+
+        # Now wait until we receive the robot update that confirms that the programs are properly loaded
+        sleep_duration = 0.001
+        while True:
+            elapsed = time.monotonic() - start_wait
+            if elapsed > timeout:
+                raise TimeoutException(f'Timeout waiting for robot to confirm programs are loaded/unloaded')
+            all_ok = True
+            sidecar_status = self.GetMecaScriptEngineStatus()
+            loaded_programs = self.GetLoadedPrograms()
+            if files_to_load is not None:
+                for file_to_load in files_to_load:
+                    loaded_status = MxProgramStatus.MX_PROGRAM_UNLOADED
+                    if (sidecar_status.loaded_programs_status is not None
+                            and file_to_load in sidecar_status.loaded_programs_status):
+                        loaded_status = sidecar_status.loaded_programs_status[file_to_load].status
+                    loaded_cfg = (file_to_load in loaded_programs.programs
+                                  and loaded_programs.programs[file_to_load].configured_to_load)
+                    if not loaded_cfg:
+                        all_ok = False
+                        break
+                    if not file_to_load.endswith('.mxprog'):
+                        # Also wait until the sidecar engine confirms it's loaded
+                        if loaded_status == MxProgramStatus.MX_PROGRAM_FAILED_TO_LOAD:
+                            raise CommandFailedException(
+                                f'Program {file_to_load} failed to load. See robot log for details.')
+                        if loaded_status != MxProgramStatus.MX_PROGRAM_LOADED:
+                            all_ok = False
+                            break
+            if files_to_unload is not None:
+                for file_to_unload in files_to_unload:
+                    loaded_status = MxProgramStatus.MX_PROGRAM_UNLOADED
+                    if (sidecar_status.loaded_programs_status is not None
+                            and file_to_unload in sidecar_status.loaded_programs_status):
+                        loaded_status = sidecar_status.loaded_programs_status[file_to_unload].status
+                    loaded_cfg = (file_to_unload in loaded_programs.programs
+                                  and loaded_programs.programs[file_to_unload].configured_to_load)
+                    if loaded_cfg:
+                        all_ok = False
+                        break
+                    if not file_to_unload.endswith('.mxprog'):
+                        if (loaded_status != MxProgramStatus.MX_PROGRAM_UNLOADED
+                                and loaded_status != MxProgramStatus.MX_PROGRAM_FAILED_TO_LOAD
+                                and loaded_status != MxProgramStatus.MX_PROGRAM_NOT_FOUND):
+                            all_ok = False
+                            break
+            if all_ok:
+                return
+            time.sleep(sleep_duration)
+            if sleep_duration < 1:
+                sleep_duration += 0.005  # As we're waiting, wait longer before "get" loops
+            with self._main_lock:
+                self._check_internal_states()
+
+    def WaitMecaScriptEngineReady(self, *, expected_ready: bool = True, timeout: Optional[float] = None):
+        """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
+        if timeout is None:
+            timeout = FILE_MANAGEMENT_OP_DEFAULT_TIMEOUT
+        start = time.monotonic()
+        while True:
+            status = self.GetMecaScriptEngineStatus(synchronous_update=True, timeout=timeout)
+            if expected_ready is False and status is None:
+                break  # Not running as expected
+            if expected_ready is True and status is not None and status.ready:
+                break  # Running as expected
+
+            # Check if timeout elapsed
+            if time.monotonic() - start > timeout:
+                raise TimeoutError(f'Timeout waiting for the MecaScript')
+            # Test again later
+            time.sleep(0.01)
+
+    def _sending_SetLoadedPrograms(self, args: Optional[str]):
+        """ This function updates internal states when sending SetLoadedPrograms command to the robot """
+        self._robot_events.on_file_op_done.clear()
+
+    def GetRtAccelerometer(self,
+                           n: int,
+                           *,
+                           include_timestamp: bool = False,
+                           synchronous_update: bool = True,
+                           timeout: float = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        if n not in self._robot_rt_data.rt_accelerometer:
+            raise ArgErrorException(f'Joint {n} does not have accelerometer reading')
+        return self._send_rt_get_command_args('GetRtAccelerometer', [n], self._robot_events.on_rt_accel_updated,
+                                              self._robot_rt_data.rt_accelerometer[n], include_timestamp,
+                                              synchronous_update, timeout)
 
     def GetRtExtToolStatus(self,
                            include_timestamp: bool = False,
                            synchronous_update: bool = False,
-                           timeout: float = None) -> ExtToolStatus:
+                           timeout: float = None) -> Union[TimestampedData, ExtToolStatus]:
+        """See documentation in equivalent function in robot.py"""
+        self._send_rt_get_command('GetRtExtToolStatus', self._robot_events.on_rt_ext_tool_status_updated,
+                                  self._robot_rt_data.rt_external_tool_status, include_timestamp, synchronous_update,
+                                  timeout)
+        with self._main_lock:
+            if include_timestamp:
+                return self._robot_rt_data.rt_external_tool_status.copy()
+            else:
+                return self._external_tool_status.copy()
+
+    def GetNetworkCfg(self, synchronous_update: bool = True, timeout: float = None) -> NetworkConfig:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
+        prefix = ''
         if timeout is None:
             timeout = self.default_timeout
+        synchronous_update = True  # For now, this function is only supported in sync mode
+        if not synchronous_update and self._must_force_sync():
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
-            self._send_sync_command('GetRtExtToolStatus', None, self._robot_events.on_external_tool_status_updated,
+            # Note: Use legacy GetNetworkConfig (instead of GetNetworkCfg) for compatibility with older robot versions
+            self._send_sync_command(f'{prefix}GetNetworkConfig', None, self._robot_events.on_network_config_updated,
                                     timeout)
 
         with self._main_lock:
-            if include_timestamp:
-                return copy.deepcopy(self._robot_rt_data.rt_external_tool_status)
-            else:
-                return copy.deepcopy(self._external_tool_status)
-
-    def GetNetworkCfg(self, synchronous_update: bool = False, timeout: float = None) -> NetworkConfig:
-        """See documentation in equivalent function in robot.py"""
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
-        if synchronous_update:
-            # Note: Use legacy GetNetworkConfig (instead of GetNetworkCfg) for compatibility with older robot versions
-            self._send_sync_command('GetNetworkConfig', None, self._robot_events.on_network_config_updated, timeout)
-
-        with self._main_lock:
-            return copy.deepcopy(self._network_config)
+            return self._network_config.copy()
 
     def GetRtIoStatus(self,
                       bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
                       include_timestamp: bool = False,
                       synchronous_update: bool = False,
-                      timeout: float = None) -> IoStatus:
+                      timeout: float = None) -> Union[TimestampedData, IoStatus]:
         """See documentation in equivalent function in robot.py"""
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
-        if synchronous_update:
-            self._send_sync_command(f'GetRtIoStatus({bank_id})', None, self._robot_events.on_io_status_updated, timeout)
+        self._send_rt_get_command_args('GetRtIoStatus', [bank_id], self._robot_events.on_rt_io_status_updated, None,
+                                       include_timestamp, synchronous_update, timeout)
 
         with self._main_lock:
             if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
                 if include_timestamp:
-                    return copy.deepcopy(self._robot_rt_data.rt_io_module_status)
+                    return self._robot_rt_data.rt_io_module_status.copy()
                 else:
-                    return copy.deepcopy(self._io_module_status)
+                    return self._io_module_status.copy()
             if bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
                 if include_timestamp:
-                    return copy.deepcopy(self._robot_rt_data.rt_sig_gen_status)
+                    return self._robot_rt_data.rt_sig_gen_status.copy()
                 else:
-                    return copy.deepcopy(self._sig_gen_status)
+                    return self._sig_gen_status.copy()
             else:
-                raise MecademicException("Argument Error in Command : GetRtIoStatus")
+                raise ArgErrorException("Argument Error in Command : GetRtIoStatus")
+
+    def GetRtGripperForce(self,
+                          *,
+                          include_timestamp: bool = False,
+                          synchronous_update: bool = True,
+                          timeout: Optional[float] = None) -> Union[TimestampedData, float]:
+        """See documentation in equivalent function in robot.py"""
+        result = self._send_rt_get_command('GetRtGripperForce', self._robot_events.on_rt_gripper_force_updated,
+                                           self._robot_rt_data.rt_gripper_force, include_timestamp, synchronous_update,
+                                           timeout)
+        return result if include_timestamp else result[0]
+
+    def GetRtGripperPos(self,
+                        *,
+                        include_timestamp: bool = False,
+                        synchronous_update: bool = True,
+                        timeout: Optional[float] = None) -> Union[TimestampedData, float]:
+        """See documentation in equivalent function in robot.py"""
+        result = self._send_rt_get_command('GetRtGripperPos', self._robot_events.on_rt_gripper_pos_updated,
+                                           self._robot_rt_data.rt_gripper_pos, include_timestamp, synchronous_update,
+                                           timeout)
+        return result if include_timestamp else result[0]
 
     def GetRtGripperState(self,
                           include_timestamp: bool = False,
                           synchronous_update: bool = False,
-                          timeout: float = None) -> GripperState:
+                          timeout: float = None) -> Union[TimestampedData, GripperState]:
         """See documentation in equivalent function in robot.py"""
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
-        if synchronous_update:
-            self._send_sync_command('GetRtGripperState', None, self._robot_events.on_gripper_state_updated, timeout)
-
+        self._send_rt_get_command('GetRtGripperState', self._robot_events.on_rt_gripper_state_updated, None,
+                                  include_timestamp, synchronous_update, timeout)
         with self._main_lock:
             if include_timestamp:
-                return copy.deepcopy(self._robot_rt_data.rt_gripper_state)
+                return self._robot_rt_data.rt_gripper_state.copy()
             else:
-                return copy.deepcopy(self._gripper_state)
+                return self._gripper_state.copy()
 
     def GetRtValveState(self,
                         include_timestamp: bool = False,
                         synchronous_update: bool = False,
-                        timeout: float = None) -> ValveState:
+                        timeout: float = None) -> Union[TimestampedData, ValveState]:
         """See documentation in equivalent function in robot.py"""
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
-        if synchronous_update:
-            self._send_sync_command('GetRtValveState', None, self._robot_events.on_valve_state_updated, timeout)
-
+        self._send_rt_get_command('GetRtValveState', self._robot_events.on_rt_valve_state_updated, None,
+                                  include_timestamp, synchronous_update, timeout)
         with self._main_lock:
             if include_timestamp:
-                return copy.deepcopy(self._robot_rt_data.rt_valve_state)
+                return self._robot_rt_data.rt_valve_state.copy()
             else:
-                return copy.deepcopy(self._valve_state)
+                return self._valve_state.copy()
 
     def GetRtOutputState(self,
-                         bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
+                         bank_id: Union[MxIoBankId, str] = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
                          synchronous_update: bool = False,
-                         timeout: float = None) -> TimestampedData:
+                         timeout: float = None,
+                         include_timestamp: bool = False) -> Union[TimestampedData, List[int]]:
         """See documentation in equivalent function in robot.py"""
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
-        if synchronous_update:
-            self._send_sync_command(f'GetRtOutputState({bank_id})', None, self._robot_events.on_output_state_updated,
-                                    timeout)
+        event: InterruptableEvent = None
+        if self._must_force_sync():
+            if isinstance(bank_id, str):
+                event = self.GetInterruptableEvent([MxRobotStatusCode.MX_ST_RT_OUTPUT_STATE])
+        self._send_rt_get_command_args('GetRtOutputState', [bank_id], self._robot_events.on_rt_output_state_updated,
+                                       None, include_timestamp, synchronous_update, timeout)
 
+        if event is not None:
+            # Get the bank ID from the response (in case the argument was a string)
+            if timeout is None:
+                timeout = 1.0
+            response = event.wait(timeout)
+            bank_id = safe_enum_cast(MxIoBankId, self._parse_response_int(response)[1])
+
+        timestamped_data: TimestampedData = None
         with self._main_lock:
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
-                return copy.deepcopy(self._robot_rt_data.rt_io_module_outputs)
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
-                return copy.deepcopy(self._robot_rt_data.rt_sig_gen_outputs)
+            if MxIoBankId(bank_id) == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+                timestamped_data = self._robot_rt_data.rt_io_module_outputs
+            elif MxIoBankId(bank_id) == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+                timestamped_data = self._robot_rt_data.rt_sig_gen_outputs
             else:
-                return TimestampedData.zeros(0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE)
+                timestamped_data = TimestampedData.zeros(0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE)
+        if include_timestamp:
+            return timestamped_data.copy()
+        else:
+            return [int(io) for io in timestamped_data.data]
 
     def GetRtInputState(self,
-                        bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
+                        bank_id: Union[MxIoBankId, str] = MxIoBankId.MX_IO_BANK_ID_IO_MODULE,
                         synchronous_update: bool = False,
-                        timeout: float = None) -> TimestampedData:
+                        timeout: float = None,
+                        include_timestamp: bool = False) -> Union[TimestampedData, List[int]]:
         """See documentation in equivalent function in robot.py"""
+        event: InterruptableEvent = None
+        if self._must_force_sync():
+            if isinstance(bank_id, str):
+                event = self.GetInterruptableEvent([MxRobotStatusCode.MX_ST_RT_INPUT_STATE])
+        self._send_rt_get_command_args('GetRtInputState', [bank_id], self._robot_events.on_rt_input_state_updated, None,
+                                       include_timestamp, synchronous_update, timeout)
 
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
-        if synchronous_update:
-            self._send_sync_command(f'GetRtInputState({bank_id})', None, self._robot_events.on_input_state_updated,
-                                    timeout)
+        if event is not None:
+            # Get the bank ID from the response (in case the argument was a string)
+            if timeout is None:
+                timeout = 1.0
+            response = event.wait(timeout)
+            bank_id = safe_enum_cast(MxIoBankId, self._parse_response_int(response)[1])
 
+        timestamped_data: TimestampedData = None
         with self._main_lock:
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
-                return copy.deepcopy(self._robot_rt_data.rt_io_module_inputs)
-            if bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
-                return copy.deepcopy(self._robot_rt_data.rt_sig_gen_inputs)
+            if MxIoBankId(bank_id) == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
+                timestamped_data = self._robot_rt_data.rt_io_module_inputs
+            elif MxIoBankId(bank_id) == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
+                timestamped_data = self._robot_rt_data.rt_sig_gen_inputs
             else:
-                return TimestampedData.zeros(0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE)
+                timestamped_data = TimestampedData.zeros(0, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_UNAVAILABLE)
+        if include_timestamp:
+            return timestamped_data.copy()
+        else:
+            return [int(io) for io in timestamped_data.data]
 
     def GetRtVacuumState(self,
                          include_timestamp: bool = False,
                          synchronous_update: bool = False,
-                         timeout: float = None) -> VacuumState:
+                         timeout: float = None) -> Union[TimestampedData, VacuumState]:
         """See documentation in equivalent function in robot.py"""
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
-        if synchronous_update:
-            self._send_sync_command(f'GetRtVacuumState()', None, self._robot_events.on_vacuum_state_updated, timeout)
+        self._send_rt_get_command('GetRtVacuumState', self._robot_events.on_rt_vacuum_state_updated, None,
+                                  include_timestamp, synchronous_update, timeout)
 
         with self._main_lock:
             if include_timestamp:
-                return copy.deepcopy(self._robot_rt_data.rt_vacuum_state)
+                return self._robot_rt_data.rt_vacuum_state.copy()
             else:
-                return copy.deepcopy(self._vacuum_state)
+                return self._vacuum_state.copy()
+
+    def GetRtVacuumPressure(self,
+                            *,
+                            include_timestamp: bool = False,
+                            synchronous_update: bool = False,
+                            timeout: float = None) -> Union[TimestampedData, float]:
+        """See documentation in equivalent function in robot.py"""
+        result = self._send_rt_get_command('GetRtVacuumPressure', self._robot_events.on_rt_vacuum_pressure_updated,
+                                           self._robot_rt_data.rt_vacuum_pressure, include_timestamp,
+                                           synchronous_update, timeout)
+        return result if include_timestamp else result[0]
 
     def GetRtTargetJointPos(self,
                             include_timestamp: bool = False,
-                            synchronous_update: bool = False,
-                            timeout: float = None) -> TimestampedData:
+                            synchronous_update: bool = True,
+                            timeout: float = None) -> Union[TimestampedData, List[float]]:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
+        prefix = ''
         if timeout is None:
             timeout = self.default_timeout
+        if not synchronous_update and self._must_force_sync(cyclical_cmd="GetRtTargetJointPos"):
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             if self._robot_info.rt_message_capable:
-                self._send_sync_command('GetRtTargetJointPos', None, self._robot_events.on_joints_updated, timeout)
+                self._send_sync_command(f'{prefix}GetRtTargetJointPos', None,
+                                        self._robot_events.on_rt_target_joint_pos_updated, timeout)
             else:
                 # This robot does not have GetRtTargetJointPos, use legacy GetJoints (but won't get timestamp)
-                self._send_sync_command('GetJoints', None, self._robot_events.on_joints_updated, timeout)
-
-            # Wait until response is received (this will throw TimeoutException if appropriate)
-            self._robot_events.on_joints_updated.wait(timeout=timeout)
+                self._send_sync_command('GetJoints', None, self._robot_events.on_rt_target_joint_pos_updated, timeout)
 
         with self._main_lock:
             if include_timestamp:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_rt_data.rt_target_joint_pos)
+                    return self._robot_rt_data.rt_target_joint_pos.copy()
 
-            return copy.deepcopy(self._robot_rt_data.rt_target_joint_pos.data)
+            return self._robot_rt_data.rt_target_joint_pos.data.copy()
+
+    def GetRtJointPos(self,
+                      *,
+                      include_timestamp: bool = False,
+                      synchronous_update: bool = True,
+                      timeout: float = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtJointPos', self._robot_events.on_rt_joint_pos_updated,
+                                         self._robot_rt_data.rt_joint_pos, include_timestamp, synchronous_update,
+                                         timeout)
+
+    def GetRtTargetJointTorq(self,
+                             *,
+                             include_timestamp: bool = False,
+                             synchronous_update: bool = True,
+                             timeout: float = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtTargetJointTorq', self._robot_events.on_rt_target_joint_torq_updated,
+                                         self._robot_rt_data.rt_target_joint_torq, include_timestamp,
+                                         synchronous_update, timeout)
+
+    def GetRtJointTorq(self,
+                       *,
+                       include_timestamp: bool = False,
+                       synchronous_update: bool = True,
+                       timeout: float = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtJointTorq', self._robot_events.on_rt_joint_torq_updated,
+                                         self._robot_rt_data.rt_joint_torq, include_timestamp, synchronous_update,
+                                         timeout)
+
+    def GetRtTargetJointVel(self,
+                            *,
+                            include_timestamp: bool = False,
+                            synchronous_update: bool = True,
+                            timeout: float = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtTargetJointVel', self._robot_events.on_rt_target_joint_vel_updated,
+                                         self._robot_rt_data.rt_target_joint_vel, include_timestamp, synchronous_update,
+                                         timeout)
+
+    def GetRtJointVel(self,
+                      *,
+                      include_timestamp: bool = False,
+                      synchronous_update: bool = True,
+                      timeout: float = None) -> Union[TimestampedData, List[float]]:
+        return self._send_rt_get_command('GetRtJointVel', self._robot_events.on_rt_joint_vel_updated,
+                                         self._robot_rt_data.rt_joint_vel, include_timestamp, synchronous_update,
+                                         timeout)
 
     def GetRtTargetCartPos(self,
                            include_timestamp: bool = False,
-                           synchronous_update: bool = False,
-                           timeout: float = None) -> TimestampedData:
+                           synchronous_update: bool = True,
+                           timeout: Optional[float] = None) -> Union[TimestampedData, List[float]]:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
+        prefix = ''
         if timeout is None:
             timeout = self.default_timeout
+        if not synchronous_update and self._must_force_sync(cyclical_cmd="GetRtTargetCartPos"):
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             if self._robot_info.rt_message_capable:
-                self._send_sync_command('GetRtTargetCartPos', None, self._robot_events.on_pose_updated, timeout)
+                self._send_sync_command(f'{prefix}GetRtTargetCartPos', None,
+                                        self._robot_events.on_rt_target_cart_pos_updated, timeout)
             else:
                 # This robot does not have GetRtTargetCartPos, use legacy GetPose (but won't get timestamp)
-                self._send_sync_command('GetPose', None, self._robot_events.on_pose_updated, timeout)
+                self._send_sync_command('GetPose', None, self._robot_events.on_rt_target_cart_pos_updated, timeout)
 
         with self._main_lock:
             if include_timestamp:
                 if not self._robot_info.rt_message_capable:
                     raise InvalidStateError('Cannot provide timestamp with current robot firmware or model.')
                 else:
-                    return copy.deepcopy(self._robot_rt_data.rt_target_cart_pos)
+                    return self._robot_rt_data.rt_target_cart_pos.copy()
 
-            return copy.deepcopy(self._robot_rt_data.rt_target_cart_pos.data)
+            return self._robot_rt_data.rt_target_cart_pos.data.copy()
+
+    def GetRtCartPos(self,
+                     *,
+                     include_timestamp: bool = False,
+                     synchronous_update: bool = True,
+                     timeout: Optional[float] = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtCartPos', self._robot_events.on_rt_cart_pos_updated,
+                                         self._robot_rt_data.rt_cart_pos, include_timestamp, synchronous_update,
+                                         timeout)
+
+    def GetRtTargetCartVel(self,
+                           *,
+                           include_timestamp: bool = False,
+                           synchronous_update: bool = True,
+                           timeout: Optional[float] = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtTargetCartVel', self._robot_events.on_rt_target_cart_vel_updated,
+                                         self._robot_rt_data.rt_target_cart_vel, include_timestamp, synchronous_update,
+                                         timeout)
+
+    def GetRtCartVel(self,
+                     *,
+                     include_timestamp: bool = False,
+                     synchronous_update: bool = True,
+                     timeout: Optional[float] = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtCartVel', self._robot_events.on_rt_cart_vel_updated,
+                                         self._robot_rt_data.rt_cart_vel, include_timestamp, synchronous_update,
+                                         timeout)
+
+    def GetRtTargetConf(self,
+                        *,
+                        include_timestamp: bool = False,
+                        synchronous_update: bool = False,
+                        timeout: Optional[float] = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtTargetConf', self._robot_events.on_rt_target_conf_updated,
+                                         self._robot_rt_data.rt_target_conf, include_timestamp, synchronous_update,
+                                         timeout)
+
+    def GetRtConf(self,
+                  *,
+                  include_timestamp: bool = False,
+                  synchronous_update: bool = False,
+                  timeout: Optional[float] = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtConf', self._robot_events.on_rt_conf_updated,
+                                         self._robot_rt_data.rt_conf, include_timestamp, synchronous_update, timeout)
+
+    def GetRtTargetConfTurn(self,
+                            *,
+                            include_timestamp: bool = False,
+                            synchronous_update: bool = False,
+                            timeout: Optional[float] = None) -> Union[TimestampedData, float]:
+        """See documentation in equivalent function in robot.py"""
+        result = self._send_rt_get_command('GetRtTargetConfTurn', self._robot_events.on_rt_target_conf_turn_updated,
+                                           self._robot_rt_data.rt_target_conf_turn, include_timestamp,
+                                           synchronous_update, timeout)
+        return result if include_timestamp else result[0]
+
+    def GetRtConfTurn(self,
+                      *,
+                      include_timestamp: bool = False,
+                      synchronous_update: bool = False,
+                      timeout: Optional[float] = None) -> Union[TimestampedData, float]:
+        """See documentation in equivalent function in robot.py"""
+        result = self._send_rt_get_command('GetRtConfTurn', self._robot_events.on_rt_conf_turn_updated,
+                                           self._robot_rt_data.rt_conf_turn, include_timestamp, synchronous_update,
+                                           timeout)
+        return result if include_timestamp else result[0]
+
+    def GetRtTrf(self,
+                 *,
+                 include_timestamp: bool = False,
+                 synchronous_update: bool = False,
+                 timeout: Optional[float] = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtTrf', self._robot_events.on_rt_trf_updated, self._robot_rt_data.rt_trf,
+                                         include_timestamp, synchronous_update, timeout)
+
+    def GetRtWrf(self,
+                 *,
+                 include_timestamp: bool = False,
+                 synchronous_update: bool = False,
+                 timeout: Optional[float] = None) -> Union[TimestampedData, List[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtWrf', self._robot_events.on_rt_wrf_updated, self._robot_rt_data.rt_wrf,
+                                         include_timestamp, synchronous_update, timeout)
+
+    def GetRtTemperature(self,
+                         *,
+                         include_timestamp: bool = False,
+                         synchronous_update: bool = False,
+                         timeout: Optional[float] = None) -> Union[TimestampedData, RobotTemperature]:
+        """See documentation in equivalent function in robot.py"""
+        self._send_rt_get_command('GetRtTemperature', self._robot_events.on_rt_temperature_updated,
+                                  self._robot_rt_data.rt_temperature, include_timestamp, synchronous_update, timeout)
+        with self._main_lock:
+            if include_timestamp:
+                return self._robot_rt_data.rt_temperature.copy()
+            else:
+                return self._robot_temperature.copy()
+
+    def GetRtI2t(self,
+                 *,
+                 include_timestamp: bool = False,
+                 synchronous_update: bool = False,
+                 timeout: Optional[float] = None) -> Union[TimestampedData, list[float]]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_rt_get_command('GetRtI2t', self._robot_events.on_rt_i2t_updated, self._robot_rt_data.rt_i2t,
+                                         include_timestamp, synchronous_update, timeout)
 
     def SetMonitoringInterval(self, t: float):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._set_monitoring_interval_internal(t)
             self._monitoring_interval_to_restore = t
 
-    def SetRealTimeMonitoring(self, *events: tuple):
+    def _set_real_time_monitoring(self, *events: Union[List, Tuple]):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
-            if isinstance(events, tuple):
+            if events is not None and len(events) > 0 and isinstance(events[0], list):
+                event_list = events[0]
+            elif isinstance(events, tuple):
                 event_list = list(events)
             else:
                 event_list = events
-            self._send_command('SetRealTimeMonitoring', event_list)
+            event_list_normalized = normalize_robot_rt_data_field(event_list)
+            self._send_command('SetRealTimeMonitoring', event_list_normalized)
+
+    def ForceRealTimeMonitoring(self):
+        """See documentation in equivalent function in robot.py"""
+        if self._enable_synchronous_mode:
+            # Use WaitEndOfCycle, which will send ForceRealTimeMonitoring then wait for the cycle
+            self.WaitEndOfCycle(timeout=self.default_timeout, force_cycle=True)
+        else:
+            with self._main_lock:
+                self._send_command('ForceRealTimeMonitoring')
 
     def SetRtc(self, t: int):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('SetRtc', [t])
 
     def ActivateSim(self, mode: Optional[MxRobotSimulationMode] = None):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             if mode is None:
-                self._send_command(f'ActivateSim()')
+                self._send_command('ActivateSim')
             else:
-                self._send_command(f'ActivateSim({int(mode)})')
+                self._send_command('ActivateSim', args=[mode])
         if self._enable_synchronous_mode:
             self._robot_events.on_activate_sim.wait(timeout=self.default_timeout)
 
     def DeactivateSim(self):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('DeactivateSim')
         if self._enable_synchronous_mode:
             self._robot_events.on_deactivate_sim.wait(timeout=self.default_timeout)
 
-    def SetExtToolSim(self, sim_ext_tool_type: int = MxExtToolType.MX_EXT_TOOL_MEGP25_SHORT):
+    def SetExtToolSim(self, sim_ext_tool_type: MxExtToolType.MX_EXT_TOOL_MEGP25_SHORT):
         """See documentation in equivalent function in robot.py"""
         # Firmware version 8.4 and older only support 1 as tool type
         if sim_ext_tool_type != MxExtToolType.MX_EXT_TOOL_NONE and not self._robot_info.gripper_pos_ctrl_capable:
             sim_ext_tool_type = 1
 
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('SetExtToolSim', [sim_ext_tool_type])
 
         if self._enable_synchronous_mode:
@@ -2461,7 +3360,6 @@ class _Robot:
     def SetIoSim(self, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, enable: bool = True):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('SetIoSim', [bank_id, 1 if enable else 0])
 
         if self._enable_synchronous_mode:
@@ -2473,7 +3371,6 @@ class _Robot:
     def SetRecoveryMode(self, activated: bool = True):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('SetRecoveryMode', f'{1 if activated else 0}')
 
         if self._enable_synchronous_mode:
@@ -2485,142 +3382,92 @@ class _Robot:
     def SetTimeScaling(self, p: float):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             self._send_command('SetTimeScaling', [p])
 
         if self._enable_synchronous_mode:
             self._robot_events.on_time_scaling_changed.wait(timeout=self.default_timeout)
 
-    def _sending_SetTimeScaling(self, args: list[str]):
+    def _sending_SetTimeScaling(self, args: Optional[str]):
         """ This function updates internal states when sending SetTimeScaling command to the robot """
         self._robot_events.on_time_scaling_changed.clear()
 
     def SetJointLimitsCfg(self, e: bool = True):
         """See documentation in equivalent function in robot.py"""
-        if self._enable_synchronous_mode:
-            response_event = self._send_custom_command(
-                f'SetJointLimitsCfg({1 if e else 0})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_JOINT_LIMITS_CFG, MxRobotStatusCode.MX_ST_CMD_FAILED])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetJointLimitsCfg")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetJointLimitsCfg', f"{1 if e else 0}")
+        self._send_set_cfg_command('SetJointLimitsCfg',
+                                   args=[1 if e else 0],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_JOINT_LIMITS_CFG)
 
     def SetJointLimits(self, n: int, lower_limit: float, upper_limit: float):
         """See documentation in equivalent function in robot.py"""
-        if self._enable_synchronous_mode:
-            response_event = self._send_custom_command(
-                f'SetJointLimits({n},{lower_limit},{upper_limit})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_JOINT_LIMITS, MxRobotStatusCode.MX_ST_CMD_FAILED])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetJointLimits")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetJointLimits', f"{n},{lower_limit},{upper_limit}")
+        self._send_set_cfg_command('SetJointLimits',
+                                   args=[n, lower_limit, upper_limit],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_JOINT_LIMITS)
 
     def SetWorkZoneCfg(self,
                        severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR,
                        mode: MxWorkZoneMode = MxWorkZoneMode.MX_WORK_ZONE_MODE_FCP_IN_WORK_ZONE):
         """See documentation in equivalent function in robot.py"""
-        if self._enable_synchronous_mode:
-            response_event = self._send_custom_command(
-                f'SetWorkZoneCfg({severity},{mode})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_WORK_ZONE_CFG, MxRobotStatusCode.MX_ST_CMD_FAILED])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetWorkZoneCfg")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetWorkZoneCfg', f"{severity},{mode}")
+        self._send_set_cfg_command('SetWorkZoneCfg',
+                                   args=[severity, mode],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_WORK_ZONE_CFG)
 
     def SetWorkZoneLimits(self, x_min: float, y_min: float, z_min: float, x_max: float, y_max: float, z_max: float):
         """See documentation in equivalent function in robot.py"""
-        if self._enable_synchronous_mode:
-            response_event = self._send_custom_command(
-                f'SetWorkZoneLimits({x_min}, {y_min}, {z_min}, {x_max}, {y_max}, {z_max})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_WORK_ZONE_LIMITS, MxRobotStatusCode.MX_ST_CMD_FAILED])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetWorkZoneLimits")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetWorkZoneLimits', [x_min, y_min, z_min, x_max, y_max, z_max])
+        self._send_set_cfg_command('SetWorkZoneLimits',
+                                   args=[x_min, y_min, z_min, x_max, y_max, z_max],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_WORK_ZONE_LIMITS)
 
     def SetCollisionCfg(self, severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR):
         """See documentation in equivalent function in robot.py"""
-        if self._enable_synchronous_mode:
-            response_event = self._send_custom_command(
-                f'SetCollisionCfg({severity})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_COLLISION_CFG, MxRobotStatusCode.MX_ST_CMD_FAILED])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetCollisionCfg")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetCollisionCfg', f"{severity}")
+        self._send_set_cfg_command('SetCollisionCfg',
+                                   args=[severity],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_COLLISION_CFG)
 
     def SetToolSphere(self, x: float, y: float, z: float, r: float):
         """See documentation in equivalent function in robot.py"""
-        if self._enable_synchronous_mode:
-            response_event = self._send_custom_command(
-                f'SetToolSphere({x}, {y}, {z}, {r})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_TOOL_SPHERE, MxRobotStatusCode.MX_ST_CMD_FAILED])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetToolSphere")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetToolSphere', [x, y, z, r])
+        self._send_set_cfg_command('SetToolSphere',
+                                   args=[x, y, z, r],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_TOOL_SPHERE)
 
-    def SetTorqueLimitsCfg(
-            self,
-            severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR,
-            skip_acceleration: MxTorqueLimitsMode = MxTorqueLimitsMode.MX_TORQUE_LIMITS_MODE_DELTA_WITH_EXPECTED):
+    def SetTorqueLimitsCfg(self,
+                           severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_ERROR,
+                           mode: MxTorqueLimitsMode = MxTorqueLimitsMode.MX_TORQUE_LIMITS_MODE_DELTA_WITH_EXPECTED):
         """See documentation in equivalent function in robot.py"""
-        if isinstance(severity, str):
+        if isinstance(severity, list):
+            if len(severity) > 1:
+                mode = severity[1]
+            severity_int = severity[0]
+        elif isinstance(severity, str):
             severity_int = TORQUE_LIMIT_SEVERITIES[severity]
         else:
             severity_int = severity
-        skip_acceleration_int = 1 if skip_acceleration else 0
-        self._send_motion_command('SetTorqueLimitsCfg', [severity_int, skip_acceleration_int])
+        self._send_motion_command('SetTorqueLimitsCfg', [severity_int, int(mode)])
 
-    def SetTorqueLimits(self, *args: float):
+    def SetCalibrationCfg(self, *, enable: bool):
         """See documentation in equivalent function in robot.py"""
-        expect_count = self._robot_info.num_joints
-        if len(args) != expect_count:
-            raise ValueError(
-                f'SetTorqueLimits: Incorrect number of joints sent {len(args)}, command. expecting: {expect_count}.')
-
-        self._send_motion_command('SetTorqueLimits', args)
+        self._send_set_cfg_command('SetCalibrationCfg',
+                                   args=[1 if enable else 0],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_CALIBRATION_CFG)
 
     def SetPStop2Cfg(self, severity: MxEventSeverity = MxEventSeverity.MX_EVENT_SEVERITY_CLEAR_MOTION):
         """See documentation in equivalent function in robot.py"""
-        if self._enable_synchronous_mode:
-            response_event = self._send_custom_command(
-                f'SetPStop2Cfg({severity})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_PSTOP2_CFG, MxRobotStatusCode.MX_ST_CMD_FAILED])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetPStop2Cfg")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetPStop2Cfg', f"{severity}")
+        self._send_set_cfg_command('SetPStop2Cfg', args=[severity], success_code=MxRobotStatusCode.MX_ST_SET_PSTOP2_CFG)
 
     def SetSimModeCfg(self, default_sim_mode=MxRobotSimulationMode.MX_SIM_MODE_REAL_TIME):
         """See documentation in equivalent function in robot.py"""
-        if self._enable_synchronous_mode:
-            response_event = self._send_custom_command(
-                f'SetSimModeCfg({default_sim_mode})',
-                expected_responses=[MxRobotStatusCode.MX_ST_SET_SIM_MODE_CFG, MxRobotStatusCode.MX_ST_CMD_FAILED])
-            if response_event.wait(timeout=DEFAULT_WAIT_TIMEOUT).id == MxRobotStatusCode.MX_ST_CMD_FAILED:
-                raise MecademicException("Argument Error in Command : SetSimModeCfg")
-        else:
-            with self._main_lock:
-                self._check_internal_states()
-                self._send_command('SetSimModeCfg', f"{default_sim_mode}")
+        self._send_set_cfg_command('SetSimModeCfg',
+                                   args=[default_sim_mode],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_SIM_MODE_CFG)
+
+    def SetMecaScriptCfg(self, cfg: MecaScriptCfg):
+        """See documentation in equivalent function in robot.py"""
+        self._send_set_cfg_command('SetMecaScriptCfg',
+                                   args=[1 if cfg.python_enabled else 0],
+                                   success_code=MxRobotStatusCode.MX_ST_SET_MECASCRIPT_CFG)
+
+    def SetRobotName(self, name: str):
+        """See documentation in equivalent function in robot.py"""
+        self._send_set_cfg_command('SetRobotName', args=name, success_code=MxRobotStatusCode.MX_ST_CMD_SUCCESSFUL)
 
     def SetPayload(self, mass: float, x: float, y: float, z: float):
         """See documentation in equivalent function in robot.py"""
@@ -2629,7 +3476,6 @@ class _Robot:
     def ActivateBrakes(self, activated: bool = True):
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            self._check_internal_states()
             if activated:
                 self._send_command('BrakesOn')
             else:
@@ -2644,136 +3490,639 @@ class _Robot:
     def GetRobotInfo(self) -> RobotInfo:
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
-            return copy.deepcopy(self._robot_info)
+            return self._robot_info.copy()
+
+    def GetNetworkOptions(self, *, timeout: float = None) -> bool:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetNetworkOptions', MxRobotStatusCode.MX_ST_GET_NETWORK_OPTIONS, timeout,
+                                           self._parse_response_int)[0]
+        return NetworkOptions(keep_alive_timeout=val)
 
     def GetRobotRtData(self, synchronous_update: bool = False, timeout: float = None) -> RobotRtData:
         """See documentation in equivalent function in robot.py"""
+        if not synchronous_update and self._must_force_sync(cyclical_cmd="GetRobotRtData"):
+            synchronous_update = True
         if synchronous_update:
-            self.WaitEndOfCycle(timeout)
+            # Ask the robot to immediately send a ne cycle
+            self.WaitEndOfCycle(timeout, force_cycle=self._monitor_mode is False)
 
         with self._main_lock:
-            return copy.deepcopy(self._robot_rt_data_stable)
+            return self._robot_rt_data_stable.copy()
 
     def GetStatusRobot(self, synchronous_update: bool = False, timeout: float = None) -> RobotStatus:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
+        prefix = ''
         if timeout is None:
             timeout = self.default_timeout
+        if not synchronous_update and self._must_force_sync():
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
             if self._using_legacy_json_api:
                 with self._main_lock:
-                    self._send_command('GetMotionStatus')
-            self._send_sync_command('GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
+                    self._send_command(f'{prefix}GetMotionStatus')
+            self._send_sync_command(f'{prefix}GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
 
         with self._main_lock:
-            return copy.deepcopy(self._robot_status)
+            return self._robot_status.copy()
 
     def GetSafetyStatus(self, synchronous_update: bool = False, timeout: float = None) -> RobotSafetyStatus:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
+        prefix = ''
         if timeout is None:
             timeout = self.default_timeout
+        if not synchronous_update and self._must_force_sync():
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
-            self._send_sync_command('GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
+            self._send_sync_command(f'{prefix}GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
 
         with self._main_lock:
-            return copy.deepcopy(self._robot_safety_status)
+            return self._robot_safety_status.copy()
 
-    def GetSidecarStatus(self,
-                         idx: Optional[int] = None,
-                         synchronous_update: bool = False,
-                         timeout: float = None) -> Optional[RobotSidecarStatus]:
+    def GetMecaScriptEngineStatus(self,
+                                  *,
+                                  synchronous_update: bool = False,
+                                  timeout: float = None) -> Optional[MecaScriptEngineStatus]:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
         if timeout is None:
             timeout = self.default_timeout
         if synchronous_update:
-            # Not yet implemented, we receive that on monitoring port only for now
-            #self._send_sync_command('GetSidecarStatus', None, self._robot_events.on_status_updated, timeout)
+            self._send_sync_command('GetMecaScriptEngineStatus',
+                                    None,
+                                    self._robot_events.on_mecascript_engine_status_updated,
+                                    timeout,
+                                    is_immediate_cmd=True)
             pass
 
         with self._main_lock:
-            if idx is None:
-                # No specific index requested -> Return embedded sidecar instance, else the first instance.
-                for sidecar_status in self._sidecar_status:
-                    if sidecar_status.embedded:
-                        return copy.deepcopy(sidecar_status)
-                if len(self._sidecar_status) > 0:
-                    return copy.deepcopy(self._sidecar_status[0])
-            elif idx < len(self._sidecar_status):
-                return copy.deepcopy(self._sidecar_status[idx])
+            if self._mecascript_engine_status.id is None:
+                return None
+            return self._mecascript_engine_status.copy()
 
-            return None
+    def GetLoadedPrograms(self, *, timeout: float = None) -> LoadedPrograms:
+        """See documentation in equivalent function in robot.py"""
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+
+        self._send_sync_command('GetLoadedPrograms',
+                                None,
+                                self._robot_events.on_loaded_programs_updated,
+                                timeout,
+                                is_immediate_cmd=True)
+        with self._main_lock:
+            return self._loaded_programs.copy()
+
+    def GetProgramExecutionStatus(self,
+                                  *,
+                                  synchronous_update: bool = False,
+                                  timeout: float = None) -> ProgramExecutionStatus:
+        """See documentation in equivalent function in robot.py"""
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = self.default_timeout
+        if synchronous_update:
+            self._send_sync_command('GetProgramExecutionStatus',
+                                    None,
+                                    self._robot_events.on_program_execution_status_updated,
+                                    timeout,
+                                    is_immediate_cmd=True)
+
+        with self._main_lock:
+            return self._program_execution_status.copy()
+
+    def WaitProgramDone(self, *, timeout: Optional[float] = None):
+        """See documentation in equivalent function in robot.py"""
+        self._warn_if_blocking()
+        self._robot_events.on_mecascript_exec_idle.wait(timeout)
 
     def GetPowerSupplyInputs(self, synchronous_update: bool = False, timeout: float = None) -> RobotPowerSupplyInputs:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
+        prefix = ''
         if timeout is None:
             timeout = self.default_timeout
+        if not synchronous_update and self._must_force_sync():
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
         if synchronous_update:
-            self._send_sync_command('GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
+            self._send_sync_command(f'{prefix}GetStatusRobot', None, self._robot_events.on_status_updated, timeout)
 
         with self._main_lock:
-            return copy.deepcopy(self._robot_psu_inputs)
+            return self._robot_psu_inputs.copy()
 
-    def GetCollisionStatus(self, timeout: float = None) -> CollisionStatus:
+    def GetAutoConf(self, *, timeout: float = None) -> bool:
         """See documentation in equivalent function in robot.py"""
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
+        return self._send_basic_get_command('GetAutoConf', MxRobotStatusCode.MX_ST_GET_AUTO_CONF, timeout,
+                                            self._parse_response_bool)[0]
 
+    def GetAutoConfTurn(self, *, timeout: float = None) -> bool:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetAutoConfTurn', MxRobotStatusCode.MX_ST_GET_AUTO_CONF_TURN, timeout,
+                                            self._parse_response_bool)[0]
+
+    def GetBlending(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetBlending', MxRobotStatusCode.MX_ST_GET_BLENDING, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetBrakesState(self, *, timeout: float = None) -> bool:
+        """See documentation in equivalent function in robot.py"""
+        if self._must_force_sync():
+            return self._send_basic_get_command(f'{self._silent_prefix}GetBrakesState',
+                                                MxRobotStatusCode.MX_ST_GET_BRAKES_STATE, timeout,
+                                                self._parse_response_bool)[0]
+        else:
+            return self._robot_status.brakes_engaged
+
+    def GetCalibrationCfg(self, *, timeout: float = None) -> CalibrationCfg:
+        """See documentation in equivalent function in robot.py"""
+        enabled = self._send_basic_get_command('GetCalibrationCfg', MxRobotStatusCode.MX_ST_GET_CALIBRATION_CFG,
+                                               timeout, self._parse_response_bool)[0]
+        return CalibrationCfg(enabled=enabled)
+
+    def GetCartAcc(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetCartAcc', MxRobotStatusCode.MX_ST_GET_CART_ACC, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetCartAngVel(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetCartAngVel', MxRobotStatusCode.MX_ST_GET_CART_ANG_VEL, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetCartLinVel(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetCartLinVel', MxRobotStatusCode.MX_ST_GET_CART_LIN_VEL, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetCheckpoint(self, *, timeout: float = None) -> int:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetCheckpoint', MxRobotStatusCode.MX_ST_GET_CHECKPOINT, timeout,
+                                            self._parse_response_int)[0]
+
+    def GetCheckpointDiscarded(self, *, timeout: float = None) -> int:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetCheckpointDiscarded', MxRobotStatusCode.MX_ST_GET_CHECKPOINT_DISCARDED,
+                                            timeout, self._parse_response_int)[0]
+
+    def GetCmdPendingCount(self, *, timeout: float = None) -> int:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetCmdPendingCount', MxRobotStatusCode.MX_ST_GET_CMD_PENDING_COUNT,
+                                            timeout, self._parse_response_int)[0]
+
+    def GetCollisionCfg(self, *, timeout: float = None) -> CollisionCfg:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetCollisionCfg', MxRobotStatusCode.MX_ST_GET_COLLISION_CFG, timeout,
+                                           self._parse_response_int)[0]
+        return CollisionCfg(severity=safe_enum_cast(MxEventSeverity, val))
+
+    def GetCollisionStatus(self, *, synchronous_update=False, timeout: float = None) -> SelfCollisionStatus:
+        """See documentation in equivalent function in robot.py"""
+        prefix = ''
+        if not synchronous_update and self._must_force_sync():
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
+        if synchronous_update:
+            self._send_basic_get_command(f'{prefix}GetCollisionStatus', MxRobotStatusCode.MX_ST_GET_COLLISION_STATUS,
+                                         timeout, self._parse_response_int)
+            # Note: _handle_collision_status_response will be called, updating _robot_collision_status
         with self._main_lock:
-            return copy.deepcopy(self._robot_collision_status)
+            return self._robot_collision_status.self_collision_status.copy()
 
-    def GetGripperRange(self, timeout: float = None) -> Tuple[float, float]:
+    def GetConf(self, *, timeout: float = None) -> Optional[List[int]]:
         """See documentation in equivalent function in robot.py"""
-        # Use appropriate default timeout if not specified
-        if timeout is None:
-            timeout = self.default_timeout
+        values = self._send_basic_get_command('GetConf', MxRobotStatusCode.MX_ST_GET_CONF, timeout,
+                                              self._parse_response_string)
+        if values[0] == '*':
+            return None  # Auto conf
+        if self._robot_info.num_joints == 6:
+            return [int(values[0]), int(values[1]), int(values[2])]
+        else:
+            # 4-axis robot
+            return [int(values[0])]
 
-        response = self._send_custom_command('GetGripperRange',
-                                             expected_responses=[MxRobotStatusCode.MX_ST_GET_GRIPPER_RANGE],
-                                             timeout=self.default_timeout)
-        if isinstance(response, Message):
-            positions = string_to_numbers(response.data)
-            assert len(positions) == 2
-            return positions[0], positions[1]
-        return 0, 0
+    def GetConfTurn(self, *, timeout: float = None) -> Optional[int]:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command('GetConfTurn', MxRobotStatusCode.MX_ST_GET_CONF_TURN, timeout,
+                                              self._parse_response_string)
+        if values[0] == '*':
+            return None  # Auto conf turn
+        return int(values[0])
+
+    def GetEtherNetIpEnabled(self, *, timeout: float = None) -> bool:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetEtherNetIpEnabled', MxRobotStatusCode.MX_ST_GET_ETHERNET_IP_ENABLED,
+                                            timeout, self._parse_response_bool)[0]
+
+    def GetExtToolFwVersion(self, *, timeout: float = None) -> RobotVersion:
+        """See documentation in equivalent function in robot.py"""
+        if self._must_force_sync():
+            self._send_basic_get_command(f'{self._silent_prefix}GetExtToolFwVersion',
+                                         MxRobotStatusCode.MX_ST_GET_EXT_TOOL_FW_VERSION, timeout)
+            # Note: _handle_ext_tool_fw_version will handle response
+        with self._main_lock:
+            return self._robot_info.ext_tool_version.copy()
+
+    def GetExtToolSim(self, *, timeout: float = None) -> MxExtToolType:
+        """See documentation in equivalent function in robot.py"""
+        if self._must_force_sync():
+            self._send_basic_get_command(f'{self._silent_prefix}GetExtToolSim', MxRobotStatusCode.MX_ST_EXTTOOL_SIM,
+                                         timeout)
+            # Note: _handle_ext_tool_sim_status_legacy will handle response
+        return self._external_tool_status.sim_tool_type
+
+    def GetFwVersion(self, *, timeout: float = None) -> RobotVersion:
+        """See documentation in equivalent function in robot.py"""
+        if self._must_force_sync():
+            self._send_basic_get_command(f'{self._silent_prefix}GetFwVersion', MxRobotStatusCode.MX_ST_GET_FW_VERSION,
+                                         timeout)
+        with self._main_lock:
+            return self._robot_info.version.copy()
+
+    def GetGripperForce(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetGripperForce', MxRobotStatusCode.MX_ST_GET_GRIPPER_FORCE, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetGripperRange(self, *, timeout: float = None) -> Tuple[float, float]:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command('GetGripperRange', MxRobotStatusCode.MX_ST_GET_GRIPPER_RANGE, timeout,
+                                              self._parse_response_float)
+        return values[0], values[1]
+
+    def GetGripperVel(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetGripperVel', MxRobotStatusCode.MX_ST_GET_GRIPPER_VEL, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetIoSim(self, *, bank_id: MxIoBankId = MxIoBankId.MX_IO_BANK_ID_IO_MODULE, timeout: float = None) -> bool:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command_args('GetIoSim', [bank_id], MxRobotStatusCode.MX_ST_IO_SIM, timeout,
+                                                 self._parse_response_bool)[1]
+
+    def GetJointAcc(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetJointAcc', MxRobotStatusCode.MX_ST_GET_JOINT_ACC, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetJointLimits(self, n: int, *, effective=True, timeout: float = None) -> Tuple[float, float]:
+        """See documentation in equivalent function in robot.py"""
+        args = []
+        if effective:
+            args = [n]
+        else:
+            args = [-n]
+        values = self._send_basic_get_command_args('GetJointLimits', args, MxRobotStatusCode.MX_ST_GET_JOINT_LIMITS,
+                                                   timeout, self._parse_response_float)
+        return values[1], values[2]
+
+    def GetJointLimitsCfg(self, *, timeout: float = None) -> JointLimitsCfg:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetJointLimitsCfg', MxRobotStatusCode.MX_ST_GET_JOINT_LIMITS_CFG, timeout,
+                                           self._parse_response_bool)[0]
+        return JointLimitsCfg(enabled=val)
+
+    def GetJointVel(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetJointVel', MxRobotStatusCode.MX_ST_GET_JOINT_VEL, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetJointVelLimit(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetJointVelLimit', MxRobotStatusCode.MX_ST_GET_JOINT_VEL_LIMIT, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetModelJointLimits(self, n: int, *, timeout: float = None) -> Tuple[float, float]:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command_args('GetModelJointLimits', [n],
+                                                   MxRobotStatusCode.MX_ST_GET_MODEL_JOINT_LIMITS, timeout,
+                                                   self._parse_response_float)
+        return values[1], values[2]
+
+    def GetMonitoringInterval(self, *, timeout: float = None) -> float:
+        return self._send_basic_get_command('GetMonitoringInterval', MxRobotStatusCode.MX_ST_GET_MONITORING_INTERVAL,
+                                            timeout, self._parse_response_float)[0]
+
+    def GetMoveDuration(self, *, timeout: float = None) -> float:
+        return self._send_basic_get_command('GetMoveDuration', MxRobotStatusCode.MX_ST_GET_MOVE_DURATION, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetMoveDurationCfg(self, *, timeout: float = None) -> MoveDurationCfg:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetMoveDurationCfg', MxRobotStatusCode.MX_ST_GET_MOVE_DURATION_CFG, timeout,
+                                           self._parse_response_int)[0]
+        return MoveDurationCfg(severity=safe_enum_cast(MxEventSeverity, val))
+
+    def GetMoveJumpApproachVel(self, *, timeout: float = None) -> MoveJumpApproachVel:
+        values = self._send_basic_get_command('GetMoveJumpApproachVel',
+                                              MxRobotStatusCode.MX_ST_GET_MOVEJUMP_APPROACH_VEL, timeout,
+                                              self._parse_response_float)
+        return MoveJumpApproachVel(values[0], values[1], values[2], values[3])
+
+    def GetMoveJumpHeight(self, *, timeout: float = None) -> MoveJumpHeight:
+        values = self._send_basic_get_command('GetMoveJumpHeight', MxRobotStatusCode.MX_ST_GET_MOVEJUMP_HEIGHT, timeout,
+                                              self._parse_response_float)
+        return MoveJumpHeight(values[0], values[1], values[2], values[3])
+
+    def GetMoveMode(self, *, timeout: float = None) -> MxMoveMode:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetMoveMode', MxRobotStatusCode.MX_ST_GET_MOVE_MODE, timeout,
+                                           self._parse_response_int)[0]
+        return safe_enum_cast(MxMoveMode, val)
+
+    def GetOperationMode(self, *, timeout: float = None) -> MxRobotOperationMode:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetOperationMode', MxRobotStatusCode.MX_ST_GET_OPERATION_MODE, timeout,
+                                           self._parse_response_int)[0]
+        return safe_enum_cast(MxRobotOperationMode, val)
+
+    def GetPStop2Cfg(self, *, timeout: float = None) -> Pstop2Cfg:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetPStop2Cfg', MxRobotStatusCode.MX_ST_GET_PSTOP2_CFG, timeout,
+                                           self._parse_response_int)[0]
+        return Pstop2Cfg(safe_enum_cast(MxEventSeverity, val))
+
+    def GetPayload(self, *, timeout: float = None) -> RobotPayload:
+        values = self._send_basic_get_command('GetPayload', MxRobotStatusCode.MX_ST_GET_PAYLOAD, timeout,
+                                              self._parse_response_float)
+        return RobotPayload(mass=values[0], x=values[1], y=values[2], z=values[3])
+
+    def GetProductType(self, *, timeout: float = None) -> str:
+        return self._send_basic_get_command('GetProductType', MxRobotStatusCode.MX_ST_GET_PRODUCT_TYPE, timeout)
+
+    def GetProfinetEnabled(self, *, timeout: float = None) -> bool:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetProfinetEnabled', MxRobotStatusCode.MX_ST_GET_PROFINET_ENABLED, timeout,
+                                            self._parse_response_bool)[0]
+
+    def GetRealTimeMonitoring(self, *, timeout: float = None) -> list[MxRobotStatusCode]:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command('GetRealTimeMonitoring', MxRobotStatusCode.MX_ST_GET_REAL_TIME_MONITORING,
+                                              timeout, self._parse_response_int)
+        return [safe_enum_cast(MxRobotStatusCode, code) for code in values]
+
+    def GetRecoveryMode(self, *, timeout: float = None) -> bool:
+        """See documentation in equivalent function in robot.py"""
+
+        def _get_response_code(response: Message):
+            return response.id
+
+        code = self._send_basic_get_command(
+            'GetRecoveryMode', [MxRobotStatusCode.MX_ST_RECOVERY_MODE_ON, MxRobotStatusCode.MX_ST_RECOVERY_MODE_OFF],
+            timeout, _get_response_code)
+        return code == MxRobotStatusCode.MX_ST_RECOVERY_MODE_ON
+
+    def GetRobotCalibrated(self, *, timeout: float = None) -> bool:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetRobotCalibrated', MxRobotStatusCode.MX_ST_GET_ROBOT_CALIBRATED, timeout,
+                                            self._parse_response_bool)[0]
+
+    def GetRobotName(self, *, timeout: float = None) -> str:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetRobotName', MxRobotStatusCode.MX_ST_GET_ROBOT_NAME, timeout)
+
+    def GetRobotSerial(self, *, timeout: float = None) -> str:
+        """See documentation in equivalent function in robot.py"""
+        if self._must_force_sync():
+            self._send_basic_get_command(f'{self._silent_prefix}GetRobotSerial',
+                                         MxRobotStatusCode.MX_ST_GET_ROBOT_SERIAL)
+        return self._robot_info.serial
+
+    def GetRtc(self, *, timeout: float = None) -> int:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetRtc', MxRobotStatusCode.MX_ST_GET_RTC, timeout,
+                                            self._parse_response_int)[0]
+
+    def GetSafetyStopStatus(self,
+                            code: MxRobotStatusCode,
+                            *,
+                            synchronous_update: bool = False,
+                            timeout: float = None) -> MxStopState:
+        """See documentation in equivalent function in robot.py"""
+        if synchronous_update:
+            val = self._send_basic_get_command_args('GetSafetyStopStatus',
+                                                    args=[code],
+                                                    expected_code=code,
+                                                    timeout=timeout,
+                                                    parse_fct=self._parse_response_int)[0]
+            return safe_enum_cast(MxStopState, val)
+        else:
+            return self._robot_safety_status.get_stop_state_by_status_code(code)
+
+    def GetSimModeCfg(self, *, timeout: float = None) -> SimModeCfg:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetSimModeCfg', MxRobotStatusCode.MX_ST_GET_SIM_MODE_CFG, timeout,
+                                           self._parse_response_int)[0]
+        return SimModeCfg(safe_enum_cast(MxRobotSimulationMode, val))
+
+    def GetMecaScriptCfg(self, *, timeout: float = None) -> MecaScriptCfg:
+        """See documentation in equivalent function in robot.py"""
+        val = self._send_basic_get_command('GetMecaScriptCfg', MxRobotStatusCode.MX_ST_GET_MECASCRIPT_CFG, timeout,
+                                           self._parse_response_int)[0]
+        return MecaScriptCfg(python_enabled=bool(val))
+
+    def GetTimeScaling(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetTimeScaling', MxRobotStatusCode.MX_ST_TIME_SCALING, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetToolSphere(self, *, timeout: float = None) -> ToolSphere:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command('GetToolSphere', MxRobotStatusCode.MX_ST_GET_TOOL_SPHERE, timeout,
+                                              self._parse_response_float)
+        return ToolSphere(x=values[0], y=values[1], z=values[2], r=values[3])
+
+    def GetTorqueLimits(self, *, timeout: float = None) -> List[float]:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetTorqueLimits', MxRobotStatusCode.MX_ST_GET_TORQUE_LIMITS, timeout,
+                                            self._parse_response_float)
+
+    def GetTorqueLimitsCfg(self, *, timeout: float = None) -> TorqueLimitsCfg:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command('GetTorqueLimitsCfg', MxRobotStatusCode.MX_ST_GET_TORQUE_LIMITS_CFG,
+                                              timeout, self._parse_response_int)
+        severity = safe_enum_cast(MxEventSeverity, values[0])
+        mode = safe_enum_cast(MxTorqueLimitsMode, values[1])
+        return TorqueLimitsCfg(severity, mode)
+
+    def GetTorqueLimitsStatus(self, *, synchronous_update: bool = False, timeout: float = None) -> TorqueLimitsStatus:
+        """See documentation in equivalent function in robot.py"""
+        prefix = ''
+        if not synchronous_update and self._must_force_sync():
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
+        if synchronous_update:
+            self._send_basic_get_command(f'{prefix}GetTorqueLimitsStatus', MxRobotStatusCode.MX_ST_TORQUE_LIMIT_STATUS,
+                                         timeout, self._parse_response_bool)
+            # Note: _handle_torque_limit_status will be called, updating self._robot_torque_limits_status
+        return TorqueLimitsStatus(exceeded=self._robot_torque_limits_status)
+
+    def GetVacuumPurgeDuration(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetVacuumPurgeDuration', MxRobotStatusCode.MX_ST_GET_VACUUM_PURGE_DURATION,
+                                            timeout, self._parse_response_float)[0]
+
+    def GetVacuumThreshold(self, *, timeout: float = None) -> VacuumThreshold:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command('GetVacuumThreshold', MxRobotStatusCode.MX_ST_GET_VACUUM_THRESHOLD,
+                                              timeout, self._parse_response_float)
+        return VacuumThreshold(hold_threshold=values[0], release_threshold=values[1])
+
+    def GetVelTimeout(self, *, timeout: float = None) -> float:
+        """See documentation in equivalent function in robot.py"""
+        return self._send_basic_get_command('GetVelTimeout', MxRobotStatusCode.MX_ST_GET_VEL_TIMEOUT, timeout,
+                                            self._parse_response_float)[0]
+
+    def GetWorkZoneCfg(self, *, timeout: float = None) -> WorkZoneCfg:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command('GetWorkZoneCfg', MxRobotStatusCode.MX_ST_GET_WORK_ZONE_CFG, timeout,
+                                              self._parse_response_int)
+        severity = safe_enum_cast(MxEventSeverity, values[0])
+        mode = safe_enum_cast(MxWorkZoneMode, values[1])
+        return WorkZoneCfg(severity, mode)
+
+    def GetWorkZoneLimits(self, *, timeout: float = None) -> WorkZoneLimits:
+        """See documentation in equivalent function in robot.py"""
+        values = self._send_basic_get_command('GetWorkZoneLimits', MxRobotStatusCode.MX_ST_GET_WORK_ZONE_LIMITS,
+                                              timeout, self._parse_response_float)
+        return WorkZoneLimits(values[0], values[1], values[2], values[3], values[4], values[5])
+
+    def GetWorkZoneStatus(self, *, synchronous_update=False, timeout: float = None) -> WorkZoneStatus:
+        """See documentation in equivalent function in robot.py"""
+        prefix = ''
+        if not synchronous_update and self._must_force_sync():
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
+        if synchronous_update:
+            self._send_basic_get_command(f'{prefix}GetWorkZoneStatus', MxRobotStatusCode.MX_ST_GET_WORK_ZONE_STATUS,
+                                         timeout, self._parse_response_int)
+            # Note: _handle_work_zone_status_response will be called, updating _robot_collision_status.work_zone_status
+        with self._main_lock:
+            return self._robot_collision_status.work_zone_status.copy()
 
     def LogTrace(self, trace: str, level: Optional[int] = None):
         """See documentation in equivalent function in robot.py"""
         self._log_trace_common(trace, level)
+
+    def LogUserCommands(self, enable: bool, *, show_motion_queue_progress: bool = False):
+        """See documentation in equivalent function in robot.py"""
+        with self._main_lock:
+            self._send_command('LogUserCommands', args=[1 if enable else 0, 1 if show_motion_queue_progress else 0])
+
+    def _add_trace_prefix(self, msg: str, level: Optional[int] = None) -> str:
+        """ Add a prefix that colorizes warnings or errors """
+        color = ""
+        if level == logging.WARNING:
+            color = COLOR_YELLOW
+        elif level == logging.ERROR:
+            color = COLOR_RED
+        return color + msg
+
+    def _log_trace_sanitize(self, to_sanitize: str, supports_json_log_trace: bool) -> str:
+        """Sanitize a string so it can be printed in the robot log trace:
+        - Non-printable characters replaced by .
+
+        Args:
+            to_sanitize (str): The string to sanitize
+            supports_json_log_traceZ (bool): True if we can use JSON format for log trace (robot version >= 11.1.5)
+
+        Returns:
+            The sanitized string
+        """
+        sanitized = []
+        _ANSI_ESCAPE_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')  # ANSI escape sequences
+
+        i = 0
+        length = len(to_sanitize)
+        while i < length:
+            c = to_sanitize[i]
+
+            # Check for ANSI escape code (keep it entirely if supports_json_log_trace is False)
+            if c == '\x1b':
+                match = _ANSI_ESCAPE_RE.match(to_sanitize, i)
+                if match:
+                    # This is an ANSI color string
+                    if not supports_json_log_trace:
+                        # Let's skip it for legacy format
+                        pass
+                    else:
+                        # We can keep it in JSON format
+                        sanitized.append(match.group())
+                    i = match.end()
+                    continue
+
+            if c in string.printable:
+                # We can safely print this character in the log
+                # Note: "c.isprintable()" is more strict than "c in string.printable" as it returns False for
+                #       new-line or other characters that don't directly appear on screen. Let's not accept, in
+                #       legacy format, those characters as it may confuse the legacy parser.
+                if c.isprintable() and c != '"':
+                    # This character is ok in both legacy quoted string and JSON-escaped formats
+                    sanitized.append(c)
+                elif not supports_json_log_trace:
+                    # Character not allowed with the legacy API parser, but we cannot use JSON, let's
+                    # replace this character by a period.
+                    sanitized.append('.')
+                else:
+                    # This character is not allowed in legacy API, but we can JSON-escape it.
+                    # (end-line for example falls into this category, and other non-printable characters)
+                    sanitized.append(c)
+            else:
+                # This character cannot be kept in the string (even JSON-escaped), it can't be printed in a log
+                sanitized.append('.')
+            i += 1
+
+        return ''.join(sanitized)
 
     def _log_trace_common(self,
                           trace: str,
                           level: Optional[int] = None,
                           trace_id=MxUserTrace.MX_USER_TRACE_USER_LOG_TRACE):
         """ Common to LogTrace and other similar functions """
-        # Remove any " in the provided string
-        trace = trace.replace('"', "")
-        if level is not None:
-            self.logger.log(level, f'{trace}\033[39m')
+        # Sanitize the string
+        supports_json_log_trace = self._robot_info.version.is_at_least(11, 1, 5)
+        trace = self._log_trace_sanitize(trace, supports_json_log_trace)
+
+        # Send the trace to the logger if appropriate.
+        # Note: Don't send to logger if we're sidecar, the sidecar logger redirects here so it would infinite recurse!
+        send_to_logger = level is not None and (not self._application_type.is_sidecar() or not self.IsConnected())
+        if send_to_logger:
+            self.logger.log(level, f'{trace}{COLOR_RESET}')
+
         if self.IsConnected():
-            if self._robot_info.version.is_at_least(9, 2):
-                if trace_id == MxUserTrace.MX_USER_TRACE_USER_LOG_TRACE:
-                    # Plain log trace
-                    self._send_custom_command(f'-LogTrace("{trace}")')
-                else:
-                    # Use JSON format
-                    log_args = {MX_JSON_KEY_USER_LOG_TRACE_STR: trace, MX_JSON_KEY_USER_LOG_TRACE_ID: trace_id}
-                    if level == logging.ERROR:
-                        log_args[MX_JSON_KEY_USER_LOG_TRACE_LVL] = -2
-                    self._send_json_command('-LogTrace', log_args)
+            # Add appropriate prefix (warning or error color, calling sidecar command, ...)
+            trace = self._add_trace_prefix(trace, level)
+
+            if not supports_json_log_trace:
+                # Plain log trace
+                self._send_custom_command(f'{self._silent_prefix}LogTrace', args=f'"{trace}"')
             else:
-                self._send_custom_command(f'LogTrace("{trace}")')
+                # Use JSON format
+                log_args = {MX_JSON_KEY_USER_LOG_TRACE_STR: trace, MX_JSON_KEY_USER_LOG_TRACE_ID: trace_id}
+                if level == logging.DEBUG:
+                    log_args[MX_JSON_KEY_USER_LOG_TRACE_LVL] = 2
+                elif level == logging.ERROR:
+                    log_args[MX_JSON_KEY_USER_LOG_TRACE_LVL] = -2
+                self._send_json_command('-LogTrace', log_args)
 
     def StartLogging(self,
                      monitoringInterval: float,
                      file_name: str = None,
                      file_path: str = None,
-                     fields: list = None,
+                     fields: List[MxRobotStatusCode] = None,
                      record_time: bool = True):
         """See documentation in equivalent function in robot.py"""
+
+        # Check requirements that are optional for Mecademicpy but not for this method
+        if mx_traj is None:
+            raise ImportError("Using StartLogging to capture robot trajectories requires additional Python packages. "
+                              "Please install them using 'pip install mecademicpy[trajectory_logger]'.")
+
         if self._file_logger is not None:
             raise InvalidStateError('Another file logging operation is in progress.')
 
@@ -2782,14 +4131,15 @@ class _Robot:
             if fields is None:
                 self.SetRealTimeMonitoring('all')
             else:
+                # Normalize the fields before using them
+                fields = normalize_robot_rt_data_field(fields)
                 self.SetRealTimeMonitoring(*fields)
 
             # Use a synchronous "GetRealTimeMonitoring" to ensure that we've started receiving data for all the
             # requested real-time monitoring fields we just enabled
             self._send_custom_command('GetRealTimeMonitoring',
                                       expected_responses=[MxRobotStatusCode.MX_ST_GET_REAL_TIME_MONITORING],
-                                      timeout=self.default_timeout,
-                                      skip_internal_check=True)
+                                      timeout=self.default_timeout)
             if not self._robot_info.rt_on_ctrl_port_capable:
                 # Older version -> can't be sure that monitoring and control port are in sync, let's wait few
                 self.WaitEndOfCycle()
@@ -2799,7 +4149,7 @@ class _Robot:
         # pylint: disable=protected-access
         self._file_logger = mx_traj._RobotTrajectoryLogger(self._robot_info,
                                                            self._robot_rt_data,
-                                                           fields,
+                                                           logged_fields=fields,
                                                            file_name=file_name,
                                                            file_path=file_path,
                                                            record_time=record_time,
@@ -2821,20 +4171,31 @@ class _Robot:
             # Send a synchronous command to ensure we've received all monitoring data for this test
             self._send_custom_command('GetRealTimeMonitoring',
                                       expected_responses=[MxRobotStatusCode.MX_ST_GET_REAL_TIME_MONITORING],
-                                      timeout=self.default_timeout,
-                                      skip_internal_check=True)
+                                      timeout=self.default_timeout)
 
         if keep_captured_trajectory:
             self._captured_trajectory = self._file_logger.robot_trajectories
 
-        file_name = self._file_logger.end_log()
+        self._captured_trajectory_path = self._file_logger.end_log()
         self._file_logger = None
 
-        return file_name
+        return self._captured_trajectory_path
 
-    def GetCapturedTrajectory(self) -> RobotTrajectories:
+    def TcpDump(self, *, duration: float):
+        """See documentation in equivalent function in robot.py"""
+        self._send_basic_command('TcpDump', args=[duration], success_code=MxRobotStatusCode.MX_ST_TCP_DUMP_STARTED)
+
+    def TcpDumpStop(self):
+        """See documentation in equivalent function in robot.py"""
+        self._send_basic_command('TcpDumpStop', success_code=MxRobotStatusCode.MX_ST_TCP_DUMP_DONE)
+
+    def GetCapturedTrajectory(self) -> Optional[RobotTrajectories]:
         """See documentation in equivalent function in robot.py"""
         return self._captured_trajectory
+
+    def GetCapturedTrajectoryPath(self) -> Optional[str]:
+        """See documentation in equivalent function in robot.py"""
+        return self._captured_trajectory_path
 
     def UpdateRobot(self, firmware: Union[str, pathlib.Path], timeout: float = _UPDATE_TIMEOUT):
         """See documentation in equivalent function in robot.py"""
@@ -2849,24 +4210,26 @@ class _Robot:
 
     def CreateVariable(self,
                        name: str,
-                       value: any,
+                       value: Any,
                        cyclic_id: Optional[int] = None,
+                       volatile: bool = False,
                        override: bool = False,
                        timeout: float = None) -> bool:
         """See documentation in equivalent function in robot.py"""
         if self._enable_synchronous_mode and timeout is None:
             timeout = self.default_timeout
 
-        expected_responses: list[MxRobotStatusCode] = None
+        expected_responses: List[MxRobotStatusCode] = None
         if timeout is not None:
             expected_responses = [MxRobotStatusCode.MX_ST_CREATE_VARIABLE, MxRobotStatusCode.MX_ST_CREATE_VARIABLE_ERR]
 
         # Create the variable on the robot
         json_data: dict = {
             MX_JSON_KEY_VAR_NAME: name,
-            MX_JSON_KEY_VAR_VAL: value,
+            MX_JSON_KEY_VAR_VAL: mecascript._unwrap_mutable(value),  #pylint: disable=protected-access
             MX_JSON_KEY_VAR_CYCLIC_ID: cyclic_id,
-            MX_JSON_KEY_VAR_OVERRIDE: override
+            MX_JSON_KEY_VAR_VOLATILE: volatile,
+            MX_JSON_KEY_VAR_OVERRIDE: override,
         }
         response = self._send_json_command(command='CreateVariable',
                                            json_data=json_data,
@@ -2874,14 +4237,14 @@ class _Robot:
                                            timeout=timeout)
         if expected_responses is not None:
             if response.id == MxRobotStatusCode.MX_ST_CREATE_VARIABLE_ERR:
-                raise ArgErrorException(f'Robot refused CreateVariable: {response.data}')
+                raise CommandFailedException(response.data)
 
-    def DeleteVariable(self, name: str, timeout: Optional[float] = None) -> Optional[rsc.RegisteredVariable]:
+    def DeleteVariable(self, name: str, timeout: Optional[float] = None):
         """See documentation in equivalent function in robot.py"""
         if self._enable_synchronous_mode and timeout is None:
             timeout = self.default_timeout
 
-        expected_responses: list[MxRobotStatusCode] = None
+        expected_responses: List[MxRobotStatusCode] = None
         if timeout is not None:
             expected_responses = [MxRobotStatusCode.MX_ST_DELETE_VARIABLE, MxRobotStatusCode.MX_ST_DELETE_VARIABLE_ERR]
 
@@ -2893,25 +4256,43 @@ class _Robot:
                                            timeout=timeout)
         if expected_responses is not None:
             if response.id == MxRobotStatusCode.MX_ST_DELETE_VARIABLE_ERR:
-                raise ArgErrorException(f'Robot refused DeleteVariable: {response.data}')
+                raise CommandFailedException(response.data)
 
-    def SetVariable(self, name: str, value: any, timeout: Optional[float] = None):
+    def DeleteAllVariables(self, *, timeout: Optional[float] = None):
+        """See documentation in equivalent function in robot.py"""
+        if self._enable_synchronous_mode and timeout is None:
+            timeout = self.default_timeout
+
+        expected_responses: List[MxRobotStatusCode] = None
+        if timeout is not None:
+            expected_responses = [MxRobotStatusCode.MX_ST_DELETE_VARIABLE, MxRobotStatusCode.MX_ST_DELETE_VARIABLE_ERR]
+
+        # Create the variable on the robot
+        response = self._send_json_command(command='DeleteAllVariables',
+                                           json_data={},
+                                           expected_responses=expected_responses,
+                                           timeout=timeout)
+        if expected_responses is not None:
+            if response.id == MxRobotStatusCode.MX_ST_DELETE_VARIABLE_ERR:
+                raise CommandFailedException(response.data)
+
+    def SetVariable(self, name: str, value: Any, timeout: Optional[float] = None):
         """See documentation in equivalent function in robot.py"""
         # Make sure to get the nested value if object is type RegisteredVariable
-        if isinstance(value, rsc.RegisteredVariable):
+        if isinstance(value, mecascript.RegisteredVariable):
             value = value.get_value()
 
         if self._enable_synchronous_mode and timeout is None:
             timeout = self.default_timeout
 
-        expected_responses: list[MxRobotStatusCode] = None
+        expected_responses: List[MxRobotStatusCode] = None
         if timeout is not None:
             expected_responses = [MxRobotStatusCode.MX_ST_SET_VARIABLE, MxRobotStatusCode.MX_ST_SET_VARIABLE_ERR]
 
         # Set the variable on the robot
         json_data: dict = {
             MX_JSON_KEY_VAR_NAME: name,
-            MX_JSON_KEY_VAR_VAL: value,
+            MX_JSON_KEY_VAR_VAL: mecascript._unwrap_mutable(value),  #pylint: disable=protected-access
         }
         response = self._send_json_command('SetVariable',
                                            json_data,
@@ -2919,29 +4300,66 @@ class _Robot:
                                            timeout=timeout)
         if expected_responses is not None:
             if response.id == mx_st.MX_ST_SET_VARIABLE_ERR:
-                raise ArgErrorException(response.data)
+                raise CommandFailedException(response.data)
 
-    def GetVariable(self, name: str) -> Optional[rsc.RegisteredVariable]:
+    def GetVariable(self, name: str) -> Optional[mecascript.RegisteredVariable]:
         """See documentation in equivalent function in robot.py"""
-        return self.vars.get(name)
+        return self.variables.get(name)
 
-    def GetVariableByCyclicId(self, cyclic_id: int) -> Optional[rsc.RegisteredVariable]:
+    def GetVariableByCyclicId(self, cyclic_id: int) -> Optional[mecascript.RegisteredVariable]:
         """See documentation in equivalent function in robot.py"""
         fct_or_var = self._registered_cyclic_id.get(cyclic_id, None)
-        if isinstance(fct_or_var, rsc.RegisteredVariable):
+        if isinstance(fct_or_var, mecascript.RegisteredVariable):
             return fct_or_var
         return None
 
-    def ListVariables(self) -> list[str]:
+    def ListVariables(self) -> List[str]:
         """See documentation in equivalent function in robot.py"""
         return list(self._registered_vars_by_name.keys())
+
+    def EnableEtherNetIp(self, enable: bool):
+        """See documentation in equivalent function in robot.py"""
+        self._send_basic_bool_command('EnableEtherNetIp', enable)
+
+    def EnableProfinet(self, enable: bool):
+        """See documentation in equivalent function in robot.py"""
+        self._send_basic_bool_command('EnableProfinet', enable)
+
+    def SwitchToEtherCAT(self, *, station_alias: Optional[int] = None):
+        """See documentation in equivalent function in robot.py"""
+        with self._main_lock:
+            if robot_model_is_mg2(self._robot_info.robot_model) and station_alias is not None:
+                self._send_command('SwitchToEtherCAT', args=[station_alias])
+            else:
+                self._send_command('SwitchToEtherCAT')
 
     #####################################################################################
     # Private methods.
     #####################################################################################
 
+    def __getattr__(self, name):
+        """ This method customizes the AttributeError raised when a caller is trying to access a class attribute
+        that does not exist. Here we try to return a suggestion of a "similar" function name that the user may be
+        trying to call.
+        For example: 'Robot' object has no attribute 'delay'. Did you mean 'Delay'?
+        """
+        # Called only when attribute `name` is not found normally
+        methods = [
+            m for m in dir(self) if callable(getattr(self, m)) and not m.startswith("_") and not m.startswith("__")
+        ]
+        close_matches = difflib.get_close_matches(name, methods, n=1)
+        if close_matches:
+            raise AttributeError(f"'Robot' object has no attribute '{name}'. Did you mean '{close_matches[0]}'?")
+        else:
+            raise AttributeError(f"'Robot' object has no attribute '{name}'.")
+
     def _update_robot(self, firmware: Union[str, pathlib.Path], timeout: float = _UPDATE_TIMEOUT):
         """See documentation of UpdateRobot in robot.py"""
+
+        # Check requirements that are optional for Mecademicpy but not for this method
+        if requests is None:
+            raise ImportError("The 'requests' package is required to update the robot. "
+                              "Please install it using 'pip install mecademicpy[update_robot]'.")
 
         if isinstance(firmware, pathlib.Path):
             firmware_file: pathlib.Path = firmware
@@ -2951,7 +4369,7 @@ class _Robot:
             raise ArgumentError(None,
                                 f'Unsupported firmware type. received: {type(firmware)}, expecting pathlib or str')
 
-        firmware_file_version = RobotVersion(firmware_file.name)
+        firmware_file_version = RobotVersion.from_version_string(firmware_file.name)
 
         address = self._address
         address_port = f'{address}:{self._port}'
@@ -2966,15 +4384,15 @@ class _Robot:
 
         # Make sure that the robot is not in EStop
         if robot_model_is_meca500(
-                self.GetRobotInfo().robot_model) and self.GetSafetyStatus(synchronous_update=True).estop_state:
-            raise MecademicException(
+                self._robot_info.robot_model) and self.GetSafetyStatus(synchronous_update=True).estop_state:
+            raise InvalidStateError(
                 f'Firmware update failed: Robot is in ESTOP. Please clear the ESTOP condition before updating.')
 
         # Check if we must use legacy mode
-        use_legacy_update = not self.GetRobotInfo().version.is_at_least(9, 3, 0)
+        use_legacy_update = not self._robot_info.version.is_at_least(9, 3, 0)
 
         # Make sure that the robot is deactivated
-        if self.GetStatusRobot().activation_state:
+        if self._robot_status.activation_state:
             self.logger.info(f'Robot is activated, will attempt to deactivate before updating firmware')
             self.DeactivateRobot()
             self.WaitDeactivated()
@@ -3025,7 +4443,7 @@ class _Robot:
         if not use_legacy_update:
             # Send the 'StartFwUpdate' command
             self._fw_update_status.in_progress = True  # Set once here, but the will be updated from robot update status
-            self._send_custom_command(f'StartFwUpdate({firmware_file.name})')
+            self._send_custom_command('StartFwUpdate', args=firmware_file.name)
 
         # Clear the previous update status (we'll now receive new update status)
         self._reset_fw_update_status()
@@ -3040,7 +4458,7 @@ class _Robot:
 
             # Check if complete, failed or timeout
             if self._fw_update_status.error:
-                raise MecademicException(f'Firmware update failed: {self._fw_update_status.error_msg}')
+                raise InvalidStateError(f'Firmware update failed: {self._fw_update_status.error_msg}')
             if self._fw_update_status.complete:
                 self.logger.info(f"Firmware update done")
                 break
@@ -3085,11 +4503,11 @@ class _Robot:
                         continue
                     raise
 
-        if self.GetRobotInfo().version.is_at_least(8.0):
-            current_version = self.GetRobotInfo().version.get_str(build=True, extra=False)
+        if self._robot_info.version.is_at_least(8.0):
+            current_version = self._robot_info.version.get_str(build=True, extra=False)
             expected_version = firmware_file_version.full_version
         else:
-            current_version = self.GetRobotInfo().version
+            current_version = self._robot_info.version
             expected_version = firmware_file_version.short_version
 
         if str(current_version) not in expected_version:
@@ -3106,32 +4524,46 @@ class _Robot:
 
         self.logger.info(f"Installation of {current_version} successfully completed")
 
-    def _normalize_cart_cmd_args(self, alpha: float = None, beta: float = None, gamma: float = None) -> list[float]:
+    def _normalize_cart_cmd_args(self,
+                                 x: float = None,
+                                 y: float = None,
+                                 z: float = None,
+                                 alpha: float = None,
+                                 beta: float = None,
+                                 gamma: float = None) -> List[float]:
         """Normalize alpha, beta and gamma arguments for Cartesian commands which accept alpha/beta
         arguments to be omitted"""
-        if self.GetRobotInfo().num_joints == 6:
+        if x is not None and isinstance(x, list):
+            # Unroll the list
+            padded_args = (x + [None] * 6)[:6]
+            x, y, z, alpha, beta, gamma = padded_args
+        if self._robot_info.num_joints == 6:
             if alpha is None or beta is None or gamma is None:
                 raise ValueError('Missing argument (on this robot Cartesian positions require 6 values)')
             else:
-                return [alpha, beta, gamma]
+                return [x, y, z, alpha, beta, gamma]
         else:
             # Only 2 valid ways of passing Cartesian arguments on 4 axes robots: Pass all, or pass only gamma
             if alpha is not None and beta is not None and gamma is not None:
                 # Fine, all were passed
-                return [alpha, beta, gamma]
+                return [x, y, z, alpha, beta, gamma]
             elif alpha is not None and beta is None and gamma is None:
                 # Only alpha was passed, probably by positional argument, assume it's the "gamma" value
-                return [0, 0, alpha]
+                return [x, y, z, 0, 0, alpha]
             elif alpha is None and beta is None and gamma is not None:
                 # Only gamma was passed, assume 0 for the others
-                return [0, 0, gamma]
+                return [x, y, z, 0, 0, gamma]
 
             raise ValueError('Wrong number of argument (on this robot Cartesian positions require 4 values)')
 
-    def _normalize_conf_cmd_args(self, shoulder: int = None, elbow: int = None, wrist: int = None) -> list[int]:
+    def _normalize_conf_cmd_args(self, shoulder: int = None, elbow: int = None, wrist: int = None) -> List[int]:
         """Normalize shoulder, elbow and wrist "conf" arguments for commands which accept to omit shoulder and
            wrist (for 4 axes robots which only have elbow conf)"""
-        if self.GetRobotInfo().num_joints == 6:
+        if shoulder is not None and isinstance(shoulder, list):
+            # Unroll the list
+            padded_args = (shoulder + [None] * 3)[:3]
+            shoulder, elbow, wrist = padded_args
+        if self._robot_info.num_joints == 6:
             if shoulder is None or elbow is None or wrist is None:
                 raise ValueError('Missing argument (on this robot configuration requires 3 values)')
             else:
@@ -3152,22 +4584,22 @@ class _Robot:
 
     def _get_reboot_duration(self):
         """ Get the average expected reboot duration for current robot model """
-        if self.GetRobotInfo().robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1:
+        if self._robot_info.robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1:
             return MX_FW_UPDATE_REBOOT_DURATION_SEC_MCS500
-        elif self.GetRobotInfo().robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA250_R1:
+        elif self._robot_info.robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA250_R1:
             return MX_FW_UPDATE_REBOOT_DURATION_SEC_MCA250
-        elif self.GetRobotInfo().robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA1000_R1:
+        elif self._robot_info.robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA1000_R1:
             return MX_FW_UPDATE_REBOOT_DURATION_SEC_MCA1000
         else:
             return MX_FW_UPDATE_REBOOT_DURATION_SEC_MECA500
 
     def _get_fw_update_duration(self):
         """ Get the average expected firmware update duration for current robot model """
-        if self.GetRobotInfo().robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1:
+        if self._robot_info.robot_model == MxRobotModel.MX_ROBOT_MODEL_MCS500_R1:
             return MX_FW_UPDATE_AVG_DURATION_SEC_MCS500
-        elif self.GetRobotInfo().robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA250_R1:
+        elif self._robot_info.robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA250_R1:
             return MX_FW_UPDATE_AVG_DURATION_SEC_MCA250
-        elif self.GetRobotInfo().robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA1000_R1:
+        elif self._robot_info.robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA1000_R1:
             return MX_FW_UPDATE_AVG_DURATION_SEC_MCA1000
         else:
             return MX_FW_UPDATE_AVG_DURATION_SEC_MECA500
@@ -3200,7 +4632,7 @@ class _Robot:
                 try:
                     self._Connect(address=f'{address}', monitor_mode=True, timeout=0.1)
                     # Successfully connected to legacy port. Validate that we're connected to older version
-                    if self.GetRobotInfo().version.is_at_least(9, 3):
+                    if self._robot_info.version.is_at_least(9, 3):
                         # Recent version, we should be able to connect to JSON port,
                         # so let's close here and retry JSON above (next loop)
                         self.Disconnect()
@@ -3300,13 +4732,13 @@ class _Robot:
             # We're not using monitoring port. No need to check here.
             return
 
-        if not (self._monitor_rx_handler_thread and self._monitor_rx_handler_thread.is_alive()):
+        if not self._monitor_rx_handler_thread_running:
             raise InvalidStateError('Monitor response handler thread has unexpectedly terminated.')
 
         if self._offline_mode:  # Do not check rx threads in offline mode.
             return
 
-        if not (self._monitor_rx_thread and self._monitor_rx_thread.is_alive()):
+        if not self._monitor_rx_thread_running:
             raise InvalidStateError('Monitor rx thread has unexpectedly terminated.')
 
     def _check_command_threads(self):
@@ -3316,39 +4748,37 @@ class _Robot:
 
         """
 
-        if not (self._rx_handler_thread and self._rx_handler_thread.is_alive()):
-            raise DisconnectError('Socket was closed')
+        if not self._skip_msg_queue_threads:
+            if not self._rx_handler_thread_running:
+                raise DisconnectError('Socket was closed')
 
         if self._offline_mode:  # Do not check rx threads in offline mode.
             return
 
-        if not (self._rx_thread and self._rx_thread.is_alive()):
+        if not self._rx_thread_running:
             raise DisconnectError('Socket was closed')
+        if not self._skip_msg_queue_threads:
+            if not self._tx_thread_running:
+                raise DisconnectError('Socket was closed')
 
-        if not (self._tx_thread and self._tx_thread.is_alive()):
-            raise DisconnectError('Socket was closed')
-
-    def _check_internal_states(self, refresh_monitoring_mode=False):
+    def _check_internal_states(self, just_check_if_connected=False):
         """Check that the threads which handle robot messages are alive.
 
         Attempt to disconnect from the robot if not.
 
         Parameters
         ----------
-        refresh_monitoring_mode : boolean
-            Refresh internal states even in monitoring mode when True, raise an exception otherwise.
+        just_check_if_connected
+            When True, only check if connected to the robot.
+            When False, also check that it's possible to send a command to the robot right now.
         """
         try:
             if self._monitor_mode:
-                if not refresh_monitoring_mode:
+                if not just_check_if_connected:
                     raise InvalidStateError('Cannot send command while in monitoring mode.')
             else:
-                # Check if the commands handling thread is alive (unless it's ourself)
-                thread_ident = threading.get_ident()
-                rx_thread_ident = self._rx_thread.ident if self._rx_thread is not None else None
-                cmd_thread_ident = (self._rx_handler_thread.ident if self._rx_handler_thread is not None else None)
-                if (thread_ident != rx_thread_ident and thread_ident != cmd_thread_ident):
-                    self._check_command_threads()
+                # Check if the commands handling thread is alive
+                self._check_command_threads()
 
             self._check_monitor_threads()
 
@@ -3358,61 +4788,42 @@ class _Robot:
                 if elapsedMs > _MONITORING_TIMEOUT_MS:
                     raise TimeoutError(f'Timeout: No message received from the robot in the last {elapsedMs}ms. '
                                        f'Assuming we are disconnected from the robot.')
-        except Exception:
-            # An error was detected while validating internal states. Disconnect from robot.
-            self._disconnect()
-            raise
+        except Exception as e:
+            # An error was detected while validating internal states. Disconnect from robot by raising
+            # DisconnectError (which should call _disconnect() in disconnect_on_exception_decorator since we can't call
+            # _disconnect here while owning the mutex, we would dead-lock waiting for joint() on other threads)
+            raise DisconnectError(str(e)) from e
 
-    def _split_command_args(self, command: str, args: Union[str, list, tuple] = None) -> list[str, Optional[list[str]]]:
-        """In the case the arguments are passed in the command argument, this function will split the command name
-           and arguments.
+    def _warn_if_blocking(self, fct_name: Optional[str] = None, if_paused: bool = False):
+        """Print a warning message (locally and in the user log) if the wait function can block indefinitely,
+        for example WaitIdle if robot motion is paused.
 
-        Parameters
-        ----------
-        command : str
-            String that contains the command name and possibly the arguments too
-        args : Union[str, list, tuple], optional
-            Arguments for the command, as a string, a list or a tuple, by default None
-
-        Returns
-        -------
-        list[str, Optional[list[str]]]
-            Command name (without arguments), arguments (normalized as list of strings)
+        Args:
+            fct_name (str): Name of the calling function that should not be called when the robot motion is paused
+            if_paused (str): Print a warning if the robot is paused
         """
-        if args is None:
-            # Split command from args by searching for opening parenthesis
-            split_result = command.split('(', 1)
-            if len(split_result) == 2:
-                # Strip command name (just in case there were spaces around it)
-                command = split_result[0]
-                # Remove trailing parenthesis from arguments
-                args = split_result[1].rstrip(")")
+        # Warn if the motion is paused
+        if if_paused and self._robot_events.on_motion_paused.is_set():
+            if fct_name is None:
+                fct_name = get_parent_fct_name()
+            self.LogTrace(f'WARNING: Robot motion is paused. Calling {fct_name} may block indefinitely',
+                          level=logging.WARNING)
 
-        # Normalize arguments as a list of strings
-        args_string: Optional[list[str]] = None
-        if args is not None:
-            if isinstance(args, tuple):
-                args = list(args)
-            elif isinstance(args, list):
-                pass
-            else:
-                args = [args]
-            args_string: list[str] = []
-            for arg in args:
-                if isinstance(arg, IntEnum):
-                    args_string.append(str(arg.value))
-                else:
-                    args_string.append(str(arg))
-
-        # Strip command name (just in case there were spaces around it)
-        command = command.strip()
-        return [command, args_string]
+    def _split_command_args_str(self, command: str) -> Tuple[str, str]:
+        args = ""
+        split_result = command.split('(', 1)
+        if len(split_result) == 2:
+            # Strip command name (just in case there were spaces around it)
+            command = split_result[0].strip()
+            # Remove trailing parenthesis from arguments
+            args = split_result[1].rstrip(")")
+        return (command, args)
 
     def _send_json_command(self,
                            command: str,
                            json_data: dict,
                            meta_data: Optional[dict] = None,
-                           expected_responses: list[MxRobotStatusCode] = None,
+                           expected_responses: List[MxRobotStatusCode] = None,
                            timeout: Optional[float] = None) -> Optional[Message]:
         """Send a JSON command to the robot
 
@@ -3420,7 +4831,7 @@ class _Robot:
             command (str): Command name
             json_data (dict): JSON data for this command (as a dict, will be formatted as JSON string by this function)
             meta_data (Optional[dict], optional): Meta-data dictionary for this command. Defaults to None.
-            expected_responses (list[MxRobotStatusCode], optional):
+            expected_responses (List[MxRobotStatusCode], optional):
                 Optional list of responses to wait for.
                 This function will block until one of the responses in this list is received, or until timeout.
                 If None, the function is non-blocking
@@ -3444,7 +4855,8 @@ class _Robot:
         with self._main_lock:
             if expected_responses:
                 # Prepare an interruptable event waiting for any response in the provided list
-                event_with_data = InterruptableEvent(data=expected_responses)
+                event_with_data = InterruptableEvent(data=expected_responses,
+                                                     wait_callback=self._handle_callbacks_while_waiting)
                 self._custom_response_events.append(weakref.ref(event_with_data))
 
             # Send the JSON request to the robot
@@ -3468,29 +4880,40 @@ class _Robot:
             List of arguments the command requires.
 
         """
-
-        # Make sure that command and args are split
-        command, args = self._split_command_args(command, args)
-        command_trimmed = command.replace('-', '').lower()
-        if command_trimmed in self._send_cmd_handlers:
-            self._send_cmd_handlers[command_trimmed](args)
+        if not self._connect_in_progress:
+            # Exception for LogTrace, which is allowed from a sidecar program that has been stopped
+            just_check_if_connected = "logtrace" in command.lower()
+            self._check_internal_states(just_check_if_connected)
 
         # Assemble arguments into a string and concatenate to end of command.
-        if args:
-            command += f'({args_to_string(args)})'
+        command_arg = command
+        args_str = None
+        if args is not None and args != "":
+            args_str = args_to_string(args)
+            command_arg += f'({args_str})'
 
-        # Put command into tx queue.
-        self._command_tx_queue.put(command)
+        # Check if there is an internal handler for this command
+        command_trimmed = command.replace('-', '').lower()
+        if command_trimmed in self._before_send_cmd_handlers:
+            self._before_send_cmd_handlers[command_trimmed](args_str)
+
+        if self._command_tx_queue is None:
+            # Directly write to socket
+            self._command_socket.sendall((command_arg + '\0').encode('ascii'))
+        else:
+            # Put command into tx queue.
+            self._command_tx_queue.put(command_arg)
 
         # If logging is enabled, send command to logger.
         if self._file_logger and self._file_logger.logging_commands:
-            self._file_logger.command_queue.put(command)
+            self._file_logger.command_queue.put(command_arg)
 
     def _send_sync_command(self,
                            command: Optional[str],
                            args: Optional[Union[str, list, tuple]] = None,
                            event: Optional[InterruptableEvent] = None,
-                           timeout: Optional[float] = None):
+                           timeout: Optional[float] = None,
+                           is_immediate_cmd: Optional[bool] = False):
         """Send a command and wait for corresponding response
            (this function handles well-known commands which have their corresponding 'wait' event in this class,
             use _send_custom_command to perform synchronous operations on other commands)
@@ -3505,7 +4928,11 @@ class _Robot:
             Event that will be set (unblocked) once the corresponding response is received
         timeout : float
             Maximum time to wait for the event to be set (i.e. response received)
-
+        is_immediate_cmd: bool
+            When true, this function assumes that the command to send is "immediate" and we would receive its response
+            before the SyncCmdQueue response. In this case, this function explicitly waits for SyncCmdQueue
+            response before sending the request (two step process). Otherwise the function sends both one after
+            the other and waits only once.
 
         Raises
         ------
@@ -3515,17 +4942,24 @@ class _Robot:
         if timeout is None:
             timeout = self.default_timeout
         with self._main_lock:
-            self._check_internal_states()
             if self._robot_info.rt_on_ctrl_port_capable:
                 # Send a "SyncCmdQueue" request so we know when we get the response to this get (and not an earlier one)
                 self._tx_sync += 1
                 self._tx_sync_pending = self._tx_sync
                 self._is_sync.clear()
-                self._send_command('SyncCmdQueue', f'{self._tx_sync}')
+                self._send_command(f'{self._silent_prefix}SyncCmdQueue', f'{self._tx_sync}')
             if event is not None and event.is_set():
                 event.clear()
-            if command is not None:
+            if command is not None and not is_immediate_cmd:
                 self._send_command(command, args)
+
+        if is_immediate_cmd:
+            # command is "immediate" and would reply before SyncCmdQueue. So let's first wait for SyncCmdQueue
+            # then send the "immediate" command
+            self._is_sync.wait(timeout=timeout)
+            if command is not None:
+                with self._main_lock:
+                    self._send_command(command, args)
 
         # Wait until response is received (this will throw TimeoutException if appropriate)
         if event is not None:
@@ -3536,21 +4970,20 @@ class _Robot:
 
     def _send_custom_command(self,
                              command: str,
-                             expected_responses: list[MxRobotStatusCode] = None,
-                             timeout: float = None,
-                             skip_internal_check: bool = False) -> InterruptableEvent | Message:
+                             *,
+                             args: Optional[Union[str, list, tuple]] = None,
+                             expected_responses: Optional[List[MxRobotStatusCode]] = None,
+                             timeout: Optional[float] = None) -> InterruptableEvent | Message:
         """Internal version of SendCustomCommand with option to skip internal state check (so it can be used
            during connection)
         """
         with self._main_lock:
-            if not skip_internal_check:
-                self._check_internal_states()
-
             if expected_responses:
-                event_with_data = InterruptableEvent(data=expected_responses)
+                event_with_data = InterruptableEvent(data=expected_responses,
+                                                     wait_callback=self._handle_callbacks_while_waiting)
                 self._custom_response_events.append(weakref.ref(event_with_data))
 
-            self._send_command(command)
+            self._send_command(command, args)
 
         if expected_responses:
             if timeout is None:
@@ -3558,19 +4991,246 @@ class _Robot:
             else:
                 response = event_with_data.wait(timeout)
                 return response
-        default_event = InterruptableEvent(None, None)
-        default_event.set()
-        return default_event
+        return None
+
+    def _send_basic_command(self,
+                            command: str,
+                            *,
+                            args: Optional[Union[str, list, tuple]] = None,
+                            success_code=MxRobotStatusCode.MX_ST_CMD_SUCCESSFUL):
+        """Send a basic robot command that returns either MX_ST_CMD_SUCCESSFUL or MX_ST_CMD_FAILED.
+        This command will wait for response in case the API is in synchronous mode (_enable_synchronous_mode)
+
+        Args:
+            command (str): Command and arguments to send
+            success_code (MxRobotStatusCode): The expected status code when the robot confirms that the command
+            was successful
+
+        Raises:
+            CommandFailedException: If the command failed (MX_ST_CMD_FAILED)
+        """
+        expected_responses: Optional[List[MxRobotStatusCode]] = None
+        if self._enable_synchronous_mode:
+            expected_responses = [success_code, MxRobotStatusCode.MX_ST_CMD_FAILED]
+        response = self._send_custom_command(command,
+                                             args=args,
+                                             expected_responses=expected_responses,
+                                             timeout=self.default_timeout)
+        if expected_responses is not None:
+            if response.id == MxRobotStatusCode.MX_ST_CMD_FAILED:
+                raise CommandFailedException(response.data)
+
+    def _send_basic_bool_command(self, command: str, val: Union[bool, int, float]):
+        """Send a basic robot command that has one bool parameter and that returns either
+        MX_ST_CMD_SUCCESSFUL or MX_ST_CMD_FAILED.
+        This command will wait for response in case the API is in synchronous mode (_enable_synchronous_mode)
+
+        Args:
+            command (str): Name of the command to call
+            val (bool): Boolean (or 0/1) value to use as an argument to the command
+
+        Raises:
+            CommandFailedException: If the command failed (MX_ST_CMD_FAILED)
+        """
+        self._send_basic_command(command, args=[1 if val else 0])
+
+    def _send_basic_get_command(
+            self,
+            command: str,
+            expected_code: Union[MxRobotStatusCode, List[MxRobotStatusCode]],
+            timeout: Optional[float] = None,
+            parse_fct: Callable[[Message], Union[List[int], List[bool]]] = None) -> Union[List[int], List[bool], str]:
+        return self._send_basic_get_command_args(command,
+                                                 args=None,
+                                                 expected_code=expected_code,
+                                                 timeout=timeout,
+                                                 parse_fct=parse_fct)
+
+    def _send_basic_get_command_args(
+            self,
+            command: str,
+            args: Optional[Union[str, list, tuple]],
+            expected_code: Union[MxRobotStatusCode, List[MxRobotStatusCode]],
+            timeout: Optional[float] = None,
+            parse_fct: Callable[[Message], Union[List[int], List[bool]]] = None) -> Union[List[int], List[bool], str]:
+        """Send a basic robot 'get' command that returns float data values (as received from the robot).
+        This command will always wait for the robot response, no asynchronous mode is possible.
+
+        Args:
+            command (str): Command and arguments to send
+            expected_code (MxRobotStatusCode): Status code that the robot shall return for this 'get' request
+            timeout (float): Maximum time to wait for the robot response to this 'get' request
+            parse_fct (Callable, optional): Optional parse function for the received data
+
+        Returns
+        -------
+        List[float]
+            Values returned by the robot in the received response for this 'get' request
+
+        Raises:
+            TimeoutException if no response was received from the robot before the timeout
+        """
+        if timeout is None:
+            timeout = 1.0
+        if isinstance(expected_code, list):
+            expected_codes = expected_code
+        else:
+            expected_codes = [expected_code]
+        expected_codes_w_err = expected_codes + [
+            MxRobotStatusCode.MX_ST_CMD_FAILED, MxRobotStatusCode.MX_ST_ARG_ERR, MxRobotStatusCode.MX_ST_NOT_ACTIVATED,
+            MxRobotStatusCode.MX_ST_NOT_HOMED
+        ]
+        response: Message = self._send_custom_command(command,
+                                                      args=args,
+                                                      expected_responses=expected_codes_w_err,
+                                                      timeout=timeout)
+        if response.id not in expected_codes:
+            raise CommandFailedException(response.data)
+        if parse_fct is not None:
+            return parse_fct(response)
+        return response.data
+
+    def _check_rt_data_enabled(self, command: str, rt_data_ref: TimestampedData):
+        """Check if the specified real-time data (associated with the specified command) is optional cyclical and
+           not currently enabled. In that case, we have no valid value to return and this function raises an
+           appropriate error.
+
+        Args:
+            command (str): The command that should return the specified real-time data
+            rt_data_ref (TimestampedData): The real-time data to check if enabled
+
+        Raises:
+            InvalidStateError: Raised when the specified cyclic data is optional and not enabled
+        """
+        if rt_data_ref:
+            is_cyclical = rt_data_ref.update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL
+            is_cyclical_optional = rt_data_ref.update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL
+            if self._application_type.is_sidecar():
+                # Sidecar applications don't have access to cyclical data unless using sync mode
+                if is_cyclical or is_cyclical_optional:
+                    raise InvalidStateError(
+                        (f'{command} can only be called with synchronous_update in sidecar programs.'))
+            if is_cyclical_optional:
+                if rt_data_ref.enabled:
+                    # Make sure that the 'enabled' flag is still valid (was received within the last second)
+                    elapsed_us = self._robot_rt_data.rt_target_joint_pos.timestamp - rt_data_ref.timestamp
+                    if elapsed_us > 1100000:  # One second plus some jitter margin
+                        rt_data_ref.enabled = False
+                if not rt_data_ref.enabled:
+                    raise InvalidStateError(
+                        (f'{command} cannot be called asynchronously because this optional cyclical data '
+                         f'is not enabled. See SetRealTimeMonitoring().'))
+
+    def _send_rt_get_command(self,
+                             command: str,
+                             sync_event: InterruptableEvent,
+                             rt_data_ref: Optional[TimestampedData],
+                             include_timestamp: bool = False,
+                             synchronous_update: bool = False,
+                             timeout: Optional[float] = None) -> Optional[Union[TimestampedData, List[float]]]:
+        return self._send_rt_get_command_args(command,
+                                              args=None,
+                                              sync_event=sync_event,
+                                              rt_data_ref=rt_data_ref,
+                                              include_timestamp=include_timestamp,
+                                              synchronous_update=synchronous_update,
+                                              timeout=timeout)
+
+    def _send_rt_get_command_args(self,
+                                  command: str,
+                                  args: Union[str, list, tuple],
+                                  sync_event: InterruptableEvent,
+                                  rt_data_ref: Optional[TimestampedData],
+                                  include_timestamp: bool = False,
+                                  synchronous_update: bool = False,
+                                  timeout: Optional[float] = None) -> Optional[Union[TimestampedData, List[float]]]:
+        """Common code for multiple API calls that need to potentially query then return robot real-time data.
+        This function:
+        - validates some conditions
+        - forces synchronous update in some cases (if sidecar and requesting a cyclical in async mode,
+          since no cyclic data is sent to sidecar)
+        - If necessary, performs the synchronous get
+        - Optionally returns the timestamped data (or list of float) from rt_data_ref
+
+        Args:
+            command (str): The Command to send to the robot if synchronous mode is requested
+            args: The Command arguments (optional)
+            sync_event (InterruptableEvent): The robot event that is expected to be set when response is received
+            rt_data_ref (Optional[TimestampedData]): Real-time data to return (after optional synchronous 'get')
+            include_timestamp (bool, optional): Return the TimestampedData, or only its data. Defaults to False.
+            synchronous_update (bool, optional): Synchronously get from the robot, otherwise returned the value
+                                                 cached from the latest cyclic data. Defaults to False.
+            timeout (Optional[float], optional): Time to wait for synchronous response. Defaults to None.
+
+        Raises:
+            InvalidStateError: Raised if requesting a cached copy (async) of real-time data that is optional
+                               but has not been enabled.
+
+        Returns:
+            Optional[Union[TimestampedData, List[float]]]: _description_
+        """
+        # Make sure that this data, if cyclical, is enabled, otherwise we have nothing to return
+        if not synchronous_update and rt_data_ref is not None:
+            self._check_rt_data_enabled(command, rt_data_ref)
+        # Use appropriate default timeout if not specified
+        if timeout is None:
+            timeout = 1.0
+        cyclical_cmd: str = None
+        if rt_data_ref is not None:
+            if ((rt_data_ref.update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL)
+                    or (rt_data_ref.update_type == RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)):
+                cyclical_cmd = command
+        prefix = ''
+        if not synchronous_update and self._must_force_sync(cyclical_cmd):
+            synchronous_update = True
+            prefix = self._silent_prefix  # Silent command, no robot log
+        if synchronous_update:
+            self._send_sync_command(prefix + command, args=args, event=sync_event, timeout=timeout)
+
+        if rt_data_ref is not None:
+            with self._main_lock:
+                if include_timestamp:
+                    return rt_data_ref.copy()
+                else:
+                    return rt_data_ref.data.copy()
+
+    def _send_set_cfg_command(self, command: str, args: Union[str, list, tuple], success_code: MxRobotStatusCode):
+        """Common code to send configuration set commands
+
+        Args:
+            command (str): The command to set
+            args (str): The command arguments, if any
+            success_code (MxRobotStatusCode): The expected status code when the robot confirms that the command
+            was successful
+
+        Raises:
+            CommandFailedException: The robot refused the command
+        """
+        if self._enable_synchronous_mode:
+            response = self._send_custom_command(command,
+                                                 args=args,
+                                                 expected_responses=[
+                                                     success_code, MxRobotStatusCode.MX_ST_CMD_FAILED,
+                                                     MxRobotStatusCode.MX_ST_ARG_ERR,
+                                                     MxRobotStatusCode.MX_ST_MUST_BE_DEACTIVATED
+                                                 ],
+                                                 timeout=self.default_timeout)
+            if response.id != success_code:
+                raise CommandFailedException(response.data)
+        else:
+            with self._main_lock:
+                self._send_command(command, args)
 
     def GetInterruptableEvent(self,
-                              codes: list[Union[MxRobotStatusCode, Message]],
+                              codes: List[Union[MxRobotStatusCode, Message]],
                               abort_on_error=False,
                               abort_on_clear_motion=False) -> InterruptableEvent:
         """See documentation in equivalent function in robot.py"""
         with self._main_lock:
             event_with_data = InterruptableEvent(data=codes,
                                                  abort_on_error=abort_on_error,
-                                                 abort_on_clear_motion=abort_on_clear_motion)
+                                                 abort_on_clear_motion=abort_on_clear_motion,
+                                                 wait_callback=self._handle_callbacks_while_waiting)
             self._custom_response_events.append(weakref.ref(event_with_data))
             # Check if the event must be interrupted already
             if abort_on_error and self._robot_status.error_status:
@@ -3616,8 +5276,11 @@ class _Robot:
         self._command_socket = self._connect_socket(self.logger, self._address, self._port, timeout)
         self.logger.debug(f'Connected to {self._address}:{self._port} (control mode)')
 
-        if self._sidecar_mode:
-            self._command_socket.sendall((f'{MX_ROBOT_SIDECAR_MODE_STRING}\0').encode('ascii'))
+        if self._application_type == ApplicationType.EXTERNAL_SIDECAR:
+            self._command_socket.sendall((f'{MX_ROBOT_EXTERNAL_SIDECAR_MODE_STRING}\0').encode('ascii'))
+            pass
+        elif self._application_type == ApplicationType.EMBEDDED_SIDECAR:
+            self._command_socket.sendall((f'{MX_ROBOT_EMBEDDED_SIDECAR_MODE_STRING}\0').encode('ascii'))
             pass
         else:
             # Send an empty command to the connection so it knows we're not a WebSocket and does not wait a timeout
@@ -3629,14 +5292,17 @@ class _Robot:
 
         # Create rx thread for command socket communication.
         self._rx_thread = self._launch_thread(target=self._rx_thread_fct,
-                                              args=(
-                                                  self._command_socket,
-                                                  self._command_rx_queue,
-                                              ))
+                                              args=(self._command_socket, self._command_rx_queue))
+        self._rx_thread_running = True
 
-        # Create tx thread for command socket communication.
-        self._tx_thread = self._launch_thread(target=self._tx_thread_fct,
-                                              args=(self._command_socket, self._command_tx_queue))
+        if self._command_tx_queue is not None:
+            # Create tx thread for command socket communication.
+            self._tx_thread = self._launch_thread(target=self._tx_thread_fct,
+                                                  args=(self._command_socket, self._command_tx_queue))
+            self._tx_thread_running = True
+        else:
+            # We're not using a tx queue, we're writing directly to the socket
+            pass
 
     def _initialize_monitoring_socket(self, timeout):
         """Establish the monitoring socket and the associated thread.
@@ -3662,8 +5328,9 @@ class _Robot:
         # Create rx thread for monitor socket communication.
         self._monitor_rx_thread = self._launch_thread(target=self._rx_thread_fct,
                                                       args=(self._monitor_socket, self._monitor_rx_queue))
+        self._monitor_rx_thread_running = True
 
-    def _receive_welcome_message(self, message_queue: queue.Queue, from_command_port: bool):
+    def _wait_welcome_message(self, message_queue: queue.Queue, from_command_port: bool):
         """Receive and parse a welcome message in order to set _robot_info and _robot_rt_data.
 
         Parameters
@@ -3678,6 +5345,7 @@ class _Robot:
         start = time.monotonic()
         while True:
             try:
+                # Wait message in queue
                 response: Message = message_queue.get(block=True, timeout=self.default_timeout)
             except queue.Empty as e:
                 self.logger.error('No response received within timeout interval.')
@@ -3695,18 +5363,30 @@ class _Robot:
                 self.logger.error('No connect message received within timeout interval.')
                 break
 
-        if response.id == mx_st.MX_ST_CONNECTED:
+        self._handle_welcome_message(response)
+
+    def _handle_welcome_message(self, message: Message):
+        """Handle the robot's welcome message in order to set _robot_info and _robot_rt_data.
+
+        Parameters
+        ----------
+        message : Message
+            The welcome message received from the robot.
+        """
+
+        if message.id == mx_st.MX_ST_CONNECTED:
             # Attempt to parse robot return data.
-            self._robot_info = self._parse_welcome_message(response.data)
-        elif response.id == mx_st.MX_ST_GET_STATUS_ROBOT:
+            self._robot_info = self._parse_welcome_message(message.data)
+        elif message.id == mx_st.MX_ST_GET_STATUS_ROBOT:
             # This means we're connected to a Legacy robot that does not send mx_st.MX_ST_CONNECTED on monitoring port.
             # We will not be able to deduce robot version. Assume some 8.x version
             self._robot_info = RobotInfo(model='Meca500', revision=3, version='8.0.0.0-unknown-version')
         else:
-            raise CommunicationError(f'Connection error: {response}')
+            raise CommunicationError(f'Connection error: {message}')
 
         self._robot_rt_data = RobotRtData(self._robot_info.num_joints)
         self._robot_rt_data_stable = RobotRtData(self._robot_info.num_joints)
+        self._robot_events.welcome_msg_received.set()
 
     def _parse_welcome_message(self, message: str) -> RobotInfo:
         """Parse the robot's connection 'welcome' message and build RobotInfo from it
@@ -3728,17 +5408,19 @@ class _Robot:
         """Attempt to connect to the command port of the Mecademic Robot.
 
         """
-        self._receive_welcome_message(self._command_rx_queue, True)
+        self._wait_welcome_message(self._command_rx_queue, True)
 
         self._rx_handler_thread = self._launch_thread(target=self._rx_handler_fct, args=())
+        self._rx_handler_thread_running = True
 
     def _initialize_monitoring_connection(self):
         """Attempt to connect to the monitor port of the Mecademic Robot."""
 
         if self._monitor_mode:
-            self._receive_welcome_message(self._monitor_rx_queue, False)
+            self._wait_welcome_message(self._monitor_rx_queue, False)
 
         self._monitor_rx_handler_thread = self._launch_thread(target=self._monitor_rx_handler, args=())
+        self._monitor_rx_handler_thread_running = True
 
         return
 
@@ -3779,34 +5461,33 @@ class _Robot:
         """Attempt to gracefully shut down threads which read from sockets.
 
         """
-        with self._main_lock:
-            # Shutdown socket to terminate the rx threads.
-            if self._command_socket is not None:
-                try:
-                    self._command_socket.shutdown(socket.SHUT_RDWR)
-                    self._command_socket.close()  # This will unblock the call to read()
-                # pylint: disable=broad-exception-caught
-                except Exception:
-                    #self.logger.error(f'Error shutting down command socket: {e}')
-                    pass
-
-            if self._monitor_socket is not None:
-                try:
-                    self._monitor_socket.shutdown(socket.SHUT_RDWR)
-                    self._monitor_socket.close()  # This will unblock the call to read()
+        # Shutdown socket to terminate the rx threads.
+        if self._command_socket is not None:
+            try:
+                self._command_socket.shutdown(socket.SHUT_RDWR)
+                self._command_socket.close()  # This will unblock the call to read()
             # pylint: disable=broad-exception-caught
-                except Exception:
-                    #self.logger.error('Error shutting down monitor socket. ' + str(e))
-                    pass
+            except Exception:
+                #self.logger.error(f'Error shutting down command socket: {e}')
+                pass
 
-            # Join threads which wait on a socket.
-            if self._rx_thread is not None:
-                self._rx_thread.join(timeout=self.default_timeout)
-                self._rx_thread = None
+        if self._monitor_socket is not None:
+            try:
+                self._monitor_socket.shutdown(socket.SHUT_RDWR)
+                self._monitor_socket.close()  # This will unblock the call to read()
+        # pylint: disable=broad-exception-caught
+            except Exception:
+                #self.logger.error('Error shutting down monitor socket. ' + str(e))
+                pass
 
-            if self._monitor_rx_thread is not None:
-                self._monitor_rx_thread.join(timeout=self.default_timeout)
-                self._monitor_rx_thread = None
+        # Join threads which wait on a socket.
+        if self._rx_thread is not None:
+            self._rx_thread.join(timeout=self.default_timeout)
+            self._rx_thread = None
+
+        if self._monitor_rx_thread is not None:
+            self._monitor_rx_thread.join(timeout=self.default_timeout)
+            self._monitor_rx_thread = None
 
     def _set_checkpoint_internal(self) -> InterruptableEvent:
         """Set a checkpoint for internal use using the next available internal id.
@@ -3818,6 +5499,11 @@ class _Robot:
 
         """
         with self._main_lock:
+            self._check_internal_states()
+            # Can't wait if robot is in error (already "idle")
+            if self._robot_status.error_status:
+                raise InterruptException('Robot is in error')
+
             checkpoint_id = self._internal_checkpoint_counter
 
             # Increment internal checkpoint counter.
@@ -3866,7 +5552,7 @@ class _Robot:
 
             if n not in checkpoints_dict:
                 checkpoints_dict[n] = list()
-            event = InterruptableEvent(n)
+            event = InterruptableEvent(n, wait_callback=self._handle_callbacks_while_waiting)
             checkpoints_dict[n].append(event)
 
             if send_to_robot:
@@ -3875,7 +5561,7 @@ class _Robot:
             return event
 
     def _invalidate_checkpoints(self, message, forced: bool):
-        """Unblock all waiting checkpoints and have them throw InterruptException
+        """Unblock all waiting checkpoints and have them raise InterruptException
 
         Args:
             message (str): Message for the user that describes why the checkpoint was discarded.
@@ -3905,14 +5591,29 @@ class _Robot:
             List of arguments to be sent.
 
         """
+        # Normalize arguments
+        if args is not None and len(args) > 0 and isinstance(args[0], list):
+            args = args[0]
         with self._main_lock:
-            self._check_internal_states()
             self._send_command(command, args)
             if self._enable_synchronous_mode:
                 checkpoint = self._set_checkpoint_internal()
 
         if self._enable_synchronous_mode:
             checkpoint.wait()
+
+    def _send_motion_command_check(self, command: str, *, expected_count: int, args: Union[str, list, tuple] = None):
+        """Same as _send_motion_command but also validates the expected number of arguments
+        """
+        # Normalize arguments
+        if args is not None and len(args) > 0 and isinstance(args[0], list):
+            args = args[0]
+        if expected_count is not None:
+            # Validate the number of provided arguments
+            if len(args) != expected_count:
+                raise ValueError((f'MoveJoints: Incorrect number of arguments ({len(args)}) for {command}. '
+                                  f'Expecting: {expected_count}.'))
+        return self._send_motion_command(command, args)
 
     def _send_immediate_command(self, command: str, args: Optional[Union[str, list, tuple]],
                                 event: Optional[InterruptableEvent]):
@@ -3936,45 +5637,42 @@ class _Robot:
         """Handle messages from the monitoring port of the robot.
 
         """
+        try:
+            while True:
+                # Wait for a message in the queue.
+                response: Message = self._monitor_rx_queue.get(block=True)
 
-        while True:
-            # Wait for a message in the queue.
-            response: Message = self._monitor_rx_queue.get(block=True)
+                # Terminate thread if requested.
+                if response == _TERMINATE:
+                    break
 
-            # Terminate thread if requested.
-            if response == _TERMINATE:
-                break
+                self._callback_queue.put('on_monitor_message', response)
 
-            self._callback_queue.put('on_monitor_message', response)
+                with self._main_lock:
 
-            queue_size = self._monitor_rx_queue.qsize()
-            if queue_size > self._robot_rt_data.max_queue_size:
-                self._robot_rt_data.max_queue_size = queue_size
+                    self._handle_common_messages(message=response)
 
-            with self._main_lock:
+                    # On non-rt monitoring capable platforms, no CYCLE_END event is sent, so use system time.
+                    # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotRtData upon GET_POSE.
+                    if not self._robot_info.rt_message_capable and response.id == mx_st.MX_ST_GET_POSE:
+                        # On non rt_monitoring platforms, we will consider this moment to be the end of cycle
+                        self._robot_events.on_end_of_cycle.set()
+                        self._callback_queue.put('on_end_of_cycle')
 
-                self._handle_common_messages(message=response)
+                        if self._file_logger:
+                            # Log time in microseconds to be consistent with real-time logging timestamp.
+                            self._file_logger.write_fields(time.time_ns() / 1000, self._robot_rt_data)
+                        self._make_stable_rt_data()
 
-                # On non-rt monitoring capable platforms, no CYCLE_END event is sent, so use system time.
-                # GET_JOINTS and GET_POSE is still sent every cycle, so log RobotRtData upon GET_POSE.
-                if not self._robot_info.rt_message_capable and response.id == mx_st.MX_ST_GET_POSE:
-                    # On non rt_monitoring platforms, we will consider this moment to be the end of cycle
-                    self._robot_events.on_end_of_cycle.set()
-                    self._callback_queue.put('on_end_of_cycle')
-
-                    if self._file_logger:
-                        # Log time in microseconds to be consistent with real-time logging timestamp.
-                        self._file_logger.write_fields(time.time_ns() / 1000, self._robot_rt_data)
-                    self._make_stable_rt_data()
-
+        finally:
             self._invalidate_interruptable_events(message="Monitoring socket disconnected")
+            self._monitor_rx_handler_thread_running = False
 
     def _make_stable_rt_data(self):
         """We have to create stable copy of rt_data, with consistent timestamp values for all attributes.
         This consistent copy is used by GetRobotRtData()
         """
-
-        self._robot_rt_data_stable = copy.deepcopy(self._robot_rt_data)
+        self._robot_rt_data_stable.copy_from_if_updated(self._robot_rt_data)
 
         # Make sure to not report values that are outdated
         self._robot_rt_data_stable.clear_if_outdated()
@@ -4014,7 +5712,7 @@ class _Robot:
             self._custom_response_events.remove(event_weakref)
 
     def _invalidate_interruptable_events(self, message=""):
-        """ Unblock all appropriate interruptable events and have them throw InterruptException."""
+        """ Unblock all appropriate interruptable events and have them raise InterruptException."""
         for event_weakref in self._custom_response_events:
             event: InterruptableEvent = event_weakref()
             if event:
@@ -4022,7 +5720,7 @@ class _Robot:
 
     def _invalidate_interruptable_events_on_error(self, message=""):
         """Following robot entering error state, unblock all appropriate interruptable events and have them
-        throw InterruptException."""
+        raise InterruptException."""
         for event_weakref in self._custom_response_events:
             event: InterruptableEvent = event_weakref()
             #pylint: disable=protected-access
@@ -4031,36 +5729,43 @@ class _Robot:
 
     def _invalidate_interruptable_events_on_clear_motion(self, message=""):
         """Following robot motion cleared, unblock all appropriate interruptable events and have them
-        throw InterruptException."""
+        raise InterruptException."""
         for event_weakref in self._custom_response_events:
             event: InterruptableEvent = event_weakref()
             #pylint: disable=protected-access
             if event and event._abort_on_clear_motion:
                 event.abort(message)
 
+    def _handle_rx_msg(self, message: Message):
+        """ Handle a message received from the socket """
+        self._callback_queue.put('on_command_message', message)
+
+        with self._main_lock:
+            self._cleanup_custom_response_events()
+            self._awake_custom_response_events(message)
+
+            self._handle_common_messages(message)
+
     def _rx_handler_fct(self):
         """Handle received messages on the command socket.
 
         """
-        while True:
-            # Wait for a response to be available from the queue.
-            response = self._command_rx_queue.get(block=True)
+        try:
+            while True:
+                # Wait for a response to be available from the queue.
+                response = self._command_rx_queue.get(block=True)
 
-            # Terminate thread if requested.
-            if response == _TERMINATE:
-                break
+                # Terminate thread if requested.
+                if response == _TERMINATE:
+                    break
 
-            self._callback_queue.put('on_command_message', response)
+                self._handle_rx_msg(response)
 
-            with self._main_lock:
-                self._cleanup_custom_response_events()
-                self._awake_custom_response_events(response)
-
-                self._handle_common_messages(response)
-
-        message = "Control socket disconnected"
-        self._invalidate_checkpoints(message, forced=True)
-        self._invalidate_interruptable_events(message)
+        finally:
+            message = "Control socket disconnected"
+            self._invalidate_checkpoints(message, forced=True)
+            self._invalidate_interruptable_events(message)
+            self._rx_handler_thread_running = False
 
     def _handle_common_messages(self, message: Message):
         """Handle messages which are received on the command and monitor port, and are processed the same way.
@@ -4091,21 +5796,37 @@ class _Robot:
             #self.logger.warning(f"No handler for message id {message.id}")
             pass
 
-    def _parse_response_bool(self, response: Message) -> list[bool]:
-        """ Parse standard robot response, returns array of boolean values
+    def _parse_response_bool(self, response: Message) -> List[bool]:
+        """ Parse standard robot response, returns array of bool values
         """
         if response.data.strip() == '':
             return []
         else:
             return [bool(int(x)) for x in response.data.split(',')]
 
-    def _parse_response_int(self, response: Message) -> list[int]:
+    def _parse_response_int(self, response: Message) -> List[int]:
         """ Parse standard robot response, returns array of integer values
         """
         if response.data.strip() == '':
             return []
         else:
             return [int(x) for x in response.data.split(',')]
+
+    def _parse_response_float(self, response: Message) -> List[float]:
+        """ Parse standard robot response, returns array of float values
+        """
+        if response.data.strip() == '':
+            return []
+        else:
+            return [float(x) for x in response.data.split(',')]
+
+    def _parse_response_string(self, response: Message) -> List[str]:
+        """ Parse standard robot response, returns array of string values
+        """
+        if response.data.strip() == '':
+            return []
+        else:
+            return response.data.split(',')
 
     def _set_activated(self, activated: bool):
         """Update the "activated" state of the robot
@@ -4199,7 +5920,10 @@ class _Robot:
                 self._callback_queue.put('on_deactivate_recovery_mode')
             self._robot_status.recovery_mode = recovery_mode
 
-    def _set_error_status(self, error_status: bool, error_code: Optional[int] = None):
+    def _set_error_status(self,
+                          error_status: bool,
+                          error_code: Optional[MxRobotStatusCode] = None,
+                          error_msg: Optional[str] = None):
         """Update the "error" state of the robot
 
         Parameters
@@ -4209,7 +5933,7 @@ class _Robot:
         """
         if not self._first_robot_status_received or self._robot_status.error_status != error_status:
             if error_status:
-                message = "robot is in error"
+                message = "robot is in error" if error_msg is None else error_msg
                 self._invalidate_checkpoints(message, forced=False)
                 self._invalidate_interruptable_events_on_error(message)
                 self._robot_events.on_error.set()
@@ -4226,6 +5950,25 @@ class _Robot:
             self._robot_status.error_status = error_status
 
         self._robot_status.error_code = error_code
+        self._robot_status.error_msg = error_msg
+
+    def _set_cleared(self, cleared: bool):
+        """Update the "motion cleared" state of the robot
+
+        Parameters
+        ----------
+        cleared : bool
+            Robot motion is currently cleared
+        """
+        if not self._first_robot_status_received or self._robot_status.motion_cleared_status != cleared:
+            if cleared:
+                # Note: on_motion_cleared event is set by _check_motion_clear_done()
+                # self._robot_events.on_motion_cleared.set()
+                pass
+            else:
+                self._robot_events.on_motion_cleared.clear()
+            self._robot_status.motion_cleared_status = cleared
+        self._check_motion_clear_done()
 
     def _set_paused(self, paused: bool):
         """Update the "paused" state of the robot
@@ -4291,6 +6034,7 @@ class _Robot:
             New robot operation mode to set in robot state
         """
         self._robot_safety_status.robot_operation_mode = robot_operation_mode
+
         # Notify that some change occurred in safety stop state
         self._callback_queue.put('on_safety_stop_state_change')
 
@@ -4309,12 +6053,19 @@ class _Robot:
     def _check_motion_clear_done(self):
         """This function will set (unblock) on_motion_cleared once motion clear is confirmed, i.e. once no more
            ClearMotion response is pending and once EOB is confirmed."""
-        wait_for_eob = self.GetRobotInfo().version.is_at_least(9, 3, 0)
-        if not self._robot_events.on_motion_cleared.is_set():
+        wait_for_eob = self._robot_info.version.is_at_least(9, 3, 0)
+        supports_cleared_json_status = self._robot_info.version.is_at_least(11, 1, 5)
+        if supports_cleared_json_status:
+            waiting_cleared_status = self._json_robot_status_received and not self._robot_status.motion_cleared_status
+        else:
+            # This robot does not report the cleared status in JSON, so we can't wait for it
+            waiting_cleared_status = False
+        if not waiting_cleared_status and not self._robot_events.on_motion_cleared.is_set():
             if self._clear_motion_requests == 0:
                 if not wait_for_eob or (self._robot_status.end_of_block_status
                                         and self._robot_status.pause_motion_status):
                     self._robot_events.on_motion_cleared.set()
+                    self._callback_queue.put('on_motion_cleared')
 
     def _handle_get_joints_legacy(self, response: Message):
         if self._robot_info.rt_message_capable:
@@ -4322,10 +6073,10 @@ class _Robot:
             self._tmp_rt_joint_pos = string_to_numbers(response.data)
         else:  # not self._robot_info.rt_message_capable
             # Legacy robot, it won't send MX_ST_RT_TARGET_JOINT_POS, let's use this response instead
-            self._robot_rt_data.rt_target_joint_pos.data = string_to_numbers(response.data)
-            self._robot_rt_data.rt_target_joint_pos.enabled = True
+            self._robot_rt_data.rt_target_joint_pos.set_data(string_to_numbers(response.data))
+            self._robot_rt_data.rt_target_joint_pos.set_enabled(True)
             if self._is_in_sync():
-                self._robot_events.on_joints_updated.set()
+                self._robot_events.on_rt_target_joint_pos_updated.set()
 
     def _handle_get_pose_legacy(self, response: Message):
         if self._robot_info.rt_message_capable:
@@ -4333,26 +6084,26 @@ class _Robot:
             self._tmp_rt_cart_pos = string_to_numbers(response.data)
         else:  # not self._robot_info.rt_message_capable
             # Legacy robot, it won't send MX_ST_RT_TARGET_CART_POS, let's use this response instead
-            self._robot_rt_data.rt_target_cart_pos.data = string_to_numbers(response.data)
-            self._robot_rt_data.rt_target_cart_pos.enabled = True
+            self._robot_rt_data.rt_target_cart_pos.set_data(string_to_numbers(response.data))
+            self._robot_rt_data.rt_target_cart_pos.set_enabled(True)
             if self._is_in_sync():
-                self._robot_events.on_pose_updated.set()
+                self._robot_events.on_rt_target_cart_pos_updated.set()
 
     def _handle_get_conf_legacy(self, response: Message):
         if not self._robot_info.rt_message_capable:
             # Legacy robot, it won't send MX_ST_RT_TARGET_CONF, let's use this response instead
-            self._robot_rt_data.rt_target_conf.data = string_to_numbers(response.data)
-            self._robot_rt_data.rt_target_conf.enabled = True
+            self._robot_rt_data.rt_target_conf.set_data(string_to_numbers(response.data))
+            self._robot_rt_data.rt_target_conf.set_enabled(True)
 
     def _handle_get_conf_turn_legacy(self, response: Message):
         if not self._robot_info.rt_message_capable:
             # Legacy robot, it won't send MX_ST_RT_TARGET_CONF_TURN, let's use this response instead
-            self._robot_rt_data.rt_target_conf_turn.data = string_to_numbers(response.data)
-            self._robot_rt_data.rt_target_conf_turn.enabled = True
+            self._robot_rt_data.rt_target_conf_turn.set_data(string_to_numbers(response.data))
+            self._robot_rt_data.rt_target_conf_turn.set_enabled(True)
 
     def _handle_cycle_end(self, response: Message):
         """Handle a robot message of type mx_st.MX_ST_RT_CYCLE_END"""
-        self._robot_rt_data.cycle_count += 1
+        self._robot_rt_data.increment_cycle_count()
         if not self._robot_info.rt_message_capable:
             self._robot_info.rt_message_capable = True
         timestamp = int(response.data)
@@ -4388,11 +6139,17 @@ class _Robot:
         # Max every 10ms
         if force or now - self._auto_connection_watchdog_last > 0.01:
             self._auto_connection_watchdog_last = now
-            timeout = self._monitoring_interval * 4
-            # But make sure not to use a timer that's exaggeratedly small (Python is not THAT real time!)
-            if timeout < 0.25:
-                timeout = 0.25
-            self.ConnectionWatchdog(timeout)
+            if self._application_type.is_sidecar():
+                timeout = MX_SIDECAR_CONNECTION_TIMEOUT_SEC
+            else:
+                timeout = self._monitoring_interval * 4
+                # But make sure not to use a timer that's exaggeratedly small (Python is not THAT real time!)
+                if timeout < 0.25:
+                    timeout = 0.25
+            try:
+                self.ConnectionWatchdog(timeout)
+            except StopProgramException:
+                pass  # Ignore this exception, we're an internal thread, this targets user threads
 
     def _handle_robot_status_response(self, response: Message):
         """Parse robot status response and update status fields and events.
@@ -4404,6 +6161,7 @@ class _Robot:
         """
         assert response.id == mx_st.MX_ST_GET_STATUS_ROBOT
         if response.json_data:
+            self._json_robot_status_received = True
             # JSON format.
             json_data: dict = response.json_data.get(MX_JSON_KEY_DATA, {})
             json_robot_status: Optional[dict] = None
@@ -4426,12 +6184,15 @@ class _Robot:
                     json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_STATE, 0) >= MxRobotState.MX_ROBOT_STATE_ACTIVATED)
                 self._set_homed(
                     json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_STATE, 0) == MxRobotState.MX_ROBOT_STATE_RUN)
-                self._set_sim_mode(MxRobotSimulationMode(json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_SIM, 0)))
+                self._set_sim_mode(
+                    safe_enum_cast(MxRobotSimulationMode, json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_SIM, 0)))
                 self._set_recovery_mode(bool(json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_RECOVERY, False)))
-                error_code = int(json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_ERR, 0))
-                self._set_error_status(error_status=error_code != 0, error_code=error_code)
+                error_code = safe_enum_cast(MxRobotStatusCode, json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_ERR, ''))
+                error_msg = str(json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_ERR_MSG, ''))
+                self._set_error_status(error_status=error_code != 0, error_code=error_code, error_msg=error_msg)
                 self._set_brakes_engaged(bool(json_robot_status.get(MX_JSON_KEY_STATUS_ROBOT_BRAKES, False)))
             if json_motion_status is not None:
+                self._set_cleared(bool(json_motion_status.get(MX_JSON_KEY_MOTION_STATUS_CLEARED, False)))
                 self._set_paused(bool(json_motion_status.get(MX_JSON_KEY_MOTION_STATUS_HOLD, False)))
                 self._set_eob(bool(json_motion_status.get(MX_JSON_KEY_MOTION_STATUS_EOB, False)))
             if json_safety_status is not None:
@@ -4444,24 +6205,26 @@ class _Robot:
                 if (MX_JSON_KEY_SAFETY_STOP_STATIC_MASKS in json_safety_status
                         and isinstance(json_safety_status[MX_JSON_KEY_SAFETY_STOP_STATIC_MASKS], dict)):
                     json_stop_masks: dict = json_safety_status[MX_JSON_KEY_SAFETY_STOP_STATIC_MASKS]
-                    self._robot_safety_status.static_masks.clearedByPsu = int(
-                        json_stop_masks.get(MX_JSON_KEY_MASK_CLEARED_BY_PSU, 0))
-                    self._robot_safety_status.static_masks.withVmOff = int(
-                        json_stop_masks.get(MX_JSON_KEY_MASK_WITH_VM_OFF, 0))
-                    if MX_JSON_KEY_MASK_MANUAL_MODE in json_stop_masks:
-                        self._robot_safety_status.static_masks.maskedInManualMode = int(
-                            json_stop_masks.get(MX_JSON_KEY_MASK_MANUAL_MODE, 0))
-                    else:
-                        # Legacy robot version, let's use hard-coded value that was used by the robot on that build
-                        self._robot_safety_status.static_masks.maskedInManualMode = int(
-                            MxSafeStopCategory.MX_SAFE_STOP_PSTOP1) | int(MxSafeStopCategory.MX_SAFE_STOP_PSTOP2)
+
+                    cleared_by_psu = int(json_stop_masks.get(MX_JSON_KEY_MASK_CLEARED_BY_PSU, 0))
+                    with_vm_off = int(json_stop_masks.get(MX_JSON_KEY_MASK_WITH_VM_OFF, 0))
+                    masked_in_manual_mode = (int(json_stop_masks.get(MX_JSON_KEY_MASK_MANUAL_MODE, 0))
+                                             if MX_JSON_KEY_MASK_MANUAL_MODE in json_stop_masks else
+                                             int(MxSafeStopCategory.MX_SAFE_STOP_PSTOP1)
+                                             | int(MxSafeStopCategory.MX_SAFE_STOP_PSTOP2))
+                    new_masks = RobotStaticSafetyStopMasks(
+                        clearedByPsu=cleared_by_psu,
+                        withVmOff=with_vm_off,
+                        maskedInManualMode=masked_in_manual_mode,
+                    )
+                    self._robot_safety_status.static_masks = new_masks
         else:
             # Legacy format.
             status_flags = self._parse_response_bool(response)
 
             self._set_activated(status_flags[0])
             self._set_homed(status_flags[1])
-            self._set_sim_mode(MxRobotSimulationMode(status_flags[2]))
+            self._set_sim_mode(safe_enum_cast(MxRobotSimulationMode, status_flags[2]))
             self._set_error_status(status_flags[3])
             self._set_paused(status_flags[4])
             self._set_eob(status_flags[5])
@@ -4483,8 +6246,8 @@ class _Robot:
         """
         assert response.id == mx_st.MX_ST_GET_COLLISION_STATUS
         parsed_response = self._parse_response_int(response)
-        status = self._robot_collision_status.self_collision_status
-        status.set_from_response(parsed_response)
+        new_self_collision_status = SelfCollisionStatus.from_response(parsed_response)
+        self._robot_collision_status.self_collision_status = new_self_collision_status
 
     def _handle_work_zone_status_response(self, response: Message):
         """Parse robot work zone status response and update status fields and events.
@@ -4496,8 +6259,8 @@ class _Robot:
         """
         assert response.id == mx_st.MX_ST_GET_WORK_ZONE_STATUS
         parsed_response = self._parse_response_int(response)
-        status = self._robot_collision_status.work_zone_status
-        status.set_from_response(parsed_response)
+        new_self_work_zone_status = WorkZoneStatus.from_response(parsed_response)
+        self._robot_collision_status.work_zone_status = new_self_work_zone_status
 
     def _handle_robot_get_robot_serial_response(self, response: Message):
         """Parse get robot serial response and robot info.
@@ -4524,12 +6287,14 @@ class _Robot:
         assert response.id == mx_st.MX_ST_GET_STATUS_GRIPPER
         status_flags = self._parse_response_bool(response)
 
-        self._gripper_status.present = status_flags[0]
-        self._gripper_status.homing_state = status_flags[1]
-        self._gripper_status.holding_part = status_flags[2]
-        self._gripper_status.target_pos_reached = status_flags[3]
-        self._gripper_status.error_status = status_flags[4]
-        self._gripper_status.overload_error = status_flags[5]
+        self._gripper_status = GripperStatus(
+            present=status_flags[0],
+            homing_state=status_flags[1],
+            holding_part=status_flags[2],
+            target_pos_reached=status_flags[3],
+            error_status=status_flags[4],
+            overload_error=status_flags[5],
+        )
 
         if self._is_in_sync():
             self._robot_events.on_status_gripper_updated.set()
@@ -4798,9 +6563,45 @@ class _Robot:
         assert response.id == mx_st.MX_ST_RT_CURRENT
         self._robot_rt_data.rt_current.update_from_csv(response.data)
 
+    def _handle_rt_vl(self, response: Message):
+        """Handle an real-time motor voltage data
+        Parameters
+        ----------
+        response : Message object
+                    """
+        assert response.id == mx_st.MX_ST_RT_VL
+        self._robot_rt_data.rt_vl.update_from_csv(response.data)
+
+    def _handle_rt_temperature(self, response: Message):
+        """Handle an real-time robot temperature data
+        Parameters
+        ----------
+        response : Message object
+                    """
+        assert response.id == mx_st.MX_ST_RT_TEMPERATURE
+        self._robot_rt_data.rt_temperature.update_from_csv(response.data)
+        self._robot_temperature = RobotTemperature(timestamp=self._robot_rt_data.rt_temperature.timestamp,
+                                                   baseboard=self._robot_rt_data.rt_temperature.data[0],
+                                                   psu=self._robot_rt_data.rt_temperature.data[1],
+                                                   safe_mcu=self._robot_rt_data.rt_temperature.data[2],
+                                                   motors=self._robot_rt_data.rt_temperature.data[3:])
+        if self._is_in_sync():
+            self._robot_events.on_rt_temperature_updated.set()
+
+    def _handle_rt_i2t(self, response: Message):
+        """Handle an real-time motor i2t data
+        Parameters
+        ----------
+        response : Message object
+                    """
+        assert response.id == mx_st.MX_ST_RT_I2T
+        self._robot_rt_data.rt_i2t.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_i2t_updated.set()
+
     def _handle_ext_tool_fw_version(self, response: Message):
         """Parse external tool firmware version"""
-        self._robot_info.ext_tool_version.update_version(response.data)
+        self._robot_info.ext_tool_version = RobotVersion.from_version_string(response.data)
 
     def _handle_external_tool_status_response(self, response: Message):
         """Parse external tool status response and update status fields and events.
@@ -4816,38 +6617,44 @@ class _Robot:
         if response.json_data:
             # JSON format.
             json_data: dict = response.json_data.get(MX_JSON_KEY_DATA, {})
-            self._robot_rt_data.rt_external_tool_status.timestamp = int(
-                response.json_data.get(MX_JSON_KEY_TIMESTAMP_US, 0))
+            self._robot_rt_data.rt_external_tool_status.set_timestamp(
+                int(response.json_data.get(MX_JSON_KEY_TIMESTAMP_US, 0)))
             status_flags = self._robot_rt_data.rt_external_tool_status.data
             status_flags[0] = int(json_data.get(MX_JSON_KEY_EXTTOOL_STATUS_SIM_TYPE, 0))
             status_flags[1] = int(json_data.get(MX_JSON_KEY_EXTTOOL_STATUS_PHYSICAL_TYPE, 0))
             status_flags[2] = int(json_data.get(MX_JSON_KEY_EXTTOOL_STATUS_HOMED, 0))
             status_flags[3] = int(json_data.get(MX_JSON_KEY_EXTTOOL_STATUS_ERROR, 0))
             status_flags[4] = int(json_data.get(MX_JSON_KEY_EXTTOOL_STATUS_OVERHEAT, 0))
-            self._external_tool_status.comm_err_warning = bool(json_data.get(MX_JSON_KEY_EXTTOOL_STATUS_COMM_ERR,
-                                                                             False))
+            comm_err_warning = bool(json_data.get(MX_JSON_KEY_EXTTOOL_STATUS_COMM_ERR, False))
         else:
             self._robot_rt_data.rt_external_tool_status.update_from_csv(response.data)
             status_flags = self._robot_rt_data.rt_external_tool_status.data
+            comm_err_warning = self._external_tool_status.comm_err_warning  # preserve previous value
 
+        # Parse tool types with fallback to raw values
+        sim_tool_type = status_flags[0]
         try:
-            self._external_tool_status.sim_tool_type = MxExtToolType(status_flags[0])
+            sim_tool_type = safe_enum_cast(MxExtToolType, sim_tool_type)
         except ValueError:
-            # Unknown enum value, let's store as an integer
-            self._external_tool_status.sim_tool_type = status_flags[0]
+            pass
 
+        physical_tool_type = status_flags[1]
         try:
-            self._external_tool_status.physical_tool_type = MxExtToolType(status_flags[1])
+            physical_tool_type = safe_enum_cast(MxExtToolType, physical_tool_type)
         except ValueError:
-            # Unknown enum value, let's store as an integer
-            self._external_tool_status.physical_tool_type = status_flags[1]
+            pass
 
-        self._external_tool_status.homing_state = status_flags[2] != 0
-        self._external_tool_status.error_status = status_flags[3] != 0
-        self._external_tool_status.overload_error = status_flags[4] != 0
+        self._external_tool_status = ExtToolStatus(
+            sim_tool_type=sim_tool_type,
+            physical_tool_type=physical_tool_type,
+            homing_state=status_flags[2] != 0,
+            error_status=status_flags[3] != 0,
+            overload_error=status_flags[4] != 0,
+            comm_err_warning=comm_err_warning,
+        )
 
         if self._is_in_sync():
-            self._robot_events.on_external_tool_status_updated.set()
+            self._robot_events.on_rt_ext_tool_status_updated.set()
             self._callback_queue.put('on_external_tool_status_updated')
 
     def _handle_get_network_cfg_response(self, response: Message):
@@ -4859,13 +6666,11 @@ class _Robot:
             json_data: dict = response.json_data.get(MX_JSON_KEY_DATA, {})
 
             self._network_config.dhcp = bool(json_data.get(MX_JSON_KEY_NETWORK_CFG_DHCP, False))
-
             self._network_config.ip = str(json_data.get(MX_JSON_KEY_NETWORK_CFG_IP, ""))
             self._network_config.mask = str(json_data.get(MX_JSON_KEY_NETWORK_CFG_MASK, ""))
             self._network_config.gateway = str(json_data.get(MX_JSON_KEY_NETWORK_CFG_GATEWAY, ""))
             self._network_config.mac = str(json_data.get(MX_JSON_KEY_NETWORK_CFG_MAC, ""))
             self._network_config.name = str(json_data.get(MX_JSON_KEY_NETWORK_CFG_ROBOT_NAME, ""))
-
         if self._is_in_sync():
             self._robot_events.on_network_config_updated.set()
 
@@ -4882,14 +6687,24 @@ class _Robot:
         self._robot_rt_data.rt_gripper_state.update_from_csv(response.data)
         status_flags = self._robot_rt_data.rt_gripper_state.data
 
-        self._gripper_state.holding_part = bool(status_flags[0])
-        self._gripper_state.target_pos_reached = bool(status_flags[1])
+        holding_part = bool(status_flags[0])
+        target_pos_reached = bool(status_flags[1])
+        closed = getattr(self._gripper_state, "closed", False)
+        opened = getattr(self._gripper_state, "opened", False)
+
         if len(status_flags) > 2:
-            self._gripper_state.closed = bool(status_flags[2])
-            self._gripper_state.opened = bool(status_flags[3])
+            closed = bool(status_flags[2])
+            opened = bool(status_flags[3])
+
+        self._gripper_state = GripperState(
+            holding_part=holding_part,
+            target_pos_reached=target_pos_reached,
+            closed=closed,
+            opened=opened,
+        )
 
         if self._is_in_sync():
-            self._robot_events.on_gripper_state_updated.set()
+            self._robot_events.on_rt_gripper_state_updated.set()
             self._callback_queue.put('on_gripper_state_updated')
             if self._gripper_state.holding_part:
                 self._robot_events.on_holding_part.set()
@@ -4900,9 +6715,13 @@ class _Robot:
 
     def _handle_gripper_force_response(self, response: Message):
         self._robot_rt_data.rt_gripper_force.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_gripper_force_updated.set()
 
     def _handle_gripper_pos_response(self, response: Message):
         self._robot_rt_data.rt_gripper_pos.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_gripper_pos_updated.set()
 
     def _handle_valve_state_response(self, response: Message):
         """Parse pneumatic valve state response and update status fields and events.
@@ -4919,7 +6738,7 @@ class _Robot:
         self._valve_state.valve_opened = self._robot_rt_data.rt_valve_state.data
 
         if self._is_in_sync():
-            self._robot_events.on_valve_state_updated.set()
+            self._robot_events.on_rt_valve_state_updated.set()
             self._callback_queue.put('on_valve_state_updated')
 
     def _handle_io_status(self, response: Message):
@@ -4938,53 +6757,55 @@ class _Robot:
         values = []
         if response.json_data:
             json_data: dict = response.json_data.get(MX_JSON_KEY_DATA, {})
-            try:
-                bank_id = MxIoBankId(json_data.get(MX_JSON_KEY_IO_STATUS_BANK_ID, 0))
-            except ValueError:
-                # Future value not part of the enum
-                bank_id = int(json_data.get(MX_JSON_KEY_IO_STATUS_BANK_ID, 0))
+            bank_id = safe_enum_cast(MxIoBankId, json_data.get(MX_JSON_KEY_IO_STATUS_BANK_ID, 0))
         else:
             values = tools.string_to_numbers(response.data)
-            bank_id = values[1]
+            bank_id = safe_enum_cast(MxIoBankId, values[1])
 
-        new_io_status = IoStatus()
-        new_io_status_ts = TimestampedData.zeros(4, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
         if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
-            new_io_status = self._io_module_status
+            prev_io_status = self._io_module_status
         elif bank_id == MxIoBankId.MX_IO_BANK_ID_SIG_GEN:
-            new_io_status = self._sig_gen_status
+            prev_io_status = self._sig_gen_status
         else:
             return
-        new_io_status.bank_id = bank_id
-        prev_sim_mode = new_io_status.sim_mode
+
+        prev_sim_mode = prev_io_status.sim_mode  # Retain previous sim_mode for logic if needed
 
         if response.json_data:
-            # JSON format. Convert into timestamped data
             json_data: dict = response.json_data.get(MX_JSON_KEY_DATA, {})
+            timestamp = int(response.json_data.get(MX_JSON_KEY_TIMESTAMP_US, 0))
 
-            # Extract JSON data
-            new_io_status.present = bool(json_data.get(MX_JSON_KEY_IO_STATUS_PRESENT, False))
-            new_io_status.nb_inputs = int(json_data.get(MX_JSON_KEY_IO_STATUS_NB_INPUTS, 0))
-            new_io_status.nb_outputs = int(json_data.get(MX_JSON_KEY_IO_STATUS_NB_OUTPUTS, 0))
-            new_io_status.sim_mode = bool(json_data.get(MX_JSON_KEY_IO_STATUS_SIM_MODE, False))
-            new_io_status.error = int(json_data.get(MX_JSON_KEY_IO_STATUS_ERROR, 0))
-            new_io_status.timestamp = int(response.json_data.get(MX_JSON_KEY_TIMESTAMP_US, 0))
-            # Convert into timestamped data (equivalent to text API)
-            new_io_status_ts.timestamp = new_io_status.timestamp
-            new_io_status_ts.data[0] = new_io_status.bank_id
-            new_io_status_ts.data[1] = 1 if new_io_status.present else 0
-            new_io_status_ts.data[2] = 1 if new_io_status.sim_mode else 0
-            new_io_status_ts.data[3] = new_io_status.error
+            new_io_status = IoStatus(
+                bank_id=bank_id,
+                present=bool(json_data.get(MX_JSON_KEY_IO_STATUS_PRESENT, False)),
+                nb_inputs=int(json_data.get(MX_JSON_KEY_IO_STATUS_NB_INPUTS, 0)),
+                nb_outputs=int(json_data.get(MX_JSON_KEY_IO_STATUS_NB_OUTPUTS, 0)),
+                sim_mode=bool(json_data.get(MX_JSON_KEY_IO_STATUS_SIM_MODE, False)),
+                error=int(json_data.get(MX_JSON_KEY_IO_STATUS_ERROR, 0)),
+                timestamp=timestamp,
+            )
+
+            new_io_status_ts = TimestampedData(timestamp=timestamp,
+                                               data=[
+                                                   bank_id, 1 if new_io_status.present else 0,
+                                                   1 if new_io_status.sim_mode else 0, new_io_status.error
+                                               ],
+                                               update_type=RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
+
         else:
-            # Extract API values
+            # Legacy text response: update_from_csv returns a new instance now
+            new_io_status_ts = TimestampedData.zeros(4, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_EVENT_BASED)
             new_io_status_ts.update_from_csv(response.data)
-            new_io_status.timestamp = values[0]
-            new_io_status.present = True if values[2] != 0 else False
-            new_io_status.sim_mode = True if values[3] != 0 else False
-            new_io_status.error = values[4]
-            # Note: nb_inputs and nb_outputs is updated by _handle_input_state / _handle_output_state
 
-        # Store back into our context
+            new_io_status = IoStatus(bank_id=bank_id,
+                                     present=(values[2] != 0),
+                                     nb_inputs=prev_io_status.nb_inputs,
+                                     nb_outputs=prev_io_status.nb_outputs,
+                                     sim_mode=(values[3] != 0),
+                                     error=values[4],
+                                     timestamp=new_io_status_ts.timestamp)
+
+        # Store new state
         if bank_id == MxIoBankId.MX_IO_BANK_ID_IO_MODULE:
             self._io_module_status = new_io_status
             self._robot_rt_data.rt_io_module_status = new_io_status_ts
@@ -5005,7 +6826,7 @@ class _Robot:
                     self._callback_queue.put('on_io_sim_disabled')
 
         if self._is_in_sync():
-            self._robot_events.on_io_status_updated.set()
+            self._robot_events.on_rt_io_status_updated.set()
 
     def _handle_output_state(self, response: Message):
         """Parse digital output state and update status fields and events.
@@ -5031,9 +6852,10 @@ class _Robot:
                 self._robot_rt_data.rt_sig_gen_outputs.update_from_data(timestamp, values[2:])
                 self._sig_gen_status.nb_outputs = len(self._robot_rt_data.rt_sig_gen_outputs.data)
 
-        if changed and self._is_in_sync():
-            self._robot_events.on_output_state_updated.set()
-            self._callback_queue.put('on_output_state_updated')
+        if self._is_in_sync():
+            self._robot_events.on_rt_output_state_updated.set()
+            if changed:
+                self._callback_queue.put('on_output_state_updated')
 
     def _handle_input_state(self, response: Message):
         """Parse digital input state and update status fields and events.
@@ -5059,9 +6881,10 @@ class _Robot:
                 self._robot_rt_data.rt_sig_gen_inputs.update_from_data(timestamp, values[2:])
                 self._sig_gen_status.nb_inputs = len(self._robot_rt_data.rt_sig_gen_inputs.data)
 
-        if changed and self._is_in_sync():
-            self._robot_events.on_input_state_updated.set()
-            self._callback_queue.put('on_input_state_updated')
+        if self._is_in_sync():
+            self._robot_events.on_rt_input_state_updated.set()
+            if changed:
+                self._callback_queue.put('on_input_state_updated')
 
     def _handle_vacuum_state(self, response: Message):
         """Parse vacuum state and update status fields and events.
@@ -5075,14 +6898,15 @@ class _Robot:
         assert response.id == mx_st.MX_ST_RT_VACUUM_STATE
         self._robot_rt_data.rt_vacuum_state.update_from_csv(response.data)
 
-        self._vacuum_state.bank_id = MxIoBankId.MX_IO_BANK_ID_IO_MODULE  #todo, this member doesn't exist
-        self._vacuum_state.timestamp = self._robot_rt_data.rt_vacuum_state.timestamp
-        self._vacuum_state.vacuum_on = bool(self._robot_rt_data.rt_vacuum_state.data[0])
-        self._vacuum_state.purge_on = bool(self._robot_rt_data.rt_vacuum_state.data[1])
-        self._vacuum_state.holding_part = bool(self._robot_rt_data.rt_vacuum_state.data[2])
+        self._vacuum_state = VacuumState(
+            timestamp=self._robot_rt_data.rt_vacuum_state.timestamp,
+            vacuum_on=bool(self._robot_rt_data.rt_vacuum_state.data[0]),
+            purge_on=bool(self._robot_rt_data.rt_vacuum_state.data[1]),
+            holding_part=bool(self._robot_rt_data.rt_vacuum_state.data[2]),
+        )
 
         if self._is_in_sync():
-            self._robot_events.on_vacuum_state_updated.set()
+            self._robot_events.on_rt_vacuum_state_updated.set()
             self._callback_queue.put('on_vacuum_state_updated')
             if self._vacuum_state.holding_part:
                 self._robot_events.on_holding_part.set()
@@ -5092,8 +6916,10 @@ class _Robot:
                 self._robot_events.on_released_part.set()
             if self._vacuum_state.purge_on:
                 self._robot_events.on_vacuum_purge_done.clear()
+                self._robot_events.on_vacuum_purging.set()
             else:
                 self._robot_events.on_vacuum_purge_done.set()
+                self._robot_events.on_vacuum_purging.clear()
 
     def _handle_vacuum_pressure(self, response: Message):
         """Parse vacuum pressure and update fields and events.
@@ -5106,6 +6932,8 @@ class _Robot:
         """
         assert response.id == mx_st.MX_ST_RT_VACUUM_PRESSURE
         self._robot_rt_data.rt_vacuum_pressure.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_vacuum_pressure_updated.set()
 
     def _handle_ext_tool_sim_status_legacy(self, response: Message):
         if not str(response.data).isdigit():
@@ -5121,75 +6949,105 @@ class _Robot:
         self._set_robot_operation_mode(robot_operation_mode)
 
     def _handle_torque_limit_status(self, response: Message):
-        torque_exceeded = self._parse_response_int(response)[0]
-        if torque_exceeded:
+        self._robot_torque_limits_status = self._parse_response_int(response)[0] != 0
+        if self._robot_torque_limits_status:
             self.logger.info(
                 f'Torque limit exceeded. Current torque: {args_to_string(self._robot_rt_data.rt_joint_torq.data)}')
 
     def _handle_target_joint_pos(self, response: Message):
         self._robot_rt_data.rt_target_joint_pos.update_from_csv(response.data)
         if self._is_in_sync():
-            self._robot_events.on_joints_updated.set()
+            self._robot_events.on_rt_target_joint_pos_updated.set()
 
     def _handle_target_cart_pos(self, response: Message):
         self._robot_rt_data.rt_target_cart_pos.update_from_csv(response.data, allowed_nb_val=[4, 6])
         if self._is_in_sync():
-            self._robot_events.on_pose_updated.set()
+            self._robot_events.on_rt_target_cart_pos_updated.set()
 
     def _handle_target_joint_vel(self, response: Message):
         self._robot_rt_data.rt_target_joint_vel.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_target_joint_vel_updated.set()
 
     def _handle_target_cart_vel(self, response: Message):
         self._robot_rt_data.rt_target_cart_vel.update_from_csv(response.data, allowed_nb_val=[4, 6])
+        if self._is_in_sync():
+            self._robot_events.on_rt_target_cart_vel_updated.set()
 
     def _handle_target_joint_torq(self, response: Message):
         self._robot_rt_data.rt_target_joint_torq.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_target_joint_torq_updated.set()
 
     def _handle_target_conf(self, response: Message):
         self._robot_rt_data.rt_target_conf.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_target_conf_updated.set()
 
     def _handle_target_conf_turn(self, response: Message):
         self._robot_rt_data.rt_target_conf_turn.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_target_conf_turn_updated.set()
 
     def _handle_joint_pos(self, response: Message):
         self._robot_rt_data.rt_joint_pos.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_joint_pos_updated.set()
 
     def _handle_cart_pos(self, response: Message):
         self._robot_rt_data.rt_cart_pos.update_from_csv(response.data, allowed_nb_val=[4, 6])
+        if self._is_in_sync():
+            self._robot_events.on_rt_cart_pos_updated.set()
 
     def _handle_joint_vel(self, response: Message):
         self._robot_rt_data.rt_joint_vel.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_joint_vel_updated.set()
 
     def _handle_joint_torq(self, response: Message):
         self._robot_rt_data.rt_joint_torq.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_joint_torq_updated.set()
 
     def _handle_cart_vel(self, response: Message):
         self._robot_rt_data.rt_cart_vel.update_from_csv(response.data, allowed_nb_val=[4, 6])
+        if self._is_in_sync():
+            self._robot_events.on_rt_cart_vel_updated.set()
 
     def _handle_conf(self, response: Message):
         self._robot_rt_data.rt_conf.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_conf_updated.set()
 
     def _handle_conf_turn(self, response: Message):
         self._robot_rt_data.rt_conf_turn.update_from_csv(response.data)
+        if self._is_in_sync():
+            self._robot_events.on_rt_conf_turn_updated.set()
 
     def _handle_accelerometer(self, response: Message):
         timestamp, index, *measurements = string_to_numbers(response.data)
         if index not in self._robot_rt_data.rt_accelerometer:
             self._robot_rt_data.rt_accelerometer[index] = TimestampedData(
                 timestamp, measurements, RtDataUpdateType.MX_RT_DATA_UPDATE_TYPE_CYCLICAL_OPTIONAL)
-            self._robot_rt_data.rt_accelerometer[index].enabled = True
+        self._robot_rt_data.rt_accelerometer[index].set_enabled(True)
         if timestamp > self._robot_rt_data.rt_accelerometer[index].timestamp:
-            self._robot_rt_data.rt_accelerometer[index].timestamp = timestamp
-            self._robot_rt_data.rt_accelerometer[index].data = measurements
+            self._robot_rt_data.rt_accelerometer[index].set_timestamp(timestamp)
+            self._robot_rt_data.rt_accelerometer[index].set_data(measurements)
+        if self._is_in_sync():
+            self._robot_events.on_rt_accel_updated.set()
 
     def _handle_abs_joint_pos(self, response: Message):
         self._robot_rt_data.rt_abs_joint_pos.update_from_csv(response.data)
 
     def _handle_wrf(self, response: Message):
         self._robot_rt_data.rt_wrf.update_from_csv(response.data, allowed_nb_val=[4, 6])
+        if self._is_in_sync():
+            self._robot_events.on_rt_wrf_updated.set()
 
     def _handle_trf(self, response: Message):
         self._robot_rt_data.rt_trf.update_from_csv(response.data, allowed_nb_val=[4, 6])
+        if self._is_in_sync():
+            self._robot_events.on_rt_trf_updated.set()
 
     def _handle_rt_checkpoint(self, response: Message):
         self._robot_rt_data.rt_checkpoint.update_from_csv(response.data)
@@ -5220,7 +7078,6 @@ class _Robot:
     def _handle_clear_motion(self, response: Message):
         if self._clear_motion_requests <= 1:
             self._clear_motion_requests = 0
-            self._callback_queue.put('on_motion_cleared')
             if self._robot_info.version.is_at_least(10, 0):
                 pass  # In this version, we rely on robot status to determine paused state
             else:
@@ -5236,12 +7093,12 @@ class _Robot:
         else:
             self._set_eob(True)
 
-    def _handle_offline_start(self, response: Message):
-        self._robot_events.on_offline_program_started.set()
-        self._callback_queue.put('on_offline_program_state')
+    def _handle_program_started(self, response: Message):
+        self._robot_events.on_program_started.set()
+        self._callback_queue.put('on_program_state')
 
-    def _handle_offline_program_error(self, response: Message):
-        self._robot_events.on_offline_program_started.abort(f"Failed to start program: {response.data}")
+    def _handle_start_program_error(self, response: Message):
+        self._robot_events.on_program_started.abort(f"Failed to start program: {response.data}")
 
     def _handle_file_op_done(self, response: Message):
         self._robot_events.on_file_op_done.set(response)
@@ -5272,7 +7129,8 @@ class _Robot:
         self.logger.debug(f'Checkpoint {checkpoint_id} {"discarded"if discarded else "reached"}')
 
         # Check user checkpoints.
-        abort_msg = 'Checkpoint discarded by the robot'
+        abort_msg = _CHECKPOINT_ABORT_MSG
+        is_internal = False
         if checkpoint_id in self._user_checkpoints and self._user_checkpoints[checkpoint_id]:
             if discarded:
                 self._user_checkpoints[checkpoint_id].pop(0).abort(abort_msg)
@@ -5289,15 +7147,9 @@ class _Robot:
                     else:
                         event.set()
 
-            if discarded:
-                # Enqueue the on_checkpoint_discarded callback.
-                self._callback_queue.put('on_checkpoint_discarded', checkpoint_id)
-            else:
-                # Enqueue the on_checkpoint_reached callback.
-                self._callback_queue.put('on_checkpoint_reached', checkpoint_id)
-
         # Check internal checkpoints.
         elif checkpoint_id in self._internal_checkpoints and self._internal_checkpoints[checkpoint_id]:
+            is_internal = True
             if discarded:
                 self._internal_checkpoints[checkpoint_id].pop(0).abort(abort_msg)
             else:
@@ -5305,9 +7157,17 @@ class _Robot:
             # If list corresponding to checkpoint id is empty, remove the key from the dict.
             if not self._internal_checkpoints[checkpoint_id]:
                 self._internal_checkpoints.pop(checkpoint_id)
-        elif not self._sidecar_mode:
-            self.logger.warning(
-                f'Received un-tracked checkpoint {checkpoint_id}. Please use ExpectExternalCheckpoint() to track.')
+        # elif not self._application_type.is_sidecar():
+        #     self.logger.warning(
+        #         f'Received un-tracked checkpoint {checkpoint_id}. Please use ExpectExternalCheckpoint() to track.')
+
+        if not is_internal:
+            if discarded:
+                # Enqueue the on_checkpoint_discarded callback.
+                self._callback_queue.put('on_checkpoint_discarded', checkpoint_id)
+            else:
+                # Enqueue the on_checkpoint_reached callback.
+                self._callback_queue.put('on_checkpoint_reached', checkpoint_id)
 
     def _handle_get_realtime_monitoring_response(self, response: Message):
         """Parse robot response to "get" or "set" real-time monitoring.
@@ -5325,100 +7185,106 @@ class _Robot:
         #pylint: disable=protected-access
         self._robot_rt_data._reset_enabled()
 
+        # Some real-time data are not available on some robot models
+        if not robot_model_is_mg2(self._robot_info.robot_model):
+            self._robot_rt_data.rt_vm.enabled = False
+            self._robot_rt_data.rt_vl.enabled = False
+            self._robot_rt_data.rt_current.enabled = False
+            self._robot_rt_data.rt_temperature.enabled = False
+            self._robot_rt_data.rt_i2t.enabled = False
+
+        if ((not robot_model_support_eoat(self._robot_info.robot_model))
+                # To remove, we will not support micro-gripper
+                or (self._robot_info.robot_model == MxRobotModel.MX_ROBOT_MODEL_MCA250_R1)):
+            self._robot_rt_data.rt_valve_state.enabled = False
+            self._robot_rt_data.rt_gripper_state.enabled = False
+            self._robot_rt_data.rt_gripper_pos.enabled = False
+            self._robot_rt_data.rt_gripper_force.enabled = False
+
+        if not robot_model_support_vacuum(self._robot_info.robot_model):
+            self._robot_rt_data.rt_vacuum_state.enabled = False
+            self._robot_rt_data.rt_vacuum_pressure.enabled = False
+
         # Following RT data are always accessible in the Python API even if not always sent by the robot, because this
         # Python API will construct them from mx_st.MX_ST_GET_JOINTS / mx_st.MX_ST_GET_POSE if necessary
-        self._robot_rt_data.rt_target_joint_pos.enabled = True
-        self._robot_rt_data.rt_target_cart_pos.enabled = True
-        # Following RT data are always sent by the robot
-        if self._robot_info.version.is_at_least(9, 0):
-            self._robot_rt_data.rt_target_conf.enabled = True
-            self._robot_rt_data.rt_target_conf_turn.enabled = True
-            self._robot_rt_data.rt_wrf.enabled = True
-            self._robot_rt_data.rt_trf.enabled = True
-        if self._robot_info.version.is_at_least(9, 2):
-            self._robot_rt_data.rt_external_tool_status.enabled = True
-            self._robot_rt_data.rt_valve_state.enabled = True
-            self._robot_rt_data.rt_gripper_state.enabled = True
-        if self._robot_info.version.is_at_least(9, 4):
-            self._robot_rt_data.rt_io_module_status.enabled = True
-            self._robot_rt_data.rt_io_module_outputs.enabled = True
-            self._robot_rt_data.rt_io_module_inputs.enabled = True
-            self._robot_rt_data.rt_vacuum_state.enabled = True
-            self._robot_rt_data.rt_sig_gen_status.enabled = True
-            self._robot_rt_data.rt_sig_gen_outputs.enabled = True
-            self._robot_rt_data.rt_sig_gen_inputs.enabled = True
-        if self._robot_info.version.is_at_least(10, 1, 2):
-            self._robot_rt_data.rt_checkpoint.enabled = True
+        self._robot_rt_data.rt_target_joint_pos.set_enabled(True)
+        self._robot_rt_data.rt_target_cart_pos.set_enabled(True)
 
         # Parse the response to identify which are "enabled"
         enabled_event_ids = self._parse_response_int(response)
         for event_id in enabled_event_ids:
             if event_id == mx_st.MX_ST_RT_TARGET_JOINT_POS:
-                self._robot_rt_data.rt_target_joint_pos.enabled = True
-            if event_id == mx_st.MX_ST_RT_TARGET_CART_POS:
-                self._robot_rt_data.rt_target_cart_pos.enabled = True
-            if event_id == mx_st.MX_ST_RT_TARGET_JOINT_VEL:
-                self._robot_rt_data.rt_target_joint_vel.enabled = True
-            if event_id == mx_st.MX_ST_RT_TARGET_CART_VEL:
-                self._robot_rt_data.rt_target_cart_vel.enabled = True
-            if event_id == mx_st.MX_ST_RT_TARGET_JOINT_TORQ:
-                self._robot_rt_data.rt_target_joint_torq.enabled = True
-            if event_id == mx_st.MX_ST_RT_TARGET_CONF:
-                self._robot_rt_data.rt_target_conf.enabled = True
-            if event_id == mx_st.MX_ST_RT_TARGET_CONF_TURN:
-                self._robot_rt_data.rt_target_conf_turn.enabled = True
-            if event_id == mx_st.MX_ST_RT_JOINT_POS:
-                self._robot_rt_data.rt_joint_pos.enabled = True
-            if event_id == mx_st.MX_ST_RT_CART_POS:
-                self._robot_rt_data.rt_cart_pos.enabled = True
-            if event_id == mx_st.MX_ST_RT_JOINT_VEL:
-                self._robot_rt_data.rt_joint_vel.enabled = True
-            if event_id == mx_st.MX_ST_RT_JOINT_TORQ:
-                self._robot_rt_data.rt_joint_torq.enabled = True
-            if event_id == mx_st.MX_ST_RT_CART_VEL:
-                self._robot_rt_data.rt_cart_vel.enabled = True
-            if event_id == mx_st.MX_ST_RT_CONF:
-                self._robot_rt_data.rt_conf.enabled = True
-            if event_id == mx_st.MX_ST_RT_CONF_TURN:
-                self._robot_rt_data.rt_conf_turn.enabled = True
-            if event_id == mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING:
-                self._robot_rt_data.rt_effective_time_scaling.enable = True
-            if event_id == mx_st.MX_ST_RT_VM:
-                self._robot_rt_data.rt_vm.enable = True
-            if event_id == mx_st.MX_ST_RT_CURRENT:
-                self._robot_rt_data.rt_current.enable = True
-            if event_id == mx_st.MX_ST_RT_WRF:
-                self._robot_rt_data.rt_wrf.enabled = True
-            if event_id == mx_st.MX_ST_RT_TRF:
-                self._robot_rt_data.rt_trf.enabled = True
-            if event_id == mx_st.MX_ST_RT_CHECKPOINT:
-                self._robot_rt_data.rt_checkpoint.enabled = True
-            if event_id == mx_st.MX_ST_RT_ACCELEROMETER:
+                self._robot_rt_data.rt_target_joint_pos.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_TARGET_CART_POS:
+                self._robot_rt_data.rt_target_cart_pos.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_TARGET_JOINT_VEL:
+                self._robot_rt_data.rt_target_joint_vel.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_TARGET_CART_VEL:
+                self._robot_rt_data.rt_target_cart_vel.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_TARGET_JOINT_TORQ:
+                self._robot_rt_data.rt_target_joint_torq.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_TARGET_CONF:
+                self._robot_rt_data.rt_target_conf.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_TARGET_CONF_TURN:
+                self._robot_rt_data.rt_target_conf_turn.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_JOINT_POS:
+                self._robot_rt_data.rt_joint_pos.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_CART_POS:
+                self._robot_rt_data.rt_cart_pos.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_JOINT_VEL:
+                self._robot_rt_data.rt_joint_vel.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_JOINT_TORQ:
+                self._robot_rt_data.rt_joint_torq.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_CART_VEL:
+                self._robot_rt_data.rt_cart_vel.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_CONF:
+                self._robot_rt_data.rt_conf.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_CONF_TURN:
+                self._robot_rt_data.rt_conf_turn.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_EFFECTIVE_TIME_SCALING:
+                self._robot_rt_data.rt_effective_time_scaling.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_VM:
+                self._robot_rt_data.rt_vm.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_CURRENT:
+                self._robot_rt_data.rt_current.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_VL:
+                self._robot_rt_data.rt_vl.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_TEMPERATURE:
+                self._robot_rt_data.rt_temperature.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_I2T:
+                self._robot_rt_data.rt_i2t.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_WRF:
+                self._robot_rt_data.rt_wrf.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_TRF:
+                self._robot_rt_data.rt_trf.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_CHECKPOINT:
+                self._robot_rt_data.rt_checkpoint.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_ACCELEROMETER:
                 for accelerometer in self._robot_rt_data.rt_accelerometer.values():
-                    accelerometer.enabled = True
-            if event_id == mx_st.MX_ST_RT_ABS_JOINT_POS:
-                self._robot_rt_data.rt_abs_joint_pos.enabled = True
-            if event_id == mx_st.MX_ST_RT_EXTTOOL_STATUS:
-                self._robot_rt_data.rt_external_tool_status.enabled = True
-            if event_id == mx_st.MX_ST_RT_VALVE_STATE:
-                self._robot_rt_data.rt_valve_state.enabled = True
-            if event_id == mx_st.MX_ST_RT_GRIPPER_FORCE:
-                self._robot_rt_data.rt_gripper_force.enabled = True
-            if event_id == mx_st.MX_ST_RT_GRIPPER_POS:
-                self._robot_rt_data.rt_gripper_pos.enabled = True
-            if event_id == mx_st.MX_ST_RT_IO_STATUS:
-                self._robot_rt_data.rt_io_module_status.enabled = True
-                self._robot_rt_data.rt_sig_gen_status.enabled = True
-            if event_id == mx_st.MX_ST_RT_OUTPUT_STATE:
-                self._robot_rt_data.rt_io_module_outputs.enabled = True
-                self._robot_rt_data.rt_sig_gen_outputs.enabled = True
-            if event_id == mx_st.MX_ST_RT_INPUT_STATE:
-                self._robot_rt_data.rt_io_module_inputs.enabled = True
-                self._robot_rt_data.rt_sig_gen_inputs.enabled = True
-            if event_id == mx_st.MX_ST_RT_VACUUM_STATE:
-                self._robot_rt_data.rt_vacuum_state.enabled = True
-            if event_id == mx_st.MX_ST_RT_VACUUM_PRESSURE:
-                self._robot_rt_data.rt_vacuum_pressure.enabled = True
+                    accelerometer.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_ABS_JOINT_POS:
+                self._robot_rt_data.rt_abs_joint_pos.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_EXTTOOL_STATUS:
+                self._robot_rt_data.rt_external_tool_status.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_VALVE_STATE:
+                self._robot_rt_data.rt_valve_state.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_GRIPPER_FORCE:
+                self._robot_rt_data.rt_gripper_force.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_GRIPPER_POS:
+                self._robot_rt_data.rt_gripper_pos.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_IO_STATUS:
+                self._robot_rt_data.rt_io_module_status.set_enabled(True)
+                self._robot_rt_data.rt_sig_gen_status.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_OUTPUT_STATE:
+                self._robot_rt_data.rt_io_module_outputs.set_enabled(True)
+                self._robot_rt_data.rt_sig_gen_outputs.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_INPUT_STATE:
+                self._robot_rt_data.rt_io_module_inputs.set_enabled(True)
+                self._robot_rt_data.rt_sig_gen_inputs.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_VACUUM_STATE:
+                self._robot_rt_data.rt_vacuum_state.set_enabled(True)
+            elif event_id == mx_st.MX_ST_RT_VACUUM_PRESSURE:
+                self._robot_rt_data.rt_vacuum_pressure.set_enabled(True)
 
         # Make sure to clear values that we should no more received
         #pylint: disable=protected-access
@@ -5441,7 +7307,7 @@ class _Robot:
         elif self._fw_update_status.complete:
             # Print as 'debug' trace (info trace will be printed by UpdateRobot function anyways)
             self.logger.debug(f'Firmware update complete')
-        else:
+        elif self._fw_update_status.in_progress:
             self.logger.info(f'Firmware update progress: {int(total_pct)}% ({self._fw_update_status.step})')
         #pylint: disable=protected-access
         self._fw_update_status._last_print_timestamp = time.monotonic()
@@ -5523,214 +7389,363 @@ class _Robot:
         """
         return self._rx_sync == self._tx_sync
 
-    def _sidecar_get_registered_functions(self, module_name: Optional[str] = None) -> list[Tuple[str, str]]:
-        """ Get a list of registered functions for the specified module, or all modules
+    def _mxprog_register_command(self, command: mecascript.RegisteredCommand):
+        """ Common code for registering a mxprog command in our namespace.
+        This command is called when we receive an indication from the robot that a user program has been loaded
+        and registered so it can be called.
 
         Args:
-            module (Optional[str], optional):   Module to get registered functions too.
-                                                If none, will return registered functions in all modules.
-                                                Defaults to None.
+            command (mecascript.RegisteredCommand): The command to register
 
-        Returns:
-            list[Tuple[str, str]]: List of tuple [module_name, function_name]
+        Raises:
+            PermissionError: Trying to register a command that's already registered
         """
-        registered_functions: list[Tuple[str, str]] = []
-        for function_name, function in self._sidecar_registered_functions.items():
-            if module_name is None or module_name == function.module_name:
-                registered_functions.append((function.module_name, function_name))
-        return registered_functions
+        # Make sure it does not already exist in among registered commands
+        if command.name in self._mxprog_registered_commands:
+            raise PermissionError(f'Cannot register command {command.name}, it is already registered')
+        # Make sure it does not already exist in among cyclic IDs
+        if (command.cyclic_id is not None and command.cyclic_id > 0
+                and command.cyclic_id in self._registered_cyclic_id):
+            raise PermissionError((f'Cannot register command {command.name}, '
+                                   f'cyclic ID {command.cyclic_id} is already registered by '
+                                   f'{self._registered_cyclic_id[command.cyclic_id].name}'))
 
-    def _sidecar_get_registered_function(self, function_name: str) -> Optional[rsc.RegisteredFunction]:
-        """Get the definition of a registered sidecar function
+        # Define a wrapper to call the mxprog
+        def _registered_command_wrapper() -> Any:
+            """ command wrapper that retrieves the registered command from the dictionary, by name, and call it """
+            #pylint: disable=protected-access
+            if command.name not in self._mxprog_registered_commands:
+                user_msg = f'Failed to call mxprog {command.name}, it is not registered'
+                self.LogTrace(user_msg, logging.ERROR)
+                raise NotFoundException(user_msg)
+            command_to_call = self._mxprog_registered_commands[command.name]
+            return command_to_call.function()
+
+        # Add the command name to this class' namespace nested under prefix if appropriate
+        #pylint: disable=protected-access
+        mecascript._register_nested_function(function_full_name=command.name,
+                                             get_parent_attr=self._get_registered_attr,
+                                             set_parent_attr=self._set_registered_attr,
+                                             function=_registered_command_wrapper)
+
+        # Insert into the hash of registered commands
+        self._mxprog_registered_commands[command.name] = command
+        if command.cyclic_id is not None and command.cyclic_id > 0:
+            self._registered_cyclic_id[command.cyclic_id] = command
+
+    def _mxprog_unregister_command(self, command_name: str):
+        """Unregister a mxprog command that was previously registered
+        (unregister from robot class, and from global namespace robot_global_commands.py)
 
         Args:
-            function_name (str): Name of the function to get
+            command_name (str): The name of the command to unregister
+        """
+        if command_name not in self._mxprog_registered_commands:
+            return
+
+        # Use the helper to recursively unregister from our namespace (recursively because of prefixes)
+        #pylint: disable=protected-access
+        mecascript._unregister_nested_function(function_full_name=command_name,
+                                               get_parent_attr=self._get_registered_attr,
+                                               del_parent_attr=self._del_registered_attr)
+
+        cyclic_id = self._mxprog_registered_commands[command_name].cyclic_id
+
+        # Remove from cyclic IDs
+        if cyclic_id is not None and cyclic_id > 0 and cyclic_id in self._registered_cyclic_id:
+            fct_or_var = self._registered_cyclic_id[cyclic_id]
+            if isinstance(fct_or_var, mecascript.RegisteredCommand):
+                del self._registered_cyclic_id[cyclic_id]
+
+        # Remove from our dictionary of registered commands
+        del self._mxprog_registered_commands[command_name]
+
+    def _mecascript_get_registered_commands(self, file_path: Optional[str] = None) -> List[Tuple[str, str]]:
+        """ Get a list of registered commands for the specified module, or all modules
+
+        Args:
+            file_path (Optional[str]):  program path to get registered commands for.
+                                        If none, will return registered commands in all modules.
+                                        Defaults to None.
 
         Returns:
-            Optional[rsc.RegisteredFunction]: Registered function (or None if not found)
+            List[Tuple[str, str]]: List of tuple [file_path, command_name]
         """
-        if function_name in self._sidecar_registered_functions:
-            return self._sidecar_registered_functions[function_name]
+        registered_commands: List[Tuple[str, str]] = []
+        for command_name, command in self._mecascript_registered_commands.items():
+            if file_path is None or file_path == command.file_path:
+                registered_commands.append((command.file_path, command_name))
+        return registered_commands
+
+    def _mecascript_get_registered_command(self, command_name: str) -> Optional[mecascript.RegisteredCommand]:
+        """Get the definition of a registered sidecar command
+
+        Args:
+            command_name (str): Name of the command to get
+
+        Returns:
+            Optional[mecascript.RegisteredCommand]: Registered command (or None if not found)
+        """
+        if command_name in self._mecascript_registered_commands:
+            return self._mecascript_registered_commands[command_name]
         return None
 
-    def _sidecar_call_registered_function(self, function_name, *args, **kwargs):
-        """ Call a sidecar registered function by name """
-        if function_name not in self._sidecar_registered_functions:
-            user_msg = f'Failed to call sidecar function {function_name}, it is not registered'
+    def _mecascript_call_registered_command(self, command_name, timeout: Optional[float], *args, **kwargs) -> Any:
+        """ Call a sidecar registered command by name """
+        if command_name not in self._mecascript_registered_commands:
+            user_msg = f'Failed to call sidecar command {command_name}, it is not registered'
             self.LogTrace(user_msg, logging.ERROR)
             raise NotFoundException(user_msg)
-        self._sidecar_registered_functions[function_name].function(*args, **kwargs)
 
-    def _sidecar_get_registered_attr(self, attr_name: str) -> any:
+        command_to_call = self._mecascript_registered_commands[command_name]
+        if self._mecascript_executing_command is None:
+            self._mecascript_executing_command = command_to_call
+
+        if self._application_type.is_sidecar():
+            if not command_to_call.validate_args:
+                # This command requested not to validate arguments. We sometimes call it with too many arguments
+                # (like calling from cyclic protocols, always passing 6 arguments). Let's remove extra
+                # arguments here to avoid Python to raise TypeError when calling it.
+                max_args = mecascript.ScriptUtils.max_nb_positional_args(func=command_to_call.function)
+
+                if args is not None and len(args) > max_args:
+                    # Trim extra positional arguments if too many were provided
+                    args = args[:max_args]
+        else:  # We're not sidecar
+            # Clear on_mecascript_exec_idle immediately even though the program is not technically started.
+            # This ensures that WaitProgramDone is blocking from now until the execution is done
+            self._robot_events.on_mecascript_exec_idle.clear()
+
+        return_val = command_to_call.function(*args, **kwargs)
+
+        if not self._application_type.is_sidecar() and self._enable_synchronous_mode:
+            # Synchronous API mode => Need to wait until the program has finished executing
+            self.WaitProgramDone(timeout=timeout)
+            if self._robot_status.can_move():
+                self.WaitIdle()
+
+        return return_val
+
+    def _get_registered_attr(self, attr_name: str) -> Any:
         """ Callback for getting an attribute from local namespace """
-        return getattr(_Robot, attr_name, None)
+        return getattr(self, attr_name, None)
 
-    def _sidecar_set_registered_attr(self, attr_name: str, attr_val: any):
+    def _set_registered_attr(self, attr_name: str, attr_val: Any):
         """ Callback for setting an attribute into local namespace """
-        setattr(_Robot, attr_name, attr_val)
+        setattr(self, attr_name, attr_val)
 
-    def _sidecar_del_registered_attr(self, attr_name: str):
+    def _del_registered_attr(self, attr_name: str):
         """ Callback for deleting an attribute from local namespace """
-        delattr(_Robot, attr_name)
+        if getattr(self, attr_name, None):
+            delattr(self, attr_name)
 
-    def _sidecar_register_function(self,
-                                   function: rsc.RegisteredFunction,
-                                   original_function: Optional[callable] = None):
-        """ Common code for registering a function in our namespace.
+    def _mecascript_register_global_watcher(self, watcher: Callable):
+        """Add one watcher that wants to be notified of all global functions so it can register them in its namespace
+
+        Args:
+            watcher: Callback function to notify this watcher of registered or unregistered global commands
+        """
+        # Sanity check
+        if watcher in self._mecascript_global_watchers:
+            self.logger.error(f'Trying to register {watcher}, but it is already registered')
+        else:
+            # Register this watcher
+            self._mecascript_global_watchers.append(watcher)
+
+        # Immediately register existing commands
+        for command_name, command in self._mecascript_registered_commands.items():
+            if not command_name.startswith('programs'):
+                watcher(register=True, name=command_name, function=command.function)
+        # Also register all robot.py functions marked with mecascript_global_function_decorator
+        for function_name, global_function in self._mecascript_static_global_functions.items():
+            if global_function.is_mecascript_implementation:
+                # Do not notify watcher yet. This function will be registered by the robot as built-in MecaScript
+                # (and will thus also be found in _mecascript_registered_commands)
+                pass
+            else:
+                watcher(register=True, name=function_name, function=global_function.function)
+
+    def _mecascript_unregister_global_watcher(self, watcher: Callable):
+        """Remove one watcher that no longer wants to be notified of global functions registrations
+
+        Args:
+            watcher: Callback function to unregister
+        """
+        self._mecascript_global_watchers.remove(watcher)
+
+    def _mecascript_register_command(self, command: mecascript.RegisteredCommand):
+        """ Common code for registering a command in our namespace.
         This function is called in the following cases:
         1. We're sidecar
-            1.1 We're registering a new function
-            1.2 We're overriding an existing function from this "Robot" class
+            1.1 We're registering a new command
+            1.2 We're overriding an existing command from this "Robot" class
         2. We're not a sidecar (we're a normal Python application) and we've received an indication from the robot
-           that a sidecar has registered a custom function that we should make available in our namespace so it can
+           that a sidecar has registered a custom command that we should make available in our namespace so it can
            be called.
 
         Args:
-            function (rsc.RegisteredFunction): The function to register
-            original_function (Optional[callable]): The original class method we're overriding. We need to store it so
-                                                    we can restore it later when unregistering the overriding one.
+            command (mecascript.RegisteredCommand): The command to register
 
         Raises:
-            PermissionError: Trying to register a function that's already registered
+            PermissionError: Trying to register a command that's already registered
         """
-        # Make sure it does not already exist in among registered functions
-        if function.name in self._sidecar_registered_functions:
-            raise PermissionError((f'Cannot register function {function.name}, '
-                                   f'it is already registered by module '
-                                   f'{self._sidecar_registered_functions[function.name].module_name}'))
+        original_command = self._get_registered_attr(command.name)
+        # Make sure it does not already exist in among registered commands
+        if command.name in self._mecascript_registered_commands:
+            raise PermissionError(f'Cannot register command {command.name}, it is already registered')
         # Make sure it does not already exist in among cyclic IDs
-        if (function.cyclic_id is not None and function.cyclic_id > 0
-                and function.cyclic_id in self._registered_cyclic_id):
-            raise PermissionError((f'Cannot register function {function.name}, '
-                                   f'cyclic ID {function.cyclic_id} is already registered by '
-                                   f'{self._registered_cyclic_id[function.cyclic_id].name}'))
+        if (command.cyclic_id is not None and command.cyclic_id > 0
+                and command.cyclic_id in self._registered_cyclic_id):
+            raise PermissionError((f'Cannot register command {command.name}, '
+                                   f'cyclic ID {command.cyclic_id} is already registered by '
+                                   f'{self._registered_cyclic_id[command.cyclic_id].name}'))
 
-        if self._sidecar_mode:
-            self._sidecar_register_to_robot(function)
+        if self._application_type.is_sidecar():
+            self._mecascript_register_to_robot(command)
 
-        # Define a wrapper that receives "self" and discard it before calling the registered function
-        def _registered_function_wrapper(*args: Tuple[any], **kwargs):
-            """ Function wrapper that retrieves the registered function from the dictionary, by name, and call it
+        # Define a wrapper that receives "self" and discard it before calling the registered command
+        def _registered_command_wrapper(*args: Tuple[Any], **kwargs) -> Any:
+            """ Function wrapper that retrieves the registered command from the dictionary, by name, and call it
                 with the provided arguments """
             #pylint: disable=protected-access
-            self._sidecar_call_registered_function(function.name, *args, **kwargs)
+            return self._mecascript_call_registered_command(command.name, None, *args, **kwargs)
 
-        def _registered_function_wrapper_self(_, *args: Tuple[any], **kwargs):
-            """ Same as _registered_function_wrapper, but for cases where it's called from another method of this
-                class and thus receiving 'self' argument (which we discard here)"""
-            _registered_function_wrapper(*args, **kwargs)
+        nested_command = _registered_command_wrapper
 
-        # Decide if we must register the wrapper that receives "self" or not:
-        # - we will receive "self" when the function is registered as a member function of this robot class
-        # - we will not receive "self" when the function is registered as an attribute of a sub-member of the robot
-        #   class, thus when the function is registered with a prefix (like "my_module.my_function")
-        if "." in function.name:
-            nested_function = _registered_function_wrapper
-        else:
-            # We're registering directly as a class function, let's pass a wrapper because we'll receive "self" but
-            # the attached function does not expect it
-            nested_function = _registered_function_wrapper_self
+        # Add the command name to this class' namespace nested under prefix if appropriate
+        #pylint: disable=protected-access
+        mecascript._register_nested_function(function_full_name=command.name,
+                                             get_parent_attr=self._get_registered_attr,
+                                             set_parent_attr=self._set_registered_attr,
+                                             function=nested_command)
 
-        # Add the function name to this class' namespace nested under prefix if appropriate
-        rsc.register_nested_function(function_full_name=function.name,
-                                     get_parent_attr=self._sidecar_get_registered_attr,
-                                     set_parent_attr=self._sidecar_set_registered_attr,
-                                     function=nested_function)
+        if self._application_type.is_sidecar():
+            # Also notify all loaded .mxpy so they can add the command to their global dictionary too
+            for watcher in self._mecascript_global_watchers:
+                watcher(register=True, name=command.name, function=command.function)
 
-        # Also attach as global function, allowing simple scripts to directly call the function
-        # like: my_module.my_function (instead of calling robot.my_module.my_function)
-        rgf.attach_global_function(_registered_function_wrapper, function.name)
+        # Insert into the hash of registered commands
+        self._mecascript_registered_commands[command.name] = command
+        if command.cyclic_id is not None and command.cyclic_id > 0:
+            self._registered_cyclic_id[command.cyclic_id] = command
+        if original_command is not None:
+            self._mecascript_overridden_commands[command.name] = original_command
 
-        # Insert into the hash of registered functions
-        self._sidecar_registered_functions[function.name] = function
-        if function.cyclic_id is not None and function.cyclic_id > 0:
-            self._registered_cyclic_id[function.cyclic_id] = function
-        if original_function is not None:
-            self._sidecar_overridden_functions[function.name] = original_function
-
-    def _sidecar_register_to_robot(self, function: rsc.RegisteredFunction):
-        """Synchronously register a sidecar function with the robot (awaiting robot's response before continuing)
+    def _mecascript_register_to_robot(self, command: mecascript.RegisteredCommand):
+        """Synchronously register a MecaScript command with the robot (awaiting robot's response before continuing)
 
         Args:
-            function (rsc.RegisteredFunction): The function to register
+            command (mecascript.RegisteredCommand): The command to register
 
         Raises:
             TimeoutException: No robot response received
-            PermissionError: Robot refused the function registration (explanation found in exception message)
+            PermissionError: Robot refused the command registration (explanation found in exception message)
         """
         failed = True
         try:
             # Send the register message to the robot, and wait the response
             response = self._send_json_command(
-                '-SidecarRegisterFct',
-                function.to_dict(),
-                expected_responses=[mx_st.MX_ST_REGISTER_FCT_SUCCESS, mx_st.MX_ST_REGISTER_FCT_FAILURE],
+                '-SidecarRegisterCmd',
+                command.to_dict(),
+                expected_responses=[mx_st.MX_ST_REGISTER_CMD_SUCCESS, mx_st.MX_ST_REGISTER_CMD_FAILURE],
                 timeout=2)
         except TimeoutException as e:
             failed = True
             raise TimeoutException(
-                f'Failed to register function {function.name}: Timeout waiting for robot response') from e
+                f'Failed to register command {command.name}: Timeout waiting for robot response') from e
 
         # Analyze response
         message = "(unknown reason)"
         if response.json_data:
-            failed = response.id != mx_st.MX_ST_REGISTER_FCT_SUCCESS
+            failed = response.id != mx_st.MX_ST_REGISTER_CMD_SUCCESS
             json_data: dict = response.json_data.get(MX_JSON_KEY_DATA, {})
-            message = json_data.get(MX_JSON_KEY_SIDECAR_FCT_RSP_MSG, "")
+            message = json_data.get(MX_JSON_KEY_SIDECAR_CMD_RSP_MSG, "")
         if failed:
-            raise PermissionError(f'Failed to register function {function.name}: {message}')
+            raise PermissionError(f'Failed to register command {command.name}: {message}')
 
-    def _sidecar_unregister_function(self, function_name: str):
-        """Unregister a function that was previously registered
-        (unregister from robot class, and from global namespace robot_global_functions.py)
+    def _mecascript_unregister_command(self, command_name: str):
+        """Unregister a command that was previously registered
+        (unregister from robot class, and from global namespace robot_global_commands.py)
 
         Args:
-            function_name (str): The name of the function to unregister
+            command_name (str): The name of the command to unregister
         """
-        if function_name not in self._sidecar_registered_functions:
+        if command_name not in self._mecascript_registered_commands:
             return
+        command = self._mecascript_registered_commands[command_name]
 
         # Use the helper to recursively unregister from our namespace (recursively because of prefixes)
-        rsc.unregister_nested_function(function_full_name=function_name,
-                                       get_parent_attr=self._sidecar_get_registered_attr,
-                                       del_parent_attr=self._sidecar_del_registered_attr)
+        #pylint: disable=protected-access
+        mecascript._unregister_nested_function(function_full_name=command_name,
+                                               get_parent_attr=self._get_registered_attr,
+                                               del_parent_attr=self._del_registered_attr)
 
-        # Remove from global namespace too
-        rgf.detach_global_function(function_name)
+        if self._application_type.is_sidecar():
+            # Also notify all loaded .mxpy so they can remove the command to their global dictionary too
+            for watcher in self._mecascript_global_watchers:
+                watcher(register=False, name=command_name, function=command.function)
 
-        cyclic_id = self._sidecar_registered_functions[function_name].cyclic_id
+        cyclic_id = command.cyclic_id
 
-        # Remove from our dictionary of registered functions
-        del self._sidecar_registered_functions[function_name]
-        if function_name in self._sidecar_overridden_functions:
-            # Need to restore the original function that had been overridden but is no longer
-            self._sidecar_set_registered_attr(function_name, self._sidecar_overridden_functions[function_name])
-            del self._sidecar_overridden_functions[function_name]
+        # Remove from our dictionary of registered commands
+        del self._mecascript_registered_commands[command_name]
+        if command_name in self._mecascript_overridden_commands:
+            # Need to restore the original command that had been overridden but is no longer
+            self._set_registered_attr(command_name, self._mecascript_overridden_commands[command_name])
+            del self._mecascript_overridden_commands[command_name]
 
         # Remove from cyclic IDs
         if cyclic_id is not None and cyclic_id > 0 and cyclic_id in self._registered_cyclic_id:
             fct_or_var = self._registered_cyclic_id[cyclic_id]
-            if isinstance(fct_or_var, rsc.RegisteredFunction):
+            if isinstance(fct_or_var, mecascript.RegisteredCommand):
                 del self._registered_cyclic_id[cyclic_id]
 
-        if self._sidecar_mode and self.IsConnected():
-            # Notify the robot so the function is removed from the commands dictionary and no long available to users
-            self._sidecar_push_unregistered_fct_to_robot(function_name)
+        if self._application_type.is_sidecar() and self.IsConnected():
+            # Notify the robot so the command is removed from the commands dictionary and no long available to users
+            self._mecascript_push_unregistered_command_to_robot(command_name)
 
-    def _sidecar_push_unregistered_fct_to_robot(self, function_name: str):
-        """ Tell the robot about a registered function """
-        self._send_json_command('-SidecarUnregisterFct', {"name": function_name})
+    def _mecascript_push_unregistered_command_to_robot(self, command_name: str):
+        """ Tell the robot about a registered command """
+        self._send_json_command('-SidecarUnregisterCmd', {"name": command_name})
 
-    def _register_variable(self, variable: rsc.RegisteredVariable):
+    def _graceful_stop_allowed(self) -> bool:
+        """ See documentation for RobotSideCar.graceful_stop_allowed """
+        return self._mecascript_fct_stop_graceful
+
+    def _mecascript_push_status_to_robot(self, status: mecascript.SidecarInternalStatus):
+        """ Push internal sidecar status to robot
+
+        Raises:
+            TimeoutException: No robot response received
+        """
+        if not self.IsConnected():
+            return  # We'll push when reconnected
+        try:
+            # Send the status update message to the robot
+            self._send_json_command('-SidecarReportStatus', status.to_dict())
+        except TimeoutException as e:
+            raise TimeoutException(f'Failed to update sidecar status to robot') from e
+
+    # pylint: disable=unused-argument
+    def _must_force_sync(self, cyclical_cmd: Optional[str] = None) -> bool:
+        """ This function is used by derived classes to force synchronous get in some conditions. Not used here. """
+        return False
+
+    def _register_variable(self, variable: mecascript.RegisteredVariable):
         """ Called when the robot reports an existing variable """
+        variable = copy.deepcopy(variable)
+        # Wrap the variable value so that changes to it are detected and _set_variable is called when they happen
+        # pylint: disable=protected-access
+        variable._value = mecascript._wrap_mutable(value=variable._value,
+                                                   on_change=lambda v: self._set_variable(variable.name, v))
         self._registered_vars_by_name[variable.name] = variable
         if variable.cyclic_id is not None and variable.cyclic_id > 0:
             self._registered_cyclic_id[variable.cyclic_id] = variable
 
         # Also register in the variables container
-        self.vars.register_attribute(variable.name, variable.name)
+        self.variables.register_attribute(variable.name, variable.name)
 
-    def _unregister_variable(self, name: str) -> any:
+    def _unregister_variable(self, name: str) -> Any:
         """Delete a variable previously registered with RegisterVariable
 
         Args:
@@ -5745,7 +7760,7 @@ class _Robot:
             old_value = variable.get_value()
 
             # Unregister from the variables container
-            self.vars.unregister_attribute(name)
+            self.variables.unregister_attribute(name)
 
             # Unlink from this class
             del self._registered_vars_by_name[name]
@@ -5758,18 +7773,18 @@ class _Robot:
 
         return old_value
 
-    def _get_variable(self, name: str) -> Optional[any]:
-        """ Attribute container callback used to get a variable value when someone calls robot.vars.X to access
+    def _get_variable(self, name: str) -> Optional[Any]:
+        """ Attribute container callback used to get a variable value when someone calls robot.variables.X to access
             variable X"""
         if name not in self._registered_vars_by_name:
             return None
         return self._registered_vars_by_name[name]
 
-    def _set_variable(self, name: str, value: any) -> any:
-        """ Attribute container callback used to set a variable value when someone calls robot.vars.X=val to modify
+    def _set_variable(self, name: str, value: Any) -> Any:
+        """ Attribute container callback used to set a variable value when someone calls robot.variables.X=val to modify
             variable X"""
         # Make sure to get the nested value if object is type RegisteredVariable
-        if isinstance(value, rsc.RegisteredVariable):
+        if isinstance(value, mecascript.RegisteredVariable):
             value = value.get_value()
 
         # Get a copy of the previous value
@@ -5783,114 +7798,240 @@ class _Robot:
 
         return prev_val
 
-    def _register_robot_sidecar_cmd(self, function_name: str, cmd_def: dict):
-        """Register into the current namespace a function that a remote sidecar just registered on the robot.
-            This way, this function can be called on the robot object in current application,
-            for example robot.some_sidecar_module.some_sidecar_function(some_args)
+    def _register_robot_sidecar_cmd(self, command_name: str, cmd_def: dict):
+        """Register into the current namespace a command that a remote sidecar just registered on the robot.
+            This way, this command can be called on the robot object in current application,
+            for example robot.programs.my_folder.my_program(some_args)
 
         Args:
-            function_name (str): Name of the function to register
-            cmd_def (dict): Description of the function as provided by the robot's command dictionary API
+            command_name (str): Name of the command to register
+            cmd_def (dict): Description of the command as provided by the robot's command dictionary API
         """
         # Make sure it does not already exist in in the robot class
-        exists = hasattr(_Robot, function_name)
+        exists = hasattr(_Robot, command_name)
         if exists:
-            self.logger.error(f'Trying to register function {function_name} but it already exists in Robot class')
+            self.logger.error(f'Trying to register command {command_name} but it already exists in Robot class')
             return
 
-        # Define a wrapper that will call the robot's registered function whenever someone is calling that function
+        # Define a wrapper that will call the robot's registered command whenever someone is calling that command
         # in our namespace. The robot will then forward our request to the sidecar which registered it, that sidecar
         # will execute the command with the arguments we're passing along.
-        def _sidecar_cmd_wrapper(*args, **kwargs):
+        def _mecascript_command_wrapper(*args, **kwargs):
             # Combine positional and keyword arguments into a single dictionary
-            json_data: dict = {MX_JSON_KEY_SIDECAR_FCT_EXEC_ARGS: args, MX_JSON_KEY_SIDECAR_FCT_EXEC_KWARGS: kwargs}
+            json_data: dict = {MX_JSON_KEY_SIDECAR_CMD_EXEC_ARGS: args, MX_JSON_KEY_SIDECAR_CMD_EXEC_KWARGS: kwargs}
 
-            self._send_json_command(function_name, json_data)
+            self._send_json_command(command_name, json_data)
 
-        # Build a RegisteredFunction object from the command definition received from the robot for this command
+        # Build a RegisteredCommand object from the command definition received from the robot for this command
         # newly registered from a sidecar
-        function = rsc.RegisteredFunction.from_robot_cmd_def(function=_sidecar_cmd_wrapper,
-                                                             name=function_name,
-                                                             cmd_def=cmd_def)
+        command = mecascript.RegisteredCommand.from_robot_cmd_def(function=_mecascript_command_wrapper,
+                                                                  name=command_name,
+                                                                  cmd_def=cmd_def)
 
-        # Insert the registered function into our namespace
-        self._sidecar_register_function(function)
+        # Insert the registered command into our namespace
+        self._mecascript_register_command(command)
+
+    def _register_robot_mxprog(self, command_name: str, cmd_def: dict):
+        """Register into the current namespace a loaded mxprog user program.
+            This way, this command can be called on the robot object in current application,
+            for example robot.programs.my_folder.my_program()
+
+        Args:
+            command_name (str): Name of the command to register
+            cmd_def (dict): Description of the command as provided by the robot's command dictionary API
+        """
+        # Make sure it does not already exist in in the robot class
+        exists = hasattr(_Robot, command_name)
+        if exists:
+            self.logger.error(f'Trying to register command {command_name} but it already exists in Robot class')
+            return
+
+        # Define a wrapper that will call the robot's registered command whenever someone is calling that command
+        # in our namespace.
+        def _mxprog_cmd_wrapper():
+            self.StartProgram(command_name)
+
+        # Build a RegisteredCommand object from the command definition received from the robot for this command
+        # newly registered from a sidecar
+        command = mecascript.RegisteredCommand.from_robot_cmd_def(function=_mxprog_cmd_wrapper,
+                                                                  name=command_name,
+                                                                  cmd_def=cmd_def)
+
+        # Insert the registered command into our namespace
+        self._mxprog_register_command(command)
 
     def _handle_dict_cmd_added(self, message: Message):
-        """Handle a message listing one API function available on the robot.
+        """Handle a message listing one API command available on the robot.
 
         Parameters
         ----------
         message : Message object that describes the robot registered command
 
         """
-        if self._sidecar_mode:
-            # We are the sidecar, let's ignore this
-            return
-
         if not message.json_data:
             # Should not happen
             return
 
-        # Get the function name from the JSON message
+        # Get the command name from the JSON message
         json_data: dict = message.json_data.get(MX_JSON_KEY_DATA, {})
+
+        # Registered functions are in 'user' namespace
+        cmd_user_ns = json_data.get('user', {})
 
         # Register all new commands provided by the robot
-        for function_name, cmd_def in json_data.items():
-            sidecar_id: int = int(cmd_def.get(MX_JSON_KEY_SIDECAR_FCT_SIDECAR_ID, 0))
+        for command_name, cmd_def_list in cmd_user_ns.items():
+            # No overload is available here
+            cmd_def = cmd_def_list[0]
 
-            if sidecar_id != 0 and function_name not in self._sidecar_registered_functions:
-                self._register_robot_sidecar_cmd(function_name, cmd_def)
+            sidecar_id: int = int(cmd_def.get(MX_JSON_KEY_SIDECAR_CMD_SIDECAR_ID, 0))
+            is_mxprog: bool = bool(cmd_def.get(MX_JSON_KEY_SIDECAR_CMD_IS_MXPROG, False))
+
+            if command_name == MX_SIDECAR_SYNC_CMD_NAME:
+                pass
+            elif is_mxprog:
+                # This is a mxprog basic program
+                if command_name not in self._mxprog_registered_commands:
+                    self._register_robot_mxprog(command_name, cmd_def)
+            elif sidecar_id != 0 and not self._application_type.is_sidecar():  # Let's not register our own commands
+                if command_name not in self._mecascript_registered_commands:
+                    self._register_robot_sidecar_cmd(command_name, cmd_def)
+
+        if not self._missing_robot_command_tested and self._application_type.is_sidecar():
+            # Validate that all robot commands are also implemented in the robot class public API
+            cmd_robot_ns = json_data.get('robot', {})
+            # Some robot commands are not in the Python API on purpose:
+            ignored = {"SetOfflineProgramLoop", "StartSaving", "StopSaving"}
+            for command_name, cmd_def_list in cmd_robot_ns.items():
+                cmd_def = cmd_def_list[0]
+                is_private: bool = bool(cmd_def.get(MX_JSON_KEY_SIDECAR_CMD_PRIVATE, False))
+                if not is_private and not hasattr(self, command_name) and not command_name in ignored:
+                    self._missing_robot_commands.append(command_name)
+
+        self._missing_robot_command_tested = True
 
     def _handle_dict_cmd_removed(self, message: Message):
-        """Handle a message indicating that the robot no longer has the specified API function.
+        """Handle a message indicating that the robot no longer has the specified API command.
 
         Parameters
         ----------
-        message : Message object that contains the name of the functions to unregister
+        message : Message object that contains the name of the commands to unregister
 
         """
-        if self._sidecar_mode:
-            # We are the sidecar, let's ignore this
-            return
-
         if not message.json_data:
             # Should not happen
             return
 
-        # Get the function name from the JSON message
+        # Get the command name from the JSON message
         json_data: dict = message.json_data.get(MX_JSON_KEY_DATA, {})
 
-        # Unregister from our namespace all commands that are no longer available on the robot
-        for function_name, _ in json_data.items():
-            self._sidecar_unregister_function(function_name)
+        # Registered functions are in 'user' namespace
+        cmd_user_ns = json_data.get('user', {})
 
-    def _handle_sidecar_status(self, message: Message):
-        """Handle the message that indicates the sidecar scripting engines status.
+        # Unregister from our namespace all commands that are no longer available on the robot
+        for command_name, _ in cmd_user_ns.items():
+            if command_name == MX_SIDECAR_SYNC_CMD_NAME:
+                pass
+            elif command_name in self._mxprog_registered_commands:
+                self._mxprog_unregister_command(command_name)
+            elif not self._application_type.is_sidecar():
+                self._mecascript_unregister_command(command_name)
+
+    def _handle_get_loaded_programs(self, message: Message):
+        """Handle the response to GetLoadedPrograms.
 
         Parameters
         ----------
-        message : Message object that contains the status of all connected scripting engines
+        message : Message object that contains the robot response
         """
         if not message.json_data:
-            # Should not happen
+            # Not supported. Here we support this only if connected on the JSON port.
             return
 
-        # Get the function name from the JSON message
+        self._loaded_programs.programs = {}
+
+        # JSON format.
+        json_data: dict[str, dict] = message.json_data.get(MX_JSON_KEY_DATA, {})
+        files: dict[str, dict] = json_data.get(MX_JSON_KEY_LOADED_PROGRAMS_FILES, {})
+        for name, file in files.items():
+            loaded = file.get(MX_JSON_KEY_LOADED_PROGRAM_LOADED_CFG, False)
+            self._loaded_programs.programs[name] = LoadedProgramConfig(configured_to_load=loaded)
+
+        if self._is_in_sync():
+            self._robot_events.on_loaded_programs_updated.set()
+
+    def _handle_mecascript_engine_status(self, message: Message):
+        """Handle the message that indicates the Python MecaScript engine status.
+
+        Parameters
+        ----------
+        message : Message object that contains the status the Python MecaScript engines
+        """
+        if not message.json_data:
+            # Not supported. Here we support this only if connected on the JSON port.
+            return
+
+        # Reset
+        self._mecascript_engine_status = MecaScriptEngineStatus()
+
+        # JSON format.
+        json_data: dict[str, dict] = message.json_data.get(MX_JSON_KEY_DATA, {})
+        sidecar_id = json_data.get(MX_JSON_KEY_SIDECAR_STATUS_ID, 0)
+        if sidecar_id != 0:
+            registered_commands = []
+            if (MX_JSON_KEY_SIDECAR_STATUS_COMMANDS in json_data
+                    and isinstance(json_data[MX_JSON_KEY_SIDECAR_STATUS_COMMANDS], list)):
+                registered_commands = json_data[MX_JSON_KEY_SIDECAR_STATUS_COMMANDS]
+
+            loaded_programs_status = {}
+            if (MX_JSON_KEY_SIDECAR_STATUS_PROGRAMS_STATUS in json_data
+                    and isinstance(json_data[MX_JSON_KEY_SIDECAR_STATUS_PROGRAMS_STATUS], dict)):
+                for name, status_dict in json_data[MX_JSON_KEY_SIDECAR_STATUS_PROGRAMS_STATUS].items():
+                    if MX_JSON_KEY_LOADED_PROGRAM_STATUS in status_dict:
+                        loaded_programs_status[name] = ProgramStatus(
+                            status=safe_enum_cast(MxProgramStatus, status_dict[MX_JSON_KEY_LOADED_PROGRAM_STATUS]),
+                            message=status_dict.get(MX_JSON_KEY_LOADED_PROGRAM_MESSAGE, ""),
+                            configured_to_load=status_dict.get(MX_JSON_KEY_LOADED_PROGRAM_LOADED_CFG, False))
+
+            self._mecascript_engine_status.id = json_data.get(MX_JSON_KEY_SIDECAR_STATUS_ID, None)
+            self._mecascript_engine_status.embedded = bool(json_data.get(MX_JSON_KEY_SIDECAR_STATUS_EMBEDDED, False))
+            self._mecascript_engine_status.remote_ip = str(json_data.get(MX_JSON_KEY_SIDECAR_STATUS_REMOTE_IP, ""))
+            self._mecascript_engine_status.ready = bool(json_data.get(MX_JSON_KEY_SIDECAR_STATUS_READY, False))
+            self._mecascript_engine_status.registered_commands = registered_commands
+            self._mecascript_engine_status.loaded_programs_status = loaded_programs_status
+
+        if self._is_in_sync():
+            self._robot_events.on_mecascript_engine_status_updated.set()
+        self._callback_queue.put('on_mecascript_engine_status_updated')
+
+    def _handle_program_execution_status(self, message: Message):
+        """Handle the message that indicates the robot is executing a sidecar (Python) program.
+
+        Parameters
+        ----------
+        message : Message object that contains the status
+        """
+        if not message.json_data:
+            # Not supported. Here we support this only if connected on the JSON port.
+            return
+
+        # JSON format.
         json_data: dict[str, dict] = message.json_data.get(MX_JSON_KEY_DATA, {})
 
-        self._sidecar_status = []
-        for _, json_sidecar in json_data.items():
-            sidecar_status = RobotSidecarStatus()
+        self._program_execution_status.command_name = json_data.get(MX_JSON_KEY_SIDECAR_STATUS_COMMAND, "")
+        self._program_execution_status.file_path = json_data.get(MX_JSON_KEY_SIDECAR_STATUS_CMD_PATH, "")
+        self._program_execution_status.stopping = json_data.get(MX_JSON_KEY_SIDECAR_STATUS_STOPPING, False)
+        self._program_execution_status.id = json_data.get(MX_JSON_KEY_SIDECAR_STATUS_SIDECAR_ID, 0)
+        self._program_execution_status.command_type = MxRegisteredCmdType(
+            json_data.get(MX_JSON_KEY_SIDECAR_STATUS_CMD_TYPE, MxRegisteredCmdType.MX_REGISTERED_CMD_TYPE_INLINE))
+        executing = self._program_execution_status.command_name != ''
+        if executing:
+            self._robot_events.on_mecascript_exec_idle.clear()
+        else:
+            self._robot_events.on_mecascript_exec_idle.set()
 
-            sidecar_status.id = json_sidecar.get(MX_JSON_KEY_SIDECAR_STATUS_ID, None)
-            sidecar_status.embedded = bool(json_sidecar.get(MX_JSON_KEY_SIDECAR_STATUS_EMBEDDED, False))
-            sidecar_status.remote_ip = str(json_sidecar.get(MX_JSON_KEY_SIDECAR_STATUS_REMOTE_IP, ""))
-            if (MX_JSON_KEY_SIDECAR_STATUS_FUNCTIONS in json_sidecar
-                    and isinstance(json_sidecar[MX_JSON_KEY_SIDECAR_STATUS_FUNCTIONS], list)):
-                sidecar_status.registered_functions = json_sidecar[MX_JSON_KEY_SIDECAR_STATUS_FUNCTIONS]
-
-            self._sidecar_status.append(sidecar_status)
+        if self._is_in_sync():
+            self._robot_events.on_program_execution_status_updated.set()
+        self._callback_queue.put('on_program_execution_status_updated')
 
     def _handle_variable_added(self, message: Message):
         """Handle a message indicating that variables were created or modified on the robot (also called as connection)
@@ -5909,11 +8050,23 @@ class _Robot:
         variables: dict[str, dict] = json_data.get(MX_JSON_KEY_VAR_LIST, {})
         for name, var in variables.items():
             value = var.get(MX_JSON_KEY_VAR_VAL)
+            volatile = var.get(MX_JSON_KEY_VAR_VOLATILE, False)
             cyclic_id = var.get(MX_JSON_KEY_VAR_CYCLIC_ID, None)
             if name in self._registered_vars_by_name:
                 # Update the variable value
                 registered_var = self._registered_vars_by_name[name]
-                registered_var.set_value(value)
+
+                # Wrap the variable value so that changes to it are detected and
+                # _set_variable is called when they happen
+                registered_var.set_value(
+                    #pylint: disable=protected-access
+                    mecascript._wrap_mutable(
+                        value,
+                        on_change=lambda v, _name=registered_var.name: self._set_variable(_name, v),
+                    ))
+
+                # Update the volatile flag
+                registered_var.volatile = volatile
 
                 # Update the cyclic ID if appropriate
                 if registered_var.cyclic_id != cyclic_id:
@@ -5931,7 +8084,10 @@ class _Robot:
                         self._registered_cyclic_id[cyclic_id] = registered_var
             else:
                 # Register a new variable
-                variable = rsc.RegisteredVariable(name=name, default=value, cyclic_id=cyclic_id)
+                variable = mecascript.RegisteredVariable(name=name,
+                                                         default=value,
+                                                         volatile=volatile,
+                                                         cyclic_id=cyclic_id)
                 self._register_variable(variable)
 
     def _handle_variable_removed(self, message: Message):

@@ -11,6 +11,16 @@
             ]
         },
         {
+            "name": "Run complete example",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "examples/complete_example.py",
+            "console": "integratedTerminal",
+            "args" : [
+                "--ip", "192.168.0.100"
+            ]
+        },
+        {
             "name": "Run trajectory logger example",
             "type": "debugpy",
             "request": "launch",
