@@ -7176,6 +7176,20 @@ class Robot(_Robot):
         """
         super().LogUserCommands(enable=enable, show_motion_queue_progress=show_motion_queue_progress)
 
+    @mecascript_global_function_decorator
+    def SetSilentApiMode(self, enable: bool):
+        """
+        Enables or disables the silent API mode.
+        In silent mode, the robot does not log API commands in its flight recorder log or the MecaPortal event log.
+        This is useful when sending large number of commands to the robot that would otherwise clutter the logs.
+
+        Parameters
+        ----------
+        enable
+            Enable or disable the silent API mode
+        """
+        super().SetSilentApiMode(enable=enable)
+
     # pylint: disable=redefined-outer-name
     def StartLogging(self,
                      monitoringInterval: float,
@@ -7681,3 +7695,25 @@ class Robot(_Robot):
         super()._del_registered_attr(attr_name)
         if getattr(self, attr_name, None) is not None:
             delattr(Robot, attr_name)
+
+
+class RobotSilentApiMode:
+    """
+    Context manager to temporarily enable 'silent' API mode on a Robot instance.
+    See ``SetSilentApiMode`` for details.
+
+    Example:
+        with SilentApiMode(robot):
+            robot.MoveJoints(my_pos)
+    """
+
+    def __init__(self, robot: Robot):
+        self._robot = robot
+
+    def __enter__(self):
+        self._robot.SetSilentApiMode(True)
+        return self._robot  # Optional: allows `as` usage if needed
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._robot.SetSilentApiMode(False)
+        return False

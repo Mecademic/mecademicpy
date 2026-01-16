@@ -1133,6 +1133,7 @@ class _Robot:
         self._rx_timestamp = 0
         self._monitor_timeout_used = False
         self._silent_prefix = ''
+        self._silent_api_mode = False
         self._custom_response_events: List[weakref.ReferenceType[InterruptableEvent]] = list()
 
         self._user_checkpoints: Dict[int, List[InterruptableEvent]] = dict()
@@ -4014,6 +4015,10 @@ class _Robot:
         with self._main_lock:
             self._send_command('LogUserCommands', args=[1 if enable else 0, 1 if show_motion_queue_progress else 0])
 
+    def SetSilentApiMode(self, enable: bool):
+        """See documentation in equivalent function in robot.py"""
+        self._silent_api_mode = enable
+
     def _add_trace_prefix(self, msg: str, level: Optional[int] = None) -> str:
         """ Add a prefix that colorizes warnings or errors """
         color = ""
@@ -4884,6 +4889,9 @@ class _Robot:
             # Exception for LogTrace, which is allowed from a sidecar program that has been stopped
             just_check_if_connected = "logtrace" in command.lower()
             self._check_internal_states(just_check_if_connected)
+
+        if self._silent_api_mode and not command.startswith(self._silent_prefix):
+            command = f'{self._silent_prefix}{command}'
 
         # Assemble arguments into a string and concatenate to end of command.
         command_arg = command

@@ -945,6 +945,36 @@ has been enabled (`SetRealTimeMonitoring(all)`).
 This issue is especially noticeable when running your application in a debugger.
 To improve performance, you can reduce the amount of data received from the robot by increasing the monitoring interval.
 
+#### Silent API mode
+
+By default, all commands sent to the robot are saved in the flight recorder log and are printed in the
+MecaPortal event log.
+The robot class provides an option to skip the flight recorder and MecaPortal event log when this behavior
+is not desirable. For example:
+
+- A Python program runs a background thread that periodically calls robot commands. This can generate continuous log
+  messages in the MecaPortal event log, creating unwanted "noise" and hiding more important robot messages.
+- A Python program sends robot commands at a very high rate. Reducing robot-side logging can save CPU resources on the
+  robot and allow a higher API command rate.
+
+The "silent API mode" can be enabled either by calling `SetSilentApiMode`, or by using a silent `with` block.
+For example:
+
+```python
+def background_monitoring_thread():
+  with RobotSilentApiMode(robot):
+      while robot.IsConnected():
+        pos = robot.GetRtCartPos()
+        robot.SetVariable('robot_pos', pos)
+        robot.sleep(0.1)
+```
+
+#### Verbose API mode
+
+On the contrary, if you want commands to be written to the persistent robot.log and to the persistent user.log,
+you can use `LogUserCommands(enable=True)`.
+Note that commands sent using the silent API mode (`SetSilentApiMode`) will remain silent in all cases.
+
 ## Getting help
 
 If you need support, please open an issue on the
