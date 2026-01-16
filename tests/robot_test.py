@@ -974,7 +974,7 @@ def test_motion_commands(robot: mdr.Robot):
     skip_commands = [
         'MoveGripper', 'MoveJoints', 'MoveJointsVel', 'MoveJointsRel', 'SetSynchronousMode', 'SetTorqueLimits',
         'SetTorqueLimitsCfg', 'SetIoSim', 'SetOutputState', 'SetOutputStateImmediate', 'SetVariable',
-        'SetLoadedPrograms', 'SetApiLock', 'SetCalibrationCfg', 'SetRobotName', 'SetMecaScriptCfg'
+        'SetLoadedPrograms', 'SetApiLock', 'SetCalibrationCfg', 'SetRobotName', 'SetMecaScriptCfg', 'SetSilentApiMode'
     ]
 
     # List of methods that will be deprecated. The deprecation decorator breaks the way we use to test those methods.
