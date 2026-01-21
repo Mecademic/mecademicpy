@@ -188,6 +188,8 @@ class _RobotEvents:
         Set if robot motion is not paused.
     on_motion_cleared : event
         Set if there are no pending ClearMotion commands.
+    on_mecascript_resumed : event
+        Cleared if a controlling mecascript is paused.
     on_activate_sim : event
         Set if robot is in sim mode.
     on_deactivate_sim : event
@@ -329,6 +331,7 @@ class _RobotEvents:
         self.on_motion_paused = InterruptableEvent(wait_callback=wait_callback)
         self.on_motion_resumed = InterruptableEvent(wait_callback=wait_callback)
         self.on_motion_cleared = InterruptableEvent(wait_callback=wait_callback)
+        self.on_mecascript_resumed = InterruptableEvent(wait_callback=wait_callback)
 
         self.on_activate_sim = InterruptableEvent(wait_callback=wait_callback)
         self.on_deactivate_sim = InterruptableEvent(wait_callback=wait_callback)
@@ -398,6 +401,7 @@ class _RobotEvents:
 
         self.on_motion_resumed.set()
         self.on_deactivate_sim.set()
+        self.on_mecascript_resumed.set()
 
         self.on_time_scaling_changed.set()
 
@@ -1531,6 +1535,7 @@ class _Robot:
                 self._robot_events.on_motion_resumed.set()
                 self._set_brakes_engaged(True)
                 self._set_connection_watchdog_enabled(False)
+                self._robot_events.on_mecascript_resumed.set()
 
                 self._robot_events.on_status_updated.set()
                 self._robot_events.on_loaded_programs_updated.set()
@@ -5998,6 +6003,28 @@ class _Robot:
             self._robot_status.pause_motion_status = paused
         self._check_motion_clear_done()
 
+    def _set_sidecar_paused(self, paused: bool):
+        """Update the indication that MecaScript pause motion was requested by the main API
+
+        Parameters
+        ----------
+        paused
+            Pause motion is requested or not
+        """
+        if not self._first_robot_status_received or self._robot_events.on_mecascript_resumed.is_set() == paused:
+            if paused:
+                self._robot_events.on_mecascript_resumed.clear()
+            else:
+                self._robot_events.on_mecascript_resumed.set()
+
+    def _handle_mecascript_pause_motion(self, pause_and_resume: Optional[bool] = True, timeout: Optional[float] = None):
+        """ See documentation for `RobotSideCar.HandlePauseMotion` """
+        if pause_and_resume:
+            self.PauseMotion()
+        self._robot_events.on_mecascript_resumed.wait(timeout=timeout)
+        if pause_and_resume:
+            self.ResumeMotion()
+
     def _set_eob(self, eob: bool):
         """Update the "eob" state of the robot
 
@@ -6203,6 +6230,7 @@ class _Robot:
                 self._set_cleared(bool(json_motion_status.get(MX_JSON_KEY_MOTION_STATUS_CLEARED, False)))
                 self._set_paused(bool(json_motion_status.get(MX_JSON_KEY_MOTION_STATUS_HOLD, False)))
                 self._set_eob(bool(json_motion_status.get(MX_JSON_KEY_MOTION_STATUS_EOB, False)))
+                self._set_sidecar_paused(bool(json_motion_status.get(MX_JSON_KEY_MOTION_STATUS_SIDECAR_PAUSE, False)))
             if json_safety_status is not None:
                 self._set_reset_ready(bool(json_safety_status.get(MX_JSON_KEY_SAFETY_STATUS_RESET_READY, False)))
                 if (MX_JSON_KEY_SAFETY_STOP in json_safety_status
@@ -7717,7 +7745,7 @@ class _Robot:
         self._send_json_command('-SidecarUnregisterCmd', {"name": command_name})
 
     def _graceful_stop_allowed(self) -> bool:
-        """ See documentation for RobotSideCar.graceful_stop_allowed """
+        """ See documentation for ``RobotSideCar.GracefulStopProgram`` """
         return self._mecascript_fct_stop_graceful
 
     def _mecascript_push_status_to_robot(self, status: mecascript.SidecarInternalStatus):
