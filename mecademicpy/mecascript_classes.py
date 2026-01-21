@@ -289,8 +289,8 @@ class RegisteredVariable(RegisteredArg):
             max=self.max,
         )
 
-        # Detach value completely:
-        new_var._value = copy.deepcopy(_unwrap_mutable(self._value))
+        # Detach value completely
+        new_var._value = copy.deepcopy(_unwrap_mutable(self._value))  # pylint: disable=protected-access
 
         return new_var
 

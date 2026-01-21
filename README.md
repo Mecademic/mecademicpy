@@ -339,6 +339,7 @@ Example of file management functions:
 - `LoadFile`
 - `SaveFile`
 - `StartProgram`
+- `StopProgram`
 
 ### MecaScript Python engine management functions
 

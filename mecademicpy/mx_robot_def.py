@@ -2080,6 +2080,9 @@ MX_JSON_KEY_MOTION_STATUS_PRGRM = "programId"
 MX_JSON_KEY_MOTION_STATUS_HOLD = "paused"
 """bool: Hold motion"""
 
+MX_JSON_KEY_MOTION_STATUS_SIDECAR_PAUSE = "sidecarPause"
+"""bool: Sidecar pause motion requested"""
+
 MX_JSON_KEY_MOTION_STATUS_CLEARED = "cleared"
 """bool: Motion was cleared"""
 
