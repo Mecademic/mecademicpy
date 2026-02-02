@@ -1,50 +1,159 @@
-![Mecademic](https://github.com/Mecademic/mecademicpy/blob/main/docs/logo/mecademic_logo.png?raw=true  "Mecademic")
+![Mecademic](docs/logo/mecademic_logo.png "Mecademic")
+
 # Mecademic Python API
 
-A python module designed for robot products from Mecademic. The module offers tools that give access to the features of the Mecademic Robots such as MoveLin and MoveJoints available through the TCP/IP text interface. The module can be started from a terminal or a python application and controls the Mecademic products.
+## Introduction
 
-#### Supported Robots
+The `mecademicpy` Python library is the official API provided by Mecademic for controlling its
+high-precision robotic arms.
+It enables seamless integration of Mecademic robots into Python applications by providing a Python interface
+to the robot’s text-based TCP/IP command protocol.
 
- * Meca500, MCS500
+This package can be installed using pip:
 
-#### Supported Firmware Versions
+```bash
+pip install mecademicpy
+```
 
- * 8.3 and up
+You can also download source code from
+[MecademicPy GitHub page](https://github.com/Mecademic/mecademicpy).
 
-#### Supported Python versions
-Mecademicpy 2.3.1 targets Python version 3.7 and above.
-It has been tested with the following Python versions:
-* Python 3.7.17
-* Python 3.8.18
-* Python 3.9.18
-* Python 3.10.13
-* Python 3.11.8
-* Python 3.12.2
-* Python 3.13.2
+## Key features
 
-## Prerequisites
+### Easy-to-use API
 
-Please read the [user programming manual](https://www.mecademic.com/res/doc/programming-manual) to understand concepts necessary for proper usage of the API. This API implements a subset of the commands in the `Communicating over TCP/IP` section. For the exact list of available commands, use the `help()` command as explained in [API Reference](#api-reference).
+Although the `mecademicpy` API can unleash the full flexibility and power of the Python language to write robot
+programs, writing a simple robot program remains easy, even for users not very familiar with the Python
+language.
 
-To be able to use the module without unexpected errors, the user must have a copy of python installed on their machine and it is required to use python version 3.7 or higher. We recommend using Python 3.9 since this is the version on which this module is actively tested. [Python](https://www.python.org/) can be installed from its main website (a reboot will be require after the installation to complete the setup).
+### Mirrors the robot's native text API
 
-The user can validate their python installation by running `python --version` in a terminal.
+The `mecademicpy` library uses the same function names and arguments as the robot’s native text-based (TCP/IP) API,
+for consistency and ease of use. Therefore, any user already familiar with Mecademic's TCP/IP text API will
+quickly be able to write Python programs using the `mecademicpy` library.
 
-This library is compatible with Windows, Linux, and Mac.
+### Control robot motion
 
-## Downloading the package
+Control robot motion using intuitive functions such as MoveLin, MoveJoints, GetStatusRobot, WaitIdle and more.
 
-To download and install the package, the user can easily do so through pip. Pip will download and install the package on your machine and place it in the python local packages directory. This is done by running the following command:
+### Robot management
+
+Initialize and control the robot’s operational state using functions such as
+ActivateRobot, Home, WaitIdle, DeactivateRobot, UpdateRobot, and others.
+
+The `mecademicpy` library also provides utilities to
+[restore a well-known robot configuration](#restore-a-well-known-robot-configuration),
+making it easy to ensure the robot is in the expected state before a program starts using it.
+
+### Robot configuration
+
+Set persistent configuration parameters with functions such as
+SetJointLimits, SetWorkZoneLimits, SetPStop2Cfg, and more.
+
+### Robot program management
+
+Manage and execute on-robot programs using functions such as
+ListFiles, SaveFile, LoadFile, DeleteFile, and StartProgram.
+
+### Variable management
+
+[Manage robot variables](#manage-robot-variables) that can be used across all robot APIs
+(TCP/IP, cyclic protocols, or Python),
+using functions such as GetVariable, SetVariable, CreateVariable, DeleteVariable, and ListVariables.
+Variables are also automatically exposed via the robot.variables interface as easy-to-use, read/write Python attributes
+(e.g., robot.variables.myVar = [...]).
+
+### Synchronous and asynchronous modes
+
+Send commands asynchronously to allow concurrent execution while the robot moves. It also allows blending
+between consecutive move commands.
+
+Alternatively, you can enable synchronous mode so that each command blocks until the robot completes the
+requested operation.
+
+For more details, refer to [Asynchronous mode considerations](#asynchronous-mode-considerations).
+
+### Cross-platform compatibility
+
+Supports Windows, Linux, and macOS environments through Python.
+
+### Broad robot and firmware compatibility
+
+- Supports all Mecademic robot models;
+- Compatible with robot firmware version 8.3 and newer;
+- Works with Python versions 3.8 through 3.13+.
+
+## Installation
+
+### Prerequisites
+
+Please read the [programming manual](https://www.mecademic.com/res/doc/programming-manual) to understand
+concepts necessary for proper usage of the API.
+
+To use the `mecademicpy` library, you must have Python installed on your machine.
+Python version 3.8 or newer is required.
+We recommend using Python 3.13, as this is the version on which the module is actively tested.
+
+[Python](https://www.python.org/) can be downloaded from the official website.
+
+You can validate your Python installation by running the following command in a terminal:
+
+```bash
+python --version
+```
+
+Note that on some platforms (Linux, macOS), you may need to use `python3` instead of `python`:
+
+```bash
+python3 --version
+```
+
+The `mecademicpy` library is compatible with Windows, Linux, and macOS.
+
+### Installing the mecademicpy package
+
+You can easily install the package using pip.
+Pip will download and install the package, along with its required dependencies, on your local machine.
+To install, run the following command:
 
 ```
 pip install mecademicpy
 ```
 
-## Quick Start
+### Optional dependencies
 
-**Ensure the robot is properly connected to the computer, powered on, and in a nominal state.**
+By default, this package installs with only the **minimal dependencies** required to control a Mecademic robot.
 
-In a python shell or script, import the library. Then initialize an instance of the `Robot` class. Finally, use the `Connect` function by passing the IP Address of the robot as an argument to establish a connection:
+Additional features require extra dependencies. These can be installed using pip with extras:
+
+- `pip install mecademicpy[update_robot]`
+  → Enables `robot.UpdateRobot` for updating the robot firmware.
+
+- `pip install mecademicpy[trajectory_logger]`
+  → Enables `robot.StartLogging` to capture trajectory (real-time) data.
+
+- `pip install mecademicpy[full]`
+  → Installs **all** optional dependencies to unlock all advanced features of `mecademicpy`.
+
+See setup.py for full details on what each extra includes.
+
+## Quick start
+
+### Ensure the robot is powered and functional
+
+Connect and power the robot, as explained in the robot's
+[user manual](https://www.mecademic.com/res/doc/programming-manual).
+
+If you can access the robot using its built-in web interface (MecaPortal), the `mecademicpy` library should
+also be able to connect.
+
+**Note:** Only one controlling user can be connected to the robot at a time, so your Python program cannot
+connect in control mode if MecaPortal is already controlling the robot.
+
+### Connecting to the robot using mecademicpy's robot class
+
+In a Python shell or script, import the library, create a `Robot` instance, and call `Connect` with
+the robot's IP address:
 
 ```python
 import mecademicpy.robot as mdr
@@ -52,30 +161,35 @@ robot = mdr.Robot()
 robot.Connect(address='192.168.0.100')
 ```
 
-The `Connect` function will raise if connection with robot fails.
-This function is synchronous (awaits for success or timeout) even when using the `Robot` class in [asynchronous mode](#synchronous-vs.-asynchronous-mode).
+`Connect` raises an exception if the connection fails.
+This function is synchronous (waits for success or timeout) even when the Robot class is used in asynchronous mode.
 
-Before using the robot, it must be activated and homed. To do so, run the following functions:
+### Activating the robot
+
+Before the robot can move, it must be activated and homed. To do so, run the following functions:
 
 ```python
 robot.ActivateRobot()
 robot.Home()
 ```
 
-The robot should move slightly to perform its homing routine. We can also use `robot.WaitHomed()` or [synchronous mode](#synchronous-vs.-asynchronous-mode) to block execution until homing is done.
+Some models may move slightly during homing.
+You can use `robot.WaitHomed()` to block execution until homing is done.
 
-Once homing is complete, the robot is now ready to perform operations. [The user programming manual](https://www.mecademic.com/res/doc/programming-manual) or the documentation in the module is sufficient to be able to make the Robot perform actions and control the robot.
+### Moving the robot
 
-Here is an example of a simple motion to perform:
+After homing, the robot is ready to operate. For example:
 
 ```python
 robot.MoveJoints(0, 0, 0, 0, 0, 0)
 robot.MoveJoints(0, -60, 60, 0, 0, 0)
 ```
 
-When done with the robot, the user should always deactivate and disconnect. Note that deactivating before the motion is complete will cause the motion to immediately stop. The user can wait for motions to complete using `WaitIdle()`.
+### Deactivating and disconnecting from the robot
 
 Deactivating and disconnecting can be done with the following commands:
+Deactivating before motion completes will stop the robot immediately.
+Use `robot.WaitIdle()` to wait for motion completion.
 
 ```python
 robot.WaitIdle()
@@ -83,109 +197,396 @@ robot.DeactivateRobot()
 robot.Disconnect()
 ```
 
-It is recommended to use `GetStatusRobot()` to learn about the current robot status before resuming operation.
+### Waiting for robot execution
 
-For complete and working examples, please refer to the `examples` folder.
+In asynchronous mode, the `mecademicpy` API provides several functions to wait for different robot events,
+like [checkpoints](#checkpoints) or [robot wait utilities](#robot-wait-utilities).
 
-## Features and Additional Information
+You can also use `WaitIdle()` which automatically posts a checkpoint and wait:
 
-### Synchronous vs. Asynchronous Mode
+### More example programs
 
-By default the API operates in 'asynchronous mode', which means sending a command to the robot does not block program execution. To illustrate, the following code will be able to successfully print out the changing joint values resulting from the `MoveJoints` command:
+For complete examples, see the examples folder in the `mecademicpy` package.
+
+## API commands
+
+The `mecademicpy` library provides most of the TCP/IP API functions, additional Python-specific functions,
+and several utility functions.
+Please refer to the [programming manual](https://www.mecademic.com/res/doc/programming-manual) for detailed
+information about functions that also exist in the TCP/IP API.
+Documentation for Python-specific functions can be found in the `Robot` class alongside their definitions.
+
+Below is a summary of the available functions, grouped by category.
+
+### Commands specific to the mecademicpy library
+
+Example of functions that exist only in the `mecademicpy` Python API (and not in the TCP/IP text API):
+
+- `Connect` / `Disconnect`
+- `IsConnected` / `IsControlling` / `IsSynchronousMode`
+- `ConnectionWatchdog` / `AutoConnectionWatchdog`
+- `RegisterCallback` / `UnregisterCallback`
+- `SyncCmdQueue`
+- Utility functions:
+  - `reset_motion_queue`
+  - `reset_robot_configuration`
+  - `reset_vacuum_module`
+
+### Robot wait utilities
+
+- `WaitActivated` / `WaitHomed` / `WaitDeactivated`
+- `WaitEndOfCycle`
+- `WaitForError` / `WaitErrorReset`
+- `WaitGripperMoveCompletion`
+- `WaitHoldingPart` / `WaitReleasedPart` / `WaitPurgeDone`
+- `WaitIdle`
+- `WaitInputState` / `WaitOutputState`
+- `WaitMotionCleared`
+- `WaitMotionPaused`
+- `WaitMotionResumed`
+
+### Utility functions
+
+Example of utility functions that exist only in the `mecademicpy` Python API (and not in the TCP/IP text API):
+
+- `IsAllowedToMove`
+- `GetInterruptableEvent`
+- `UpdateRobot`
+
+### Robot operation state controlling functions
+
+Example of functions for controlling the robot's operational state (also available in the TCP/IP text API):
+
+- `ActivateRobot` / `Home` / `DeactivateRobot`
+- `RebootRobot`
+- `ActivateSim` / `DeactivateSim`
+- `SetMonitoringInterval` / `SetRealTimeMonitoring`
+- `SetRecoveryMode`
+
+### Motion commands
+
+Example of motion commands that cause the robot to move:
+
+- `MoveJoints` / `MoveJointsRel`
+- `MoveJump` (Scara robots only)
+- `MoveLin` / `MoveLinRelWrf` / `MoveLinRelTrf`
+- `MovePose`
+
+### Motion-related commands
+
+Example of motion-related commands for controlling the motion queue status (also available in the TCP/IP text API):
+
+- `PauseMotion` / `ResumeMotion` / `ClearMotion`
+- `ResetError`
+- `SetTimeScaling`
+
+### Velocity mode commands
+
+Example of commands that control the robot velocity in real-time (generally used for jogging the robot):
+
+- `MoveJointsVel`
+- `MoveLinVelWrf` / `MoveLinVelTrf`
+
+### Motion queue parameter commands
+
+Example of commands that control the robot's motion queue parameters:
+
+- `SetVelTimeout`
+- `SetConf` / `SetAutoConf` / `SetConfTurn` / `SetAutoConfTurn`
+- `SetCheckpoint` / `GetCheckpoint`
+- `SetBlending`
+- `SetCartAcc` / `SetCartAngVel` / `SetCartLinVel`
+- `SetJointAcc` / `SetJointVel` / `SetJointVelLimit`
+- `SetMoveJumpApproachVel` / `SetMoveJumpHeight`
+- `SetMoveMode` / `SetMoveDuration` / `SetMoveDurationCfg`
+- `SetPayload`
+- `SetTorqueLimits` / `SetTorqueLimitsCfg`
+- `SetTrf` / `SetWrf`
+
+### External tool motion queue commands
+
+Example of commands that control the robot's external tools (gripper, valve box, IO module, ...):
+
+- `GripperClose` / `GripperOpen` / `MoveGripper`
+- `SetGripperForce` / `SetGripperRange` / `SetGripperVel`
+- `SetOutputState`
+- `SetValveState`
+- `VacuumGrip` / `VacuumPurge` / `VacuumRelease` / `SetVacuumPurgeDuration`
+
+### Variable management functions
+
+Example of variable management functions:
+
+- `CreateVariable`
+- `DeleteVariable`
+- `GetVariable`
+- `SetVariable`
+
+**Note:** In Python code, once created, variables are registered as robot class attributes and can be directly accessed
+instead of using robot.GetVariable or robot.SetVariable(). For example
 
 ```python
-import mecademicpy.robot as mdr
-import time
-
-robot = mdr.Robot()
-robot.Connect(address='192.168.0.100', enable_synchronous_mode=False)
-robot.ActivateAndHome()
-robot.WaitHomed()
-
-robot.MoveJoints(0, 0, 0, 0, 0, 0)
-robot.MoveJoints(0, -60, 60, 0, 0, 0)
-
-# Print robot position while it's moving
-for _ in range(100):
-    print(robot.GetJoints())
-    time.sleep(0.05)
-
-robot.WaitIdle()
-robot.DeactivateRobot()
-robot.WaitDeactivated()
-robot.Disconnect()
+robot.variables.my_pos = [10,0,10,0,0,45]
+robot.MoveJoints(*robot.variables.my_pos)
 ```
 
-However, sometimes it is desired for programs to wait until the previous command is completed before sending the next command. It is generally encouraged to use the [checkpoints](#checkpoints) system or the various `Wait()` functions, but for smaller or simpler programs, the user can set `enable_synchronous_mode=True` to have each command block until the robot has completed the command.
+### File (user program) management functions
 
-The code block below will only print out the final joint position, since `robot.GetJoints()` doesn't execute until the motion is complete.
+Example of file management functions:
 
-```python
-import mecademicpy.robot as mdr
-robot = mdr.Robot()
-robot.Connect(address='192.168.0.100', enable_synchronous_mode=True)
-robot.ActivateAndHome()
+- `DeleteFile`
+- `ListFiles`
+- `LoadFile`
+- `SaveFile`
+- `StartProgram`
+- `StopProgram`
 
-robot.MoveJoints(0, 0, 0, 0, 0, 0)
-robot.MoveJoints(0, -60, 60, 0, 0, 0)
+### MecaScript Python engine management functions
 
-# The returned robot position will be (0, -60, 60, 0, 0, 0), because this line will only be executed once MoveJoints(0, -60, 60, 0, 0, 0) has completed.
-print(robot.GetJoints())
+- `GetMecaScriptEngineStatus`
+- `GetMecaScriptCfg`
+- `SetMecaScriptCfg`
+- `WaitMecaScriptEngineReady`
 
-robot.DeactivateRobot()
-robot.Disconnect()
-```
+### Robot configuration management
 
-One disadvantage of using synchronous mode is that blending between motions is not possible, since the next motion is not sent to the robot until the previous motion is complete.
+Example of commands to manage robot's persistent configuration:
 
-### Disconnect on Exception
+- `EnableEtherNetIp` / `EnableProfinet` / `SwitchToEtherCAT`
+- `SetCalibrationCfg`
+- `SetCollisionCfg`
+- `SetJointLimits` / `SetJointLimitsCfg`
+- `SetPStop2Cfg`
+- `SetRobotName`
+- `SetRtc`
+- `SetSimModeCfg`
+- `SetToolSphere`
+- `SetWorkZoneCfg` / `SetWorkZoneLimits`
 
-By default, if any unrecoverable error occurs during usage of the Robot class, the class will automatically disconnect from the robot to avoid possible issues. Disconnection also causes the robot to pause its motion.
+### Data logging functions
 
-However, disconnecting on exceptions may be undesired when using an interactive terminal or Jupyter notebook, as an accidental mal-formed function call may cause disconnection. As such, this feature can be disabled by setting `disconnect_on_exception=False` when attempting the connection:
+Example of data logging functions that capture robot real-time data in csv files:
 
-```python
-robot.Connect(address='192.168.0.100', disconnect_on_exception=False)
-```
+- `StartLogging`
+- `EndLogging`
+- `GetCapturedTrajectory` (generally used as `robot.GetCapturedTrajectory().get_captured_data()`)
+
+### Querying robot state, position, configuration, etc
+
+Example of functions to query robot information:
+
+- `GetRobotInfo`
+- `GetRobotCalibrated`
+- `GetRobotName`
+- `GetRobotSerial`
+
+Example of functions to query the robot's status:
+
+- `GetCollisionStatus` / `GetWorkZoneStatus`
+- `GetMonitoringInterval`
+- `GetOperationMode`
+- `GetRecoveryMode`
+- `GetSafetyStatus`
+- `GetStatusRobot`
+
+Example of functions to query the robot's real-time position and data:
+
+- `GetRobotRtData`
+- `GetRtCartPos` / `GetRtJointPos` / `GetRtJointTorq` / ...
+- `GetRtTargetCartPos` / `GetRtTargetJointPos` / ...
+
+Example of functions to query robot's motion queue state:
+
+- `GetAutoConf` / `GetAutoConfTurn` / `GetConf` / `GetConfTurn`
+- `GetBlending`
+- `GetCartAcc` / `GetCartAngVel` / `GetCartLinVel`
+- `GetJointAcc` / `GetJointVel` / `GetJointVelLimit`
+- `GetMoveJumpApproachVel` / `GetMoveJumpHeight`
+- `GetMoveMode` / `GetMoveDuration` / `GetMoveDurationCfg`
+- `GetTimeScaling`
+- `GetTorqueLimits` / `GetTorqueLimitsCfg` / `GetTorqueLimitsStatus`
+- `GetTrf` / `GetWrf`
+- `GetVacuumPurgeDuration` / `GetVacuumThreshold`
+- `GetVelTimeout`
+
+Example of functions to manage the external tool or IO module:
+
+- `GetGripperForce` / `GetGripperRange` / `GetGripperVel`
+- `GetRtExtToolStatus`
+- `GetRtGripperForce` / `GetRtGripperPos` / `GetRtGripperState`
+- `GetRtIoStatus` / `GetRtInputState` / `GetRtOutputState`
+- `GetRtVacuumPressure` / `GetRtVacuumState` / `GetRtValveState`
+
+Example of functions to query robot's persistent configuration:
+
+- `GetCalibrationCfg`
+- `GetCollisionCfg` / `GetWorkZoneCfg` / `GetWorkZoneLimits` / `GetToolSphere`
+- `GetEtherNetIpEnabled` / `GetProfinetEnabled`
+- `GetJointLimits` / `GetJointLimitsCfg` / `GetModelJointLimits`
+- `GetNetworkCfg`
+- `GetPStop2Cfg`
+- `GetSimModeCfg`
+- `GetToolSphere`
+
+## Library structure and main modules
+
+The `mecademicpy` library is made up of several Python files. As a user of this library,
+you will mostly refer to the following:
+
+- robot.py: Defines the `Robot` class, the main class of the `mecademicpy` library. This class provides functions
+  to connect to a Mecademic robot and control it using the [API commands](#api-commands).
+
+- robot_classes.py: Defines [data classes](#data-classes) used throughout the `Robot` APIs to report robot state,
+  configuration, and data. It also defines exception classes that may be raised by the `Robot` class functions.
+
+- robot_initializer.py: Contains utility functions to [restore a well-known robot configuration](#restore-a-well-known-robot-configuration).
+
+- mx_robot_def.py: Defines most of the [Enum classes](#enum-classes) used as arguments in various API calls.
+
+Other files in the library are used for internal implementation.
+You typically don’t need to refer to them to understand or use the `mecademicpy` library and the `Robot` class.
+
+### Enum classes
+
+The `mecademicpy` library defines multiple enum classes representing valid values for various API calls.
+These enums are generated from the robot’s internal codebase, ensuring that the Python values match those
+expected by the robot firmware.
+
+Some examples include:
+
+- `MxRobotModel`: Lists the supported robot models.
+- `MxEventSeverity`: Used to define the severity of certain robot conditions, such as torque limits exceeded or motion
+  outside the allowed workspace.
+- `MxSafeStopCategory`: Lists the possible safety stop conditions that the robot may report.
+- `MxRobotStatusCode`: Lists all status codes the robot can send to the application.
+  Most of these codes are handled internally by the `mecademicpy` library and decoded into corresponding
+  [data classes](#data-classes), but some API calls may require explicit use of them.
+- etc. Please refer to `mx_robot_def` for a full list of enum classes and their documentation.
+
+### Data classes
+
+The `mecademicpy` library organizes robot status, configuration, and real-time data into data classes.
+These are returned by various `Robot` class functions, or used as input parameters in some cases.
+
+Some examples include:
+
+- `InterruptableEvent`: A waitable object returned by some `Robot` functions like `SetCheckpoint()`.
+- `RobotInfo`: Contains robot model, firmware version, serial number, etc. (returned by `GetRobotInfo()`).
+- `TimestampedData`: Contains real-time robot data (e.g., joint positions) along with a timestamp.
+- `RobotRtData`: Aggregates all available real-time data reported by the robot during execution.
+- `RobotStatus`: Indicates the robot’s operational state (e.g., activation, motion pause, error).
+- `RobotSafetyStatus`: Reports the state of safety signals such as EStop, PStop, and enabling device.
+- etc. Please refer to `robot_classes` for a full list of classes and their documentation.
+
+## Features and additional information
+
+### Asynchronous mode considerations
+
+By default, the API operates in _asynchronous mode_, which is the most flexible and powerful way to write
+a Python program that controls the robot.
+
+In _asynchronous mode_, `mecademicpy` API calls (like `MoveJoints`) send the command to the robot and return
+immediately, allowing the Python code to continue executing while the robot moves, and enabling you to
+post more commands or perform other tasks.
+
+On the other hand, in _synchronous mode_, each `mecademicpy` function call blocks until the robot has finished
+executing the command. This mode may be easier to use when writing simple applications, but it is much less flexible
+and less efficient in terms of trajectory optimization and cycle time.
+
+Things to keep in mind when using _asynchronous mode_:
+
+- You can benefit from motion command blending on the robot;
+- You can use [checkpoints](#checkpoints) to follow (or wait for) robot execution through the motion queue;
+- You can use one of the `mecademicpy` API [robot wait utilities](#robot-wait-utilities);
+- You can use [callbacks](#callbacks) to get informed of various robot events;
+- You can [wait for specific robot message](#wait-for-specific-robot-message).
+
+**Pitfalls**
+
+- The robot may enter an error state while your application is busy doing something else, making it harder to identify
+  which command caused the error. You may need to inspect the error message (`robot.GetStatusRobot().error_msg`)
+  or check the robot logs.
+- Some query functions return the current state of the motion queue (not the most recently posted command).
+  For example, calling `SetJointVel()` followed immediately by `GetJointVel()` may not return the set value,
+  as the command may still be queued.
+- Real-time data query functions (such as `GetRobotRtData()`) return slightly outdated data, reflecting the
+  most recent monitoring interval.
+  You can force a synchronous update (e.g., `GetRobotRtData(synchronous_update=True)`) to request up-to-date
+  data from the robot.
 
 ### Checkpoints
 
-The checkpoint system allows for creating event objects which will be triggered once the robot reaches a specified point in its execution. The `SetCheckpoint(n)` call registers a checkpoint with the robot (with `n` as the ID), and returns an event-type object that can be used to wait for the checkpoint. This is true for both robot connection type (asynchronous and synchronous mode). For example, the following code will wait until both `MoveJoints()` motions have completed, and then print "`The MoveJoints() motions are complete.`":
+The checkpoint system allows you to create event objects that are triggered when the robot reaches a
+specific point in its execution. Calling `SetCheckpoint(n)` registers a checkpoint with the robot
+(using integer 'n' as the ID) and returns an event-like object that can be used to wait for the checkpoint.
+You can also use `GetCheckpoint()` to check the most recently reached checkpoint id.
+
+Example:
 
 ```python
-robot.MoveJoints(0, -60, 60, 0, 0, 0)
-robot.MoveJoints(0, 0, 0, 0, 0, 0)
-checkpoint_1 = robot.SetCheckpoint(1)
+# In async mode, the following commands are queued immediately without waiting for the robot to move
 
-checkpoint_1.wait(timeout=10) # A timeout of 10s is set to avoid infinite wait in case of error.
-print('The MoveJoints() motions are complete.')
+# Queue a move to the first position
+robot.MoveJoints(0, 0, 0, 0, 0, 0)
+first_checkpoint = robot.SetCheckpoint(1)
+
+# Queue a move to a second position
+robot.MoveJoints(20, 20, 0, 0, 35, 0)
+second_checkpoint = robot.SetCheckpoint(2)
+
+# Wait until the robot reaches the first position
+first_checkpoint.wait()
+logging.info('First position reached')
+
+# Wait until the robot reaches the second position
+second_checkpoint.wait()
+logging.info('Second position reached')
 ```
 
-Note that creating multiple checkpoints with the same ID is possible but not recommended. The checkpoints will be triggered in the order they are set.
+If the robot’s motion command queue is cleared (using `ClearMotion()` or due to a robot error or deactivation),
+all pending checkpoints are aborted, and calling `wait()` on checkpoint objects raise an `InterruptException`.
 
-Checkpoints may also be set in an offline program, saved to robot memory. Use `ExpectExternalCheckpoint(n)` to receive these checkpoints while the robot is running the offline program. The call to `ExpectExternalCheckpoint(n)` should be made before the offline program is started, or otherwise must be guaranteed to occur before the robot can possibly send the checkpoint. For example, the following code will start an offline program and expect to receive a checkpoint from the program, and then print "`Received expected external checkpoint`":
+### External checkpoints
+
+Checkpoints can also be set outside the Python application, such as in a program started using `StartProgram`.
+To wait for such a checkpoint, the Python application must call `ExpectExternalCheckpoint(n)`
+before starting the program. This returns a checkpoint event object that will remain blocked until the robot
+reports reaching the corresponding checkpoint.
+
+Example:
 
 ```python
 checkpoint_event = robot.ExpectExternalCheckpoint(5)
-robot.StartOfflineProgram(1)
+robot.StartProgram("my_program")
 checkpoint_event.wait(timeout=30)
 print("Received expected checkpoint from running program")
 ```
-where offline program 1 is
+
+where "my_program" is, for example
+
 ```
 MoveJoints(100,0,0,0,0,0)
-MoveJoints(-100,0,0,0,0,0)
 SetCheckpoint(5)
-MoveJoints(0,-60,60,0,0,0)
 MoveJoints(0,0,0,0,0,0)
-SetOfflineProgramLoop(1)
 ```
-
-If the robot motion command queue is cleared (using `ClearMotion()` for example), or the robot is disconnected, all pending checkpoints will be aborted, and all active `wait()` calls will raise an `InterruptException`.
 
 ### Callbacks
 
-The `Robot` class supports user-provided callback functions on a variety of events. These callbacks are entirely optional and are not required, but useful to implement asynchronous applications. The available events are listed in the `RobotCallbacks` class. Here are some of these callbacks:
+The `Robot` class supports user-provided callback functions for various robot events.
+These callbacks are entirely optional but can be useful for building asynchronous applications.
+
+Callbacks are registered using the `RegisterCallback` or `RegisterCallbacks` methods.
+
+There are two ways to handle callback execution:
+
+- **Manually triggered:** Callbacks are executed only when the application explicitly calls `RunCallbacks()`.
+- **Automatically triggered:** Callbacks are executed in a dedicated thread. This mode is enabled by passing
+  `run_callbacks_in_separate_thread=True` when calling `RegisterCallbacks`.
+
+**Warning:** If you use the threaded mode, make sure your callback functions are thread-safe. You may
+use Python's `threading.Lock()` to protect shared resources if needed.
+
+Some available callbacks include:
 
 - `on_connected`
 - `on_disconnected`
@@ -194,98 +595,140 @@ The `Robot` class supports user-provided callback functions on a variety of even
 - `on_homed`
 - `on_error`
 - `on_checkpoint_reached`
-- etc... (refer to class `RobotCallbacks` for exhaustive list of callbacks)
+- etc. (Refer to the `RobotCallbacks` class for a complete list.)
 
-Note that some callbacks pass arguments. For example `on_checkpoint_reached` passes the ID of the checkpoint, `on_command_message` and `on_monitor_message` passes a `mecademicpy.robot.Message` object. Refer to class documentation for details.
+**Note:** Some callbacks receive arguments. For example:
 
-A simple usage example:
+- `on_checkpoint_reached` receives the checkpoint ID.
+- `on_command_message` and `on_monitor_message` receive a `robot.Message` object.
+  Refer to the `RobotCallbacks` class documentation for details.
+
+Here is an example usage of callbacks:
 
 ```python
-import mecademicpy.robot as mdr
-robot = mdr.Robot()
+# Prepare a list to accumulate reached checkpoints
+reached_checkpoints_list:list[int] = []
 
-def print_connected():
-    print('Connected!')
+# Define and register a callback that adds the reached checkpoint to the list
+def on_checkpoint_reached(checkpoint_id):
+    reached_checkpoints_list.append(checkpoint_id)
 
-callbacks = mdr.RobotCallbacks()
-callbacks.on_connected = print_connected
+robot.RegisterCallback('on_checkpoint_reached', on_checkpoint_reached)
 
-robot.RegisterCallbacks(callbacks=callbacks, run_callbacks_in_separate_thread=True)
-robot.Connect(address='192.168.0.100') # Will print 'Connected!' if successful.
+# Run a program and wait for completion
+robot.StartProgram("my_program")
+robot.WaitIdle()
+
+# Check result
+print(f'Checkpoints reached during program: {reached_checkpoints_list}')
 ```
 
-If the user does not want to automatically run callbacks in a separate thread, set `run_callbacks_in_separate_thread=False` and call `RunCallbacks()` when ready to run all triggered callbacks.
+### Handling robot errors
 
-Running any callback in a separate thread (either through the `Robot` class or otherwise) requires that the callback function is thread-safe and uses the proper locks when accessing shared state. Calling any public method of the `Robot` class is thread-safe.
+If the robot encounters an error during use, it enters an error state.
+In this mode, the robot will reject all commands until the error is reset.
 
-Note that, due to a Python limitation, all Python threads share the same CPU core and will not take advantage of parallelism and multiple CPU cores of a PC. Unfortunately, this means that an application performing heavy computations (in callback thread or in any other thread) may impact the performance of the `Robot` class (especially when processing many monitoring messages at high frequency).
+When the robot is in an error state:
 
-If non-trivial computation and high-frequency monitoring are both necessary, the user may offload computation into a separate python process using the built-in [multiprocessing](https://docs.python.org/3/library/multiprocessing.html) library.
+- Waitable events ([checkpoints](#checkpoints) and some [Robot wait utilities](#robot-wait-utilities)) will raise
+  an `InterruptException`;
+- `GetStatusRobot().error_status` will be True;
+- `GetStatusRobot().error_code` will show the robot error code
+  (see the [programming manual](https://www.mecademic.com/res/doc/programming-manual));
+- `GetStatusRobot().error_msg` will contain a human-readable message explaining the error.
 
-### Handling Robot Errors
-
-If the robot encounters an error during use, the robot will go into error mode. In this mode, the module will refuse any command to the robot unless the error is reset. If the robot is in an error state, `GetStatusRobot().error_status` will return `True`. To properly reset errors on the robot, the following function must be run:
+To properly reset the robot error state, call:
 
 ```python
 robot.ResetError()
+robot.ResumeMotion()
 ```
 
-It is recommended to use `GetStatusRobot()` to learn about the current robot status and reset the relevant flags to an appropriate state before resuming operation. For example, an error may require to call `ResumeMotion()`. In this case, verify that `GetStatusRobot().pause_motion_status` is set to `True` before calling `ResumeMotion()`.
+You can also use the `on_error` callback to handle robot errors asynchronously (see [callbacks](#callbacks))
 
-The `on_error` callback can also be used to manage robot errors.
+### Handling Python errors
 
-Improper use of the class can also cause exceptions to be raised. For example, calling `MoveJoints()` without any arguments will raise an exception.
+Incorrect usage of the Python API may raise exceptions.
+For example, calling MoveJoints() without arguments will raise an error.
 
-If the user is waiting on an event or checkpoint that the `Robot` class later determines will never occur, the event will unblock and raise an exception. For example, if the user is waiting on a checkpoint (`WaitCheckpoint`), but calls `Disconnect()` or `ClearMotion()` before the checkpoint is received, the checkpoint will unblock and raise an exception. Events and checkpoints will also unblock with exception on robot error state.
+Use Python’s built-in "try...except" blocks to catch and handle such exceptions appropriately.
 
-The user should use python's built-in `try...except` blocks to handle appropriate exceptions.
+### Handling robot safety stop conditions
 
-### Handling Robot safety stop conditions
-(Note: This section applies to robots running firmware 10.1 and above)
+The robot may enter safety stop conditions due to external safety signals
+(EStop, PStop1, PStop2, operation mode change, enabling device released) or other conditions
+(such as connection timeout).
 
-The robot may encounter safety stop conditions based on external safety signals (EStop, PStop1, PStop2, operation mode changed, enabling device released) or other conditions (connection timeout).
-It is recommended to use `GetSafetyStatus` to learn about the current safety stop signals status.
-The `on_safety_stop`, `on_safety_stop_reset`, `on_safety_stop_resettable` and `on_safety_stop_state_change` callbacks can also be used to manage the safety stop signals status.
+The robot safety status can be obtained using `GetSafetyStatus`.
+The `on_safety_stop`, `on_safety_stop_reset`, `on_safety_stop_resettable` and `on_safety_stop_state_change`
+[callbacks](#callbacks) can be used to monitor and manage safety stop signals.
 
-Some safety stop signals cause motor voltage to be removed (EStop, PStop1, operation mode change, etc.).
-When these safety signals are present, the robot cannot be activated until the safety signals are reset.
-For safety reasons, resetting these signals cannot be done programmatically from the Mecademicpy API. They require to press the Reset button on the power supply (or trigger the reset function from dedicated power supply input pins).
+Some safety stop signals remove motor voltage (EStop, PStop1, operation mode change, etc.).
+While these signals are active, the robot cannot be activated.
+For safety reasons, these signals cannot be reset programmatically via the `mecademicpy` API; they require
+pressing the Reset button on the power supply or triggering the reset via dedicated power supply input pins.
 
-Other safety stop signals will cause the robot to pause motion (PStop2, enabling device released, connection dropped).
-Once these safety conditions are resolved, the robot may be activated or, if already activated, motion can be resumed using `ResumeMotion()`.
+Other safety stop signals will only pause or clear robot motion (PStop2, enabling device released, connection dropped).
+Once these conditions are resolved, the robot can be activated, or if already activated,
+motion can be resumed using `ResumeMotion()`.
 
-For more information about safety signals, refer to the robot's programming manual.
+For more information about safety signals, see the robot's [programming manual](https://www.mecademic.com/res/doc/programming-manual).
 
-### Preserved State on Disconnection
+### Disconnect on exception
 
-Once the robot is disconnected, not all states are immediately cleared. Therefore, it is possible to still get the last-known state of the robot.
+By default, if any unrecoverable error occurs while using the `Robot` class, the class will automatically
+disconnect from the robot to avoid potential issues. This disconnection causes the robot to pause motion.
+
+However, disconnecting on exceptions may be undesirable when using an interactive terminal or Jupyter notebook,
+as an accidental or malformed function call could trigger a disconnection.
+In these cases, this feature can be disabled by setting `disconnect_on_exception=False` when calling `Connect()`:
+
+```python
+robot.Connect(address='192.168.0.100', disconnect_on_exception=False)
+```
 
 ### Restore a well-known robot configuration
-File robot_initializer.py contains utilities that can be used to configure the robot to a well-known state.
-It contains useful methods that can be called when reconnecting to a robot (which state is unknown) or activating a robot in order to restore a well-known state.
-See documentation in file robot_initializer.py for more information.
 
-`RobotWithTools`: This is a specialization of the `Robot` class that adds utilities required for using methods in robot_initializer.py.
-An application that wants to use the methods from robot_initializer.py shall instantiate `RobotWithTools` instead of `Robot`.
+When connecting to the robot from a Python application, the robot can be in any state:
 
-`reset_robot_configuration`: This method restores default robot's static (permanent) configuration parameters, including joint limits, work zone limits, PStop2 configuration etc.
+- activated or deactivated
+- in error or not
+- in a safety stop or not
+- motion paused or resumed
+- the motion queue may contain commands or be empty
+- the motion queue parameters may not match expected values (joint velocity, acceleration, blending, etc.)
+- the external tool state may vary (gripper open/closed, valve states, digital outputs values, vacuum, etc.)
+- in simulation mode or not
+- in recovery mode or not
+- the monitoring interval and optional enabled monitoring events may have been changed
+- etc.
 
-`reset_motion_queue`: This method configures the robot's motion queue with default values (or user-defined values).
-It receives, as argument, an instance of class `MotionQueueParams` which lists all available motion queue parameters with their default values.
-This method is is useful every time the robot is reactivated (remember that the robot resets its motion queue to default parameters every time it's activated).
+The `mecademicpy` library provides utility functions (in `robot_initializer`) to restore the robot
+to a well-known state before your application starts using it.
 
-`reset_vacuum_module`: This method is used to reset the vacuum module states (digital output states, vacuum parameters and states) to default values.
-It can be used at any time since the vacuum module is functional even when the robot is not activated. Vacuum parameters are thus managed separately from other motion queue parameters.
+`RobotWithTools` is a specialization of the `Robot` class that adds utilities needed by
+the functions in `robot_initializer`. Applications that want to use these functions should
+instantiate `RobotWithTools` instead of `Robot`.
+
+- `reset_motion_queue()`:
+  Configures the robot's motion queue with default or user-defined values.
+  Receives an instance of `MotionQueueParams` which lists all available motion queue parameters with default values.
+- `reset_robot_configuration()`
+  Restores the robot's static (permanent) configuration parameters, including joint limits,
+  work zone limits, PStop2 configuration, etc.
+- `reset_vacuum_module()`
+  Resets vacuum module states (digital outputs, vacuum parameters, and states) to default values.
 
 Example
+
 ```python
-# (use "with" block to ensure proper disconnection at end of block)
+# Use a "with" block to ensure proper disconnection at the end
 with initializer.RobotWithTools() as robot:
     robot.Connect(address='192.168.0.100')
 
-    # Reset the robot's static (permanent) configuration (joint limits, work zone, etc.)
+    # Reset the robot's persistent configuration (joint limits, work zone, etc.)
     initializer.reset_robot_configuration(robot)
-    
+
     # Reset the vacuum module states (clear digital outputs, vacuum off)
     initializer.reset_vacuum_module(robot)
 
@@ -301,118 +744,117 @@ with initializer.RobotWithTools() as robot:
 ```
 
 ### Manage robot variables
-Mecademic robots allow you to store persistent variables, which remain valid even after a reboot or power cycle.
-These variables are useful in Python programs for a variety of tasks, such as utilizing target positions or reference
+
+Mecademic robots support persistent variables that remain valid even after a reboot or power cycle.
+These variables are useful in Python programs for a variety of tasks, such as storing target positions or reference
 frames that have been pre-defined and fine-tuned on each of your robots.
 
-You can create (`CreateVariables`), delete (`DeleteVariables`), read (`robot.vars.variable_name`), 
-and modify (`robot.vars.variable_name = new_value`) these variables as needed.
+You can:
 
-For detailed information on how to use variables, refer to the `Robot` class documentation in the Mecademicpy API.
-For further details on robot variables, consult the robot's programming manual.
+- create a variable (`CreateVariable`)
+- delete a variable (`DeleteVariable`)
+- list variables (`ListVariables`)
+- read a variable (`value = robot.variables.variable_name`)
+- modify a variable (`robot.variables.variable_name = new_value`)
 
-#### Quick Example:
+For further details on robot variables, consult the robot's
+[programming manual](https://www.mecademic.com/res/doc/programming-manual).
+
+#### Quick example:
+
 ```python
-# Create a variable on the robot
+# Create a variable (stored permanently stored on the robot)
 robot.CreateVariable("my_wrf", [0,0,0,0,0,0])
-# Modify a variable on the robot
-robot.vars.my_wrf = [10,-10,0,0,0,45]
-# Use the variable value (cached in Robot class for performance)
-print(f'my_wrf={robot.vars.my_wrf}')
+# Modify the variable's value (change is permanently saved on the robot)
+robot.variables.my_wrf = [10,-10,0,0,0,45]
+# Use the variable value (cached in the Robot class for performance, so this access is non-blocking)
+print(f'my_wrf={robot.variables.my_wrf}')
+# Delete the variable from the robot
 robot.DeleteVariable("my_wrf")
 ```
 
-### Logging Data to File
+### Capturing robot real-time data
 
-It is possible to continuously log the robot state to a file using the API either using the `StartLogging` and `EndLogging` functions or using the `FileLogger` context.
+You can capture the robot's real-time data (position, state, etc.) to a `.csv` file or to a Panda DataFrame.
 
-An example usage of `StartLogging` and `EngLogging`:
+#### Starting a real-time data capture
 
-```python
-robot.WaitIdle()
-robot.StartLogging(0.001)
-try:
-    robot.MoveJoints(0, -60, 60, 0, 0, 0)
-    robot.MoveJoints(0, 0, 0, 0, 0, 0)
-    robot.WaitIdle()
-except BaseException as e:
-    print(f'Logging unsuccessful, exception encountered: {e}')
-finally:
-    robot.EndLogging()
-```
-
-Note that the user should wait for the robot to be idle (WaitIdle) before starting to log, and also wait for idle before ending the log. This is to ensure the log correctly captures the movements of interest.
-
-It should also be noted that it is mandatory to give a monitoring interval, in seconds, to `StartLogging`, to specify at which rate data should be logged. In the example above, the monitoring interval is set at 0.001 seconds, or 1 ms. It is the minimum monitoring interval that can be set using `SetMonitoringInterval`, which is the robot command used by `StartLogging` to choose the monitoring interval.
-
-The user can also use the `FileLogger` context:
+You can start a real-time data capture, either with the `StartLogging` / `EndLogging` functions
+or with the `FileLogger` context manager, which automatically ends logging after the "with" block
+completes or if an exception occurs.
 
 ```python
 robot.WaitIdle()
-with robot.FileLogger(0.001):
+with robot.FileLogger(monitoringInterval=0.001):
     robot.MoveJoints(0, -60, 60, 0, 0, 0)
     robot.MoveJoints(0, 0, 0, 0, 0, 0)
     robot.WaitIdle()
+print(f'Done capturing in file {robot.GetCapturedTrajectoryPath()}')
 ```
 
-The `FileLogger` context will automatically end logging after either completing the `with` block or encountering an exception.
+**Note:** Wait for the robot to be idle (WaitIdle) before starting and ending logging to ensure the log
+correctly captures the movements of interest.
 
-The user can select which fields to log using the `fields` parameter in `StartLogging` or `FileLogger`. By default, all available fields are logged. The available fields are currently:
+For a more complete example, see trajectory_logger_example.py in the `mecademicpy` package.
 
-- `"TargetJointPos"`
-- `"TargetCartPos"`
-- `"TargetJointVel"`
-- `"TargetCartVel"`
-- `"TargetConf"`
-- `"TargetConfTurn"`
+#### Choosing fields to capture
 
-- `"JointPos"`
-- `"CartPos"`
-- `"JointVel"`
-- `"JointTorq"`
-- `"CartVel"`
-- `"Conf"`
-- `"ConfTurn"`
-- `"Accel"`
+To reduce the amount of captured data, you can increase the monitoring interval, or specify which real-time fields
+to capture using the "fields" argument.
+This argument can be a list of robot status codes (`MxRobotStatusCode`) or `RobotRtData` attribute names.
 
-- `"Wrf"`
-- `"Trf"`
-- `"Checkpoint"`
-
-- `"ExtToolStatus"`
-- `"ValveState"`
-- `"GripperState"`
-- `"GripperForce"`
-- `"GripperPos"`
-
-- `"IoModuleStatus"`
-- `"IoModuleOutputState"`
-- `"IoModuleInputState"`
-- `"SigGenStatus"`
-- `"SigGenOutputState"`
-- `"SigGenInputState"`
-- `"VacuumState"`
-- `"VacuumPressure"`
-
-These strings should be placed into the list given to the `fields` parameter.
-
-The following example only logs the `"TargetJointPos"` and `"JointPos"`.
+For example:
 
 ```python
-robot.WaitIdle()
-with robot.FileLogger(0.001, fields=['TargetJointPos', 'JointPos']):
-    robot.MoveJoints(0, -60, 60, 0, 0, 0)
-    robot.MoveJoints(0, 0, 0, 0, 0, 0)
-    robot.WaitIdle()
+fields_to_capture = [mdr.MxRobotStatusCode.MX_ST_RT_CART_POS, mdr.MxRobotStatusCode.MX_ST_RT_CART_VEL]
+robot.StartLogging(monitoringInterval=0.001, fields=fields_to_capture)
 ```
 
-Note that the `SetRealTimeMonitoring` command is used by in `StartLogging` or `FileLogger` to enable all the real-time monitoring events which are logged.
+or
 
-### Sending Custom Commands
+```python
+robot.StartLogging(monitoringInterval=0.001, fields=['rt_cart_pos', 'rt_cart_vel'])
+```
 
-It is possible to send an arbitrary command to the robot using the `SendCustomCommand()` call. The user can optionally provide expected response codes, which will cause `SendCustomCommand()` to return an event which can be used to wait for the response.
+#### Accessing the captured data
+
+After capture, the path of the capture archive (`.zip`) is returned by `robot.GetCapturedTrajectoryPath()`.
+This archive contains a `.json` file describing the robot and executed commands, as well as a `.csv` file
+containing all the captured data at the requested monitoring interval.
+You can also specify a custom file path using the "file_name" argument in `StartLogging`.
+
+The captured data can be retrieved as a Panda DataFrame using `robot.GetCapturedTrajectory().get_captured_data()`:
+
+```python
+captured_df: pd.DataFrame = robot.GetCapturedTrajectory().get_captured_data()
+```
+
+The DataFrame will have columns for each captured real-time field. Some fields may span multiple columns
+(e.g., joint positions have one column per joint, Cartesian positions as x, y, z, etc.).
+To get the column name prefix for a specific field, use the `rt_data_field_by_status_code` map.
+
+Please refer to the official [Pandas Dataframe](https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html)
+class documentation for more information.
+
+Example: extract all columns representing Cartesian position:
+
+```python
+# Get the column names prefix for MX_ST_RT_CART_POS
+cart_pos_col_prefix = mdr.rt_data_field_by_status_code[mdr.MxRobotStatusCode.MX_ST_RT_CART_POS].col_prefix
+# Keep the names of the matching columns
+cart_pos_col_names = [col for col in captured_df.columns if col.startswith(cart_pos_col_prefix)]
+# Extract a DataFrame with only the desired columns
+cart_pos_df = captured_df[cart_pos_col_names]
+```
+
+### Sending custom commands
+
+You can send an arbitrary TCP/IP text command to the robot using the `SendCustomCommand()` method.
+Optionally, you can provide a list of expected response codes. If provided, `SendCustomCommand()` will return
+an event object that can be used to wait for the matching response.
 
 Example usage:
+
 ```python
 import mecademicpy.robot as mdr
 import mecademicpy.mx_robot_def as mdr_def
@@ -420,67 +862,125 @@ import mecademicpy.mx_robot_def as mdr_def
 
 response_codes = [mdr_def.MX_ST_ERROR_RESET, mdr_def.MX_ST_NO_ERROR_RESET]
 response = robot.SendCustomCommand('ResetError', expected_responses=response_codes, timeout=10)
+if response.id == mdr_def.MX_ST_ERROR_RESET:
+    print('The error was in error, the error is now reset')
+
 ```
 
-Although raw numerical response codes can also be used, it is recommended to use the named aliases provided in `mx_robot_def.py` for clarity.
+### Wait for specific robot message
 
-### Waiting for specific robot message
-The robot API method `GetInterruptableEvent()` creates a "waitable event". This object contains a "wait" function that will block the Python application execution until the robot sends the expected message (or until timeout).
-This event object can optionally get interrupted (throw InterruptException) in case the robot encounters an error or in case motion gets cleared.
+The `GetInterruptableEvent()` method creates a waitable event object.
+This object provides a `wait()` method that blocks the Python application until the robot sends the
+expected message (or until timeout).
+The event can optionally be configured to raise an `InterruptException` if the robot encounters an
+error or if motion is cleared.
 
-Note that the robot API also contains other "wait" methods for various common conditions, like WaitActivated, WaitMotionPaused, WaitIdle, WaitHoldingPart, etc.
-Method `GetInterruptableEvent()` is generally used for specific cases that are not covered by other "Wait" methods.
+Note that the API already provides convenient wait methods for many common conditions, such as:
+`WaitActivated`, `WaitMotionPaused`, `WaitIdle`, `WaitHoldingPart`, etc.
+`GetInterruptableEvent()` is typically used for specific cases that are not covered by those
+built-in wait methods.
 
-Example 1:
+Example 1 (note that here you could use `WaitInputState` instead):
+
 ```python
-# Create interruptable event that will wait until robot sends code MX_ST_RT_INPUT_STATE (which will happen if a digital input state changes)
+# Create an interruptable event that will wait until the robot sends MX_ST_RT_INPUT_STATE
+# which happens when a digital input state changes.
 input_state_changed_event = robot.GetInterruptableEvent([mdr.MxRobotStatusCode.MX_ST_RT_INPUT_STATE])
 
-# (there can be code here that move the robot or whatever is expected to trigger digital input change)
-# (...)
+# (code here could trigger a digital input change)
+# ...
 
-# Wait (block) until the event is received or until timeout (TimeoutException).
+# Wait (block) until the event is received or until timeout (raises TimeoutException)
 input_state_changed_event.wait(10)
 ```
 
 Example 2:
+
 ```python
-# Create interruptable event that will trigger when torque limit is exceeded, i.e. event id MX_ST_TORQUE_LIMIT_STATUS with data 1.
-# Here we want this event to be interrupted (throw InterruptException) if the robot is in error or motion cleared.
+# Create an interruptable event that will trigger when the torque limit is exceeded
+# which happens when MX_ST_TORQUE_LIMIT_STATUS with data '1' is received.
+# This event is configured to raise InterruptException if a robot error occurs or if motion is cleared.
 torque_exceeded_event = robot.GetInterruptableEvent(
     codes=[mdr.Message(mdr.MxRobotStatusCode.MX_ST_TORQUE_LIMIT_STATUS, '1')],
     abort_on_error=True,
     abort_on_clear_motion=True)
 
-# (there can be code here that move the robot or do other things, for example)
-# (...)
+# (code here could move the robot or perform other actions)
+# ...
 
-# Check if the torque limit exceeded status event was received
+# Example: Check if the torque-exceeded event was already received
 if torque_exceeded_event.is_set():
-    # Torque limit was exceeded between call to GetInterruptableEvent above and now
+    # Torque limit was exceeded between the call to GetInterruptableEvent and now
     pass
 
-# Wait (block) until the torque limit exceeded event is received or until timeout (TimeoutException)
+# Wait (block) until the event is received or until timeout (raises TimeoutException)
 torque_exceeded_event.wait(10)
 
 ```
 
-### API Reference
+### Managing network timeouts
 
-For a complete list of available methods and further documentation, use the help() function on any class in a python terminal (such as `ipython`).
+When the robot loses connection with the controlling application, it will automatically pause motion.
+However, in some network failure scenarios (e.g., connection cannot be closed explicitly), detecting a
+disconnection can take a long time.
+
+To ensure the robot stops promptly when the application cannot communicate, it is strongly recommended to use
+the connection watchdog feature of the `mecademicpy` library.
+This provides a deterministic maximum time before the robot considers the connection lost.
+
+There are two ways to use the connection watchdog:
+
+1. **Automatic watchdog**: Call `AutoConnectionWatchdog` to let `mecademicpy` automatically enable and refresh
+   the watchdog at appropriate intervals. This is the simplest option for most applications.
+2. **Manual watchdog**: Call `ConnectionWatchdog` periodically to manually refresh the connection timer.
+   This approach gives you precise control and ensures that if your application becomes blocked, deadlocked,
+   or encounters an exception, the robot will quickly detect the issue and stop moving.
+
+Using either method ensures safer operation and faster response to network (or application) issues.
+
+### Performance considerations
+
+Because Python is relatively slow in terms of execution speed, some older PCs may struggle to receive all
+data from the robot when the monitoring interval is very short (e.g., 1 ms) and all optional real-time data
+has been enabled (`SetRealTimeMonitoring(all)`).
+This issue is especially noticeable when running your application in a debugger.
+To improve performance, you can reduce the amount of data received from the robot by increasing the monitoring interval.
+
+#### Silent API mode
+
+By default, all commands sent to the robot are saved in the flight recorder log and are printed in the
+MecaPortal event log.
+The robot class provides an option to skip the flight recorder and MecaPortal event log when this behavior
+is not desirable. For example:
+
+- A Python program runs a background thread that periodically calls robot commands. This can generate continuous log
+  messages in the MecaPortal event log, creating unwanted "noise" and hiding more important robot messages.
+- A Python program sends robot commands at a very high rate. Reducing robot-side logging can save CPU resources on the
+  robot and allow a higher API command rate.
+
+The "silent API mode" can be enabled either by calling `SetSilentApiMode`, or by using a silent `with` block.
+For example:
 
 ```python
->>> import mecademicpy.robot as mdr
->>> help(mdr.Robot)
->>> help(mdr.Message)
->>> help(mdr.RobotCallbacks)
+def background_monitoring_thread():
+  with RobotSilentApiMode(robot):
+      while robot.IsConnected():
+        pos = robot.GetRtCartPos()
+        robot.SetVariable('robot_pos', pos)
+        robot.sleep(0.1)
 ```
 
-## Getting Help
+#### Verbose API mode
 
+On the contrary, if you want commands to be written to the persistent robot.log and to the persistent user.log,
+you can use `LogUserCommands(enable=True)`.
+Note that commands sent using the silent API mode (`SetSilentApiMode`) will remain silent in all cases.
 
+## Getting help
 
-To get support, you can start an issue on the Mecademic github page, issues section or send an email to support@mecademic.com.
+If you need support, please open an issue on the
+[MecademicPy GitHub page](https://github.com/Mecademic/mecademicpy/issues) or contact us by email at
+[support@mecademic.com](mailto:support@mecademic.com).
 
 ## License
 
@@ -488,5 +988,4 @@ All packages in this repository are licensed under the MIT license.
 
 ## Authors
 
-* **Mecademic** - *Continuous work*
-
+- **Mecademic** - _Continuous work_
