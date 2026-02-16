@@ -958,7 +958,7 @@ is not desirable. For example:
 - A Python program sends robot commands at a very high rate. Reducing robot-side logging can save CPU resources on the
   robot and allow a higher API command rate.
 
-The "silent API mode" can be enabled either by calling `SetSilentApiMode`, or by using a silent `with` block.
+The "silent API mode" can be enabled either by calling `SetSilentApiMode`, or by using a silent "with" block.
 For example:
 
 ```python
