@@ -2768,7 +2768,7 @@ class Robot(_Robot):
 
         Parameters
         ---------
-        timeout
+        duration
             Sleep duration, in seconds.
 
         Raises

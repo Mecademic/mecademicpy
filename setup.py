@@ -16,7 +16,7 @@ if sys.version_info < (3, 8, 0):
 update_robot_dependencies = ['requests']
 
 # These dependencies are only necessary if using trajectory logger
-trajectory_logger_dependencies = ['dataclasses_json>=0.5.4', 'pandas<2.3.0']
+trajectory_logger_dependencies = ['dataclasses_json>=0.5.4', 'pandas']
 
 all_dependencies = minimal_dependencies + update_robot_dependencies + trajectory_logger_dependencies
 
