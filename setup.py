@@ -21,7 +21,7 @@ trajectory_logger_dependencies = ['dataclasses_json>=0.5.4', 'pandas']
 all_dependencies = minimal_dependencies + update_robot_dependencies + trajectory_logger_dependencies
 
 setuptools.setup(name='mecademicpy',
-                 version='3.0.0',
+                 version='3.0.2',
                  author='Mecademic',
                  author_email='support@mecademic.com',
                  license='MIT',

@@ -12,10 +12,23 @@ Mecademic Inc.~assumes no responsibility for any errors or omissions in this doc
 
 Copyright &copy; 2026 by Mecademic Inc.
 
+## Version 3.0.2 (April 2026)
+
+### Fixes
+
+- Calls to deprecated function robot.Sync() replaced by robot.SyncCmdQueue()
+
+## Version 3.0.1 (February 2026)
+
+### Fixes
+
+- Removed version requirement for Pandas dependency
+
 ## Version 3.0.0 (January 2026)
 
 ### Features
 
+- Updates and additions to `Robot` class API to closely match the robot's TCP API
 - Support for MecaScript (Python programs running on the robot)
 
 ### Migration Guide
@@ -66,7 +79,7 @@ specific modifications and make sure to adjust your code accordingly if needed:
 
 ### Fixes
 
-- ROBOT-3186: `RobotRtData` does not populate data correctly when in Monitor mode
+- `RobotRtData` does not populate data correctly when in Monitor mode
 
 ### Improvements
 
