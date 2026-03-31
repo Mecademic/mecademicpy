@@ -1,8 +1,8 @@
 # Release Notes
 
-The information contained herein is the property of Mecademic Inc. and shall not be reproduced in whole
+The information contained in this document is the property of Mecademic Inc. and shall not be reproduced in whole
 or in part without prior written approval of Mecademic Inc.
-The information herein is subject to change without notice and should not be construed as a commitment by Mecademic Inc.
+The information is subject to change without notice and should not be construed as a commitment by Mecademic Inc.
 This manual will be periodically reviewed and revised.
 
 If you have any technical questions, please visit the support section of our web site
