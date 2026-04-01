@@ -272,7 +272,7 @@ def set_joint_limits_cfg(robot: RobotWithTools, set_enable=False):
         deactivate_robot(robot)
         # Enable/disable joint limits
         robot.SetJointLimitsCfg(set_enable)
-        robot.Sync()  # Make sure that "Set" has completed before returning
+        robot.SyncCmdQueue()  # Make sure that "Set" has completed before returning
 
 
 def get_joint_limits(robot: RobotWithTools, joint: int, use_model: bool = False) -> tuple[float]:
@@ -339,7 +339,7 @@ def _set_joint_limits(robot: RobotWithTools, joint: int, low_limit: float, high_
 
     # Set joint limits for selected joint
     robot.SetJointLimits(joint, low_limit, high_limit)
-    robot.Sync()  # Make sure that "Set" has completed before returning
+    robot.SyncCmdQueue()  # Make sure that "Set" has completed before returning
 
 
 def _enable_joint_limits_for_ext_tool(robot: RobotWithTools, move_to_safe_position=False):
@@ -464,7 +464,7 @@ def reset_work_zone_limits(robot: RobotWithTools):
     if need_to_set_cfg:
         robot.SetWorkZoneCfg(*expected_cfg)
 
-    robot.Sync()  # Make sure that "Set" has completed before returning
+    robot.SyncCmdQueue()  # Make sure that "Set" has completed before returning
 
 
 def reset_collision_cfg(robot: RobotWithTools):
@@ -503,7 +503,7 @@ def reset_collision_cfg(robot: RobotWithTools):
     if need_to_set_collision_cfg:
         robot.SetCollisionCfg(*expected_collision_cfg)
 
-    robot.Sync()  # Make sure that "Set" has completed before returning
+    robot.SyncCmdQueue()  # Make sure that "Set" has completed before returning
 
 
 def reset_pstop2_cfg(robot: RobotWithTools):
@@ -526,7 +526,7 @@ def reset_pstop2_cfg(robot: RobotWithTools):
 
     # Set default config
     robot.SetPStop2Cfg(expected_severity[0])
-    robot.Sync()  # Make sure that "Set" has completed before returning
+    robot.SyncCmdQueue()  # Make sure that "Set" has completed before returning
 
 
 def reset_sim_mode_cfg(robot: RobotWithTools):
@@ -550,7 +550,7 @@ def reset_sim_mode_cfg(robot: RobotWithTools):
 
     # Set default config
     robot.SetSimModeCfg(expected_sim_mode_cfg[0])
-    robot.Sync()  # Make sure that "Set" has completed before returning
+    robot.SyncCmdQueue()  # Make sure that "Set" has completed before returning
 
 
 def reset_vacuum_grip(robot: RobotWithTools):
