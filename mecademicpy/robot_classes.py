@@ -363,6 +363,12 @@ class RobotCallbacks:
         preferred, as it works in both monitoring and control modes.
     on_program_state
         Function called each time a program starts or fails to start.
+    on_variable_updated
+        Function called each time a variable value is updated (created, modified or deleted).
+        The variable name passed as a string argument.
+        To get the new variable value, use robot.variables.[var_name], or robot.GetVariable([var_name])
+        Note that this callback is also called after a variable is deleted, in which case
+        robot.variables.[var_name] will be None (or robot.GetVariable() will return None).
     on_end_of_cycle
         Function called each time the end of cycle is reached.
         It is triggered once all real-time data for the current monitoring interval has been received.
@@ -426,6 +432,8 @@ class RobotCallbacks:
         self.on_monitor_message: Callable[[Message], None] = None
 
         self.on_program_state: Callable[[], None] = None
+
+        self.on_variable_updated: Callable[[str], None] = None
 
         self.on_end_of_cycle: Callable[[], None] = None
 

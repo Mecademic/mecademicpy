@@ -734,6 +734,11 @@ def resume_motion(robot: RobotWithTools):
 def reset_robot_configuration(robot: RobotWithTools):
     """This function resets robot configuration to default state
     """
+    # Check robot model
+    robot_info = robot.GetRobotInfo()
+    if robot_info.robot_model == MxRobotModel.MX_ROBOT_MODEL_UNKNOWN:
+        logging.warning('Skipping robot configuration reset, since robot is an unknown model')
+        return
     reset_error(robot)
     reset_sim_mode(robot)
     reset_joint_limits(robot)

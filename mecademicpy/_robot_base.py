@@ -579,6 +579,15 @@ class _CallbackQueue():
         return self._queue.get(block=block, timeout=timeout)
 
 
+class AwaitedVariable:
+    """ This class is used to implement WaitVariableUpdated """
+
+    def __init__(self, name: str, wait_callback: Optional[Callable] = None):
+        self.name = name
+        self.event = InterruptableEvent(wait_callback=wait_callback)
+        self.nb_waiting = 1
+
+
 class _Robot:
     """Class for controlling a Mecademic robot.
 
@@ -1082,6 +1091,7 @@ class _Robot:
         self._sig_gen_status = IoStatus()
         self._robot_temperature = RobotTemperature()
         self._robot_events = _RobotEvents(wait_callback=self._handle_callbacks_while_waiting)
+        self._awaited_variables: dict[str, AwaitedVariable] = {}
         self._reset_fw_update_status()
 
         self._file_logger = None
@@ -1773,6 +1783,12 @@ class _Robot:
             self._callback_queue.put('on_disconnected')
 
             self._robot_events.abort_all(message=message)
+
+            # Abort all awaited variables
+            for awaited in self._awaited_variables.values():
+                awaited.event.notify_all()
+            self._awaited_variables.clear()
+
             if was_connected:
                 self.logger.info('Disconnected from the robot')
 
@@ -3606,6 +3622,30 @@ class _Robot:
         self._warn_if_blocking()
         self._robot_events.on_mecascript_exec_idle.wait(timeout)
 
+    def WaitVariableUpdated(self, *, name: str, timeout: Optional[float] = None):
+        """See documentation in equivalent function in robot.py"""
+        # Add this variable to the list of awaited (or increment count if someone else was already awaiting)
+        awaited: AwaitedVariable = None
+        with self._main_lock:
+            if name not in self._awaited_variables:
+                awaited = AwaitedVariable(name=name, wait_callback=self._handle_callbacks_while_waiting)
+                self._awaited_variables[name] = awaited
+            else:
+                awaited = self._awaited_variables[name]
+                awaited.nb_waiting += 1
+
+        try:
+            # Wait for the variable
+            awaited.event.wait(timeout)
+        finally:
+            # Remove from awaited
+            with self._main_lock:
+                if name in self._awaited_variables:
+                    if awaited.nb_waiting == 1:
+                        del self._awaited_variables[name]
+                    else:
+                        awaited.nb_waiting -= 1
+
     def GetPowerSupplyInputs(self, synchronous_update: bool = False, timeout: float = None) -> RobotPowerSupplyInputs:
         """See documentation in equivalent function in robot.py"""
         # Use appropriate default timeout if not specified
@@ -4222,8 +4262,9 @@ class _Robot:
                        name: str,
                        value: Any,
                        cyclic_id: Optional[int] = None,
-                       volatile: bool = False,
                        override: bool = False,
+                       volatile: bool = False,
+                       variableType: MxVariableType = MxVariableType.MX_VARIABLE_TYPE_JSON,
                        timeout: float = None) -> bool:
         """See documentation in equivalent function in robot.py"""
         if self._enable_synchronous_mode and timeout is None:
@@ -4237,6 +4278,7 @@ class _Robot:
         json_data: dict = {
             MX_JSON_KEY_VAR_NAME: name,
             MX_JSON_KEY_VAR_VAL: mecascript._unwrap_mutable(value),  #pylint: disable=protected-access
+            MX_JSON_KEY_VAR_TYPE: int(variableType),
             MX_JSON_KEY_VAR_CYCLIC_ID: cyclic_id,
             MX_JSON_KEY_VAR_VOLATILE: volatile,
             MX_JSON_KEY_VAR_OVERRIDE: override,
@@ -4258,7 +4300,7 @@ class _Robot:
         if timeout is not None:
             expected_responses = [MxRobotStatusCode.MX_ST_DELETE_VARIABLE, MxRobotStatusCode.MX_ST_DELETE_VARIABLE_ERR]
 
-        # Create the variable on the robot
+        # Delete the variable on the robot
         json_data: dict = {MX_JSON_KEY_VAR_NAME: name}
         response = self._send_json_command(command='DeleteVariable',
                                            json_data=json_data,
@@ -8086,6 +8128,7 @@ class _Robot:
         variables: dict[str, dict] = json_data.get(MX_JSON_KEY_VAR_LIST, {})
         for name, var in variables.items():
             value = var.get(MX_JSON_KEY_VAR_VAL)
+            varType = var.get(MX_JSON_KEY_VAR_TYPE, MxVariableType.MX_VARIABLE_TYPE_JSON)
             volatile = var.get(MX_JSON_KEY_VAR_VOLATILE, False)
             cyclic_id = var.get(MX_JSON_KEY_VAR_CYCLIC_ID, None)
             if name in self._registered_vars_by_name:
@@ -8100,6 +8143,7 @@ class _Robot:
                         value,
                         on_change=lambda v, _name=registered_var.name: self._set_variable(_name, v),
                     ))
+                registered_var.type = varType
 
                 # Update the volatile flag
                 registered_var.volatile = volatile
@@ -8122,9 +8166,15 @@ class _Robot:
                 # Register a new variable
                 variable = mecascript.RegisteredVariable(name=name,
                                                          default=value,
+                                                         cyclic_id=cyclic_id,
                                                          volatile=volatile,
-                                                         cyclic_id=cyclic_id)
+                                                         type=varType)
                 self._register_variable(variable)
+
+            # Notify that the variable was updated
+            self._callback_queue.put('on_variable_updated', name)
+            if name in self._awaited_variables:
+                self._awaited_variables[name].event.set()
 
     def _handle_variable_removed(self, message: Message):
         """Handle a message indicating that variables were deleted on the robot
@@ -8143,3 +8193,7 @@ class _Robot:
         variables: dict[str, dict] = json_data.get(MX_JSON_KEY_VAR_LIST, {})
         for name, _ in variables.items():
             self._unregister_variable(name)
+            # Call on_variable_updated to notify modified variable
+            self._callback_queue.put('on_variable_updated', name)
+            if name in self._awaited_variables:
+                self._awaited_variables[name].event.set()

@@ -823,6 +823,11 @@ def test_callbacks(robot: mdr.Robot):
     callbacks.on_command_message = command_message_callback
     callbacks.on_monitor_message = monitor_message_callback
 
+    def variable_updated_callback(name: str):
+        called_callbacks.append('on_variable_updated')
+
+    callbacks.on_variable_updated = variable_updated_callback
+
     # End of cycle callback is alike on_monitor_message, as it also happens on a monitoring message, but less often
     def end_of_cycle_callback():
         called_callbacks.append('on_end_of_cycle')
@@ -926,6 +931,13 @@ def test_callbacks(robot: mdr.Robot):
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_MECASCRIPT_ENGINE_STATUS, data='', json_data={"data": {}}))
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_PROGRAM_EXECUTION_STATUS, data='', json_data={"data": {}}))
+
+        robot._command_rx_queue.put(
+            mdr.Message(mx_st.MX_ST_VARIABLE_REMOVED, data='', json_data={"data": {
+                "vars": {
+                    "myVar": {}
+                }
+            }}))
 
         robot._command_rx_queue.put(mdr.Message(mx_st.MX_ST_GET_STATUS_ROBOT, '0,0,0,0,0,0,0'))
         robot.DeactivateRobot()
