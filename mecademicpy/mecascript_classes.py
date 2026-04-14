@@ -46,6 +46,7 @@ class RegisteredArg:
             Type of this argument.
         length
             Length of this array (0 if single argument, not array).
+            Unused for now.
         units
             Units of this argument (for documentation only).
         default
@@ -255,38 +256,52 @@ class RegisteredVariable(RegisteredArg):
     def __init__(
             self,
             name: str,
-            description: str = "",
-            #pylint: disable=redefined-builtin
-            type: MxArgType = MxArgType.MX_ARG_TYPE_ANY,
-            length: Optional[int] = None,
-            units: Optional[MxArgUnit] = None,
-            volatile: Optional[bool] = False,
-            cyclic_id: Optional[int] = None,
             default: Optional[Any] = None,
-            min: Optional[Any] = None,
-            max: Optional[Any] = None):
+            cyclic_id: Optional[int] = None,
+            volatile: Optional[bool] = False,
+            type: MxVariableType = MxVariableType.MX_VARIABLE_TYPE_JSON,  #pylint: disable=redefined-builtin
+    ):
         """ Constructor for this class
-            See RegisteredArg for arguments description.
+
+        Parameters
+        ----------
+        name
+            Name of this variable
+        default
+            Default value when the variable is created on the robot.
+        cyclic_id
+            Optional Id that can be used in cyclic protocols to call this
+            command. This is a value between 30000 an 39999 (or None).
+            Note that, when called from cyclic protocols, the command can normally only receive float arguments,
+            and up to 6 of them.
+        volatile
+            A volatile variable is not saved on robot's disk and is discarded when the robot reboots.
+            A non-volatile variable is saved on the robot's disk and will remain permanently available until
+            explicitly deleted using ``DeleteVariable``.
+        type
+            Type of variable, among values defined in ``MxVariableType``.
+            Default is ``MxVariableType.MX_VARIABLE_TYPE_JSON``, which can be used to represent any data type
+            supported in the JSON format (boolean, string, number, array, object, null).
+            In case a specific type is enforced, the robot will validate that the value is suitable for the
+            specified type of variable. Some conversion may occur (for example passing 1 to a boolean type will
+            be stored as True).
+            Note: In firmware v11.3 and older only ``MxVariableType.MX_VARIABLE_TYPE_JSON`` is available.
         """
-        super().__init__(name, description, type, length, units, default, min, max)
+        super().__init__(name)
         self.volatile = volatile
         self.cyclic_id = cyclic_id
         self._value = default
+        self.type: MxVariableType = type
 
     def copy(self) -> RegisteredVariable:
         """Return a fully detached snapshot of this variable."""
 
         new_var = RegisteredVariable(
             name=self.name,
-            description=self.description,
-            type=self.type,
-            length=self.length,
-            units=self.units,
-            volatile=self.volatile,
-            cyclic_id=self.cyclic_id,
             default=None,
-            min=self.min,
-            max=self.max,
+            cyclic_id=self.cyclic_id,
+            volatile=self.volatile,
+            type=self.type,
         )
 
         # Detach value completely

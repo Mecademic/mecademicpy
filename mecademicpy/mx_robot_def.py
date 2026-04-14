@@ -1904,6 +1904,52 @@ class MxRobotSimulationMode(enum.IntEnum):
 
 
 
+class MxVariableType(enum.IntEnum):
+    """
+     Defines available types for robot variables
+    """
+
+    MX_VARIABLE_TYPE_JSON = 0
+    """JSON object (including JSON basic types, arrays or map)"""
+
+    MX_VARIABLE_TYPE_BOOL = 1
+    """Boolean value"""
+
+    MX_VARIABLE_TYPE_STRING = 2
+    """String value"""
+
+    MX_VARIABLE_TYPE_INT8 = 10
+    """8 bits signed integer"""
+
+    MX_VARIABLE_TYPE_INT16 = 11
+    """16 bits signed integer"""
+
+    MX_VARIABLE_TYPE_INT32 = 12
+    """32 bits signed integer"""
+
+    MX_VARIABLE_TYPE_INT64 = 13
+    """64 bits signed integer"""
+
+    MX_VARIABLE_TYPE_UINT8 = 20
+    """8 bits unsigned integer"""
+
+    MX_VARIABLE_TYPE_UINT16 = 21
+    """16 bits unsigned integer"""
+
+    MX_VARIABLE_TYPE_UINT32 = 22
+    """32 bits unsigned integer"""
+
+    MX_VARIABLE_TYPE_UINT64 = 23
+    """64 bits unsigned integer"""
+
+    MX_VARIABLE_TYPE_FLOAT32 = 30
+    """32 bits floating point value"""
+
+    MX_VARIABLE_TYPE_FLOAT64 = 31
+    """64 bits floating point value"""
+
+
+
 class MxArgType(enum.IntEnum):
     """
      Defines available types for sidecar variables and arguments
@@ -2423,7 +2469,7 @@ MX_JSON_KEY_VAR_DESC = "description"
 """str: The variable/argument short description"""
 
 MX_JSON_KEY_VAR_TYPE = "type"
-"""int: The variable/argument type (:class:`MxArgType`)"""
+"""int: The variable/argument type (:class:`MxVariableType`)"""
 
 MX_JSON_KEY_VAR_ARR_LEN = "length"
 """int: Array length (0 if not array, -1 if variable)"""

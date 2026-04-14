@@ -12,6 +12,16 @@ Mecademic Inc.~assumes no responsibility for any errors or omissions in this doc
 
 Copyright &copy; 2026 by Mecademic Inc.
 
+## Version 3.0.3 (April 2026)
+
+### Fixes
+
+- Fixed arguments order for `CreateVariable` to match the robot TCP API
+
+### Features
+
+- New callback (`on_variable_updated`) and method (`WaitVariableUpdated`) for being notified of updated robot variables
+
 ## Version 3.0.2 (April 2026)
 
 ### Fixes
