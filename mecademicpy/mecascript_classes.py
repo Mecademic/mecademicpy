@@ -167,7 +167,7 @@ class RegisteredCommand:
             The tags are used to classify the command in MecaPortal's code editor context menus.
         cyclic_id
             Optional Id that can be used in cyclic protocols to call this
-            command. This is a value between 30000 an 39999 (or None).
+            command. This is a value between 30000 and 39999 (or None).
             Note that, when called from cyclic protocols, the command can normally only receive float arguments,
             and up to 6 of them.
         private
@@ -271,7 +271,7 @@ class RegisteredVariable(RegisteredArg):
             Default value when the variable is created on the robot.
         cyclic_id
             Optional Id that can be used in cyclic protocols to call this
-            command. This is a value between 30000 an 39999 (or None).
+            command. This is a value between 30000 and 39999 (or None).
             Note that, when called from cyclic protocols, the command can normally only receive float arguments,
             and up to 6 of them.
         volatile
