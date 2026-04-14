@@ -3241,6 +3241,52 @@ class Robot(_Robot):
 
     @mecascript_global_function_decorator
     @disconnect_on_exception_decorator
+    def WaitProgramDone(self, *, timeout: Optional[float] = None):
+        """
+        Waits until no robot MecaScript program is executing, i.e. ``GetProgramExecutionStatus`` reports no
+        running program.
+
+        This does not apply to basic (non-Python) ``.mxprog`` programs.
+
+        Parameters
+        ----------
+        timeout
+            Maximum time to wait, in seconds. If ``None``, no timeout is applied and this function
+            blocks until the program finishes or the connection is lost.
+
+        Raises
+        ------
+        TimeoutException
+            If the specified timeout is reached before the program finishes.
+        """
+        return super().WaitProgramDone(timeout=timeout)
+
+    @mecascript_global_function_decorator
+    @disconnect_on_exception_decorator
+    def WaitVariableUpdated(self, *, name: str, timeout: Optional[float] = None):
+        """
+        Waits until the variable with the specified name is updated (created, modified or deleted).
+
+        An alternative to this function is registering callback 'on_variable_update'
+        (see method ``RegisterCallbacks`` for details).
+
+        Parameters
+        ----------
+        name
+            Name of the variable to wait for.
+        timeout
+            Maximum time to wait, in seconds. If ``None``, no timeout is applied and this function
+            blocks until the variable is updated or the connection is lost.
+
+        Raises
+        ------
+        TimeoutException
+            If the specified timeout is reached before the variable is modified.
+        """
+        return super().WaitVariableUpdated(name=name, timeout=timeout)
+
+    @mecascript_global_function_decorator
+    @disconnect_on_exception_decorator
     def GetNetworkCfg(self, synchronous_update: bool = True, timeout: float = None) -> NetworkConfig:
         """
         Returns the robot's current network configuration.
@@ -5369,28 +5415,6 @@ class Robot(_Robot):
 
     @mecascript_global_function_decorator
     @disconnect_on_exception_decorator
-    def WaitProgramDone(self, *, timeout: Optional[float] = None):
-        """
-        Waits until no robot MecaScript program is executing, i.e. ``GetProgramExecutionStatus`` reports no
-        running program.
-
-        This does not apply to basic (non-Python) ``.mxprog`` programs.
-
-        Parameters
-        ----------
-        timeout
-            Maximum time to wait, in seconds. If ``None``, no timeout is applied and this function
-            blocks until the program finishes or the connection is lost.
-
-        Raises
-        ------
-        TimeoutException
-            If the specified timeout is reached before the program finishes.
-        """
-        return super().WaitProgramDone(timeout=timeout)
-
-    @mecascript_global_function_decorator
-    @disconnect_on_exception_decorator
     def GetPowerSupplyInputs(self, synchronous_update: bool = False, timeout: float = None) -> RobotPowerSupplyInputs:
         """
         Returns the current robot power supply input states.
@@ -7390,8 +7414,9 @@ class Robot(_Robot):
                        name: str,
                        value: any,
                        cyclic_id: Optional[int] = None,
-                       volatile: bool = False,
                        override: bool = False,
+                       volatile: bool = False,
+                       variableType: MxVariableType = MxVariableType.MX_VARIABLE_TYPE_JSON,
                        timeout: Optional[float] = 10):
         """
         Creates a variable on the robot that persists even after a reboot.
@@ -7431,16 +7456,24 @@ class Robot(_Robot):
             Value to assign to the variable. The type is inferred automatically.
         cyclic_id
             ID to reference the variable in cyclic protocols (``0`` or ``None`` to ignore).
-        volatile
-            A volatile variable is not saved on robot's disk and is discarded when the robot reboots.
-            A non-volatile variable is saved on the robot's disk and will remain permanently available until
-            explicitly deleted using ``DeleteVariable``.
         override
             Defines the behavior when a variable with the same name already exists:
 
               - ``True``:  Updates the value and cyclic ID with the new ones.
               - ``False``: Raises an error if the existing variable has a different type
                            or cyclic ID; otherwise leaves the variable unchanged.
+        volatile
+            A volatile variable is not saved on robot's disk and is discarded when the robot reboots.
+            A non-volatile variable is saved on the robot's disk and will remain permanently available until
+            explicitly deleted using ``DeleteVariable``.
+        variableType
+            Type of variable, among values defined in ``MxVariableType``.
+            Default is ``MxVariableType.MX_VARIABLE_TYPE_JSON``, which can be used to represent any data type
+            supported in the JSON format (boolean, string, number, array, object, null).
+            In case a specific type is enforced, the robot will validate that the value is suitable for the
+            specified type of variable. Some conversion may occur (for example passing 1 to a boolean type will
+            be stored as True).
+            Note: In firmware v11.3 and older only ``MxVariableType.MX_VARIABLE_TYPE_JSON`` is available.
         timeout
             Time in seconds to wait for the robot to confirm variable creation. If None:
 
@@ -7453,7 +7486,7 @@ class Robot(_Robot):
             If the robot rejects the variable creation (for example, due to a name or
             cyclic ID conflict).
         """
-        super().CreateVariable(name, value, cyclic_id, volatile, override, timeout)
+        super().CreateVariable(name, value, cyclic_id, override, volatile, variableType, timeout)
 
     def CreateRegisteredVariable(self,
                                  var: mecascript.RegisteredVariable,
@@ -7465,8 +7498,9 @@ class Robot(_Robot):
         return super().CreateVariable(name=var.name,
                                       value=var.get_value(),
                                       cyclic_id=var.cyclic_id,
-                                      volatile=var.volatile,
                                       override=override,
+                                      volatile=var.volatile,
+                                      variableType=var.type,
                                       timeout=timeout)
 
     @mecascript_global_function_decorator
